@@ -18,11 +18,14 @@ const mongoose_1 = __importDefault(require("mongoose"));
 const db_1 = __importDefault(require("./utils/db"));
 const leaderboard_model_1 = __importDefault(require("./models/leaderboard.model"));
 const scheduler_1 = require("./utils/scheduler");
+const package_controller_1 = require("./controllers/package.controller");
 //create server
 const PORT = process.env.PORT || 4000;
-app_1.app.listen(PORT, () => {
+app_1.app.listen(PORT, () => __awaiter(void 0, void 0, void 0, function* () {
     console.log(`Server is connected http://localhost:${process.env.PORT}`);
-    (0, db_1.default)();
+    yield (0, db_1.default)();
+    // Initialize packages after database connection
+    yield (0, package_controller_1.initializePackages)();
     // schedule daily leaderboard reset at local midnight
     const scheduleDailyReset = () => __awaiter(void 0, void 0, void 0, function* () {
         const now = new Date();
@@ -53,4 +56,4 @@ app_1.app.listen(PORT, () => {
     scheduleDailyReset();
     // start instant event scheduler
     (0, scheduler_1.startScheduler)();
-});
+}));

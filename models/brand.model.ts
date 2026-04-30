@@ -6,7 +6,7 @@ export interface IBrand extends Document {
   companyEmail: string;
   companyName: string;
   verified: boolean;
-  campaigns: string[]; // campaign ids
+  campaigns: string[]; // campaign ids (no restrictions on count)
   analytics: any;
 }
 

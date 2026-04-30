@@ -18,10 +18,16 @@ const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
-// List available puzzles (paginated minimal)
+// List available puzzles (can filter by gameType)
 exports.listPuzzles = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const campaigns = yield puzzleCampaign_model_1.default.find().select("_id brandId puzzleImageUrl timeLimit questions createdAt");
+        const { gameType } = req.query;
+        // Build filter
+        const filter = {};
+        if (gameType === "puzzle" || gameType === "wordHunt") {
+            filter.gameType = gameType;
+        }
+        const campaigns = yield puzzleCampaign_model_1.default.find(filter).select("_id brandId gameType title description puzzleImageUrl timeLimit questions words createdAt");
         res.status(200).json({ success: true, campaigns });
     }
     catch (error) {
@@ -45,7 +51,6 @@ exports.getPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => _
                     question: q.question,
                     choices: q.choices,
                 })),
-                timeLimit: campaign.timeLimit,
             },
         });
     }
@@ -122,7 +127,11 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
             }
             yield userDoc.save();
         }
-        res.status(201).json({ success: true, attempt });
+        res.status(201).json({
+            success: true,
+            attempt,
+            gameType: campaign.gameType,
+        });
     }
     catch (error) {
         return next(new ErrorHandler_1.default(error.message, 400));

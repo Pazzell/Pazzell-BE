@@ -12,14 +12,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startScheduler = void 0;
+exports.checkExpiredCampaigns = exports.startScheduler = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
-const instantEvent_model_1 = __importDefault(require("../models/instantEvent.model"));
 const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
-const user_model_1 = __importDefault(require("../models/user.model"));
-// Polling scheduler to manage instant events: start events, finalize ended events.
+const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
+const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
+// Weekly leaderboard scheduler
 const startScheduler = () => {
-    // run every 30 seconds
+    // Run once per day at midnight to check if we need to finalize the weekly leaderboard
+    const dailyCheckInterval = 24 * 60 * 60 * 1000; // 24 hours
+    const hourlyCheckInterval = 60 * 60 * 1000; // 1 hour
+    // Daily scheduler for weekly leaderboard
     setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
         try {
             // Skip if database is not connected
@@ -27,76 +30,83 @@ const startScheduler = () => {
                 return;
             }
             const now = new Date();
-            // start pending events whose startAt <= now
-            const toStart = yield instantEvent_model_1.default.find({
-                status: "pending",
-                startAt: { $lte: now },
-            });
-            for (const ev of toStart) {
-                ev.status = "running";
-                yield ev.save();
-            }
-            // finalize running events whose endAt <= now
-            const toFinalize = yield instantEvent_model_1.default.find({
-                status: "running",
-                endAt: { $lte: now },
-            });
-            for (const ev of toFinalize) {
-                // rank participants by timeTaken asc, then movesTaken asc
-                const ranked = ev.participants
-                    .filter((p) => typeof p.timeTaken === "number")
-                    .sort((a, b) => {
-                    if ((a.timeTaken || 0) !== (b.timeTaken || 0))
-                        return (a.timeTaken || 0) - (b.timeTaken || 0);
-                    return (a.movesTaken || 0) - (b.movesTaken || 0);
-                });
-                const winners = ranked.slice(0, 3);
-                const share = winners.length
-                    ? Math.floor((ev.prizePool || 0) / winners.length)
-                    : 0;
-                // persist prizeEarned on participants and update user analytics
-                for (const p of ev.participants) {
-                    const found = winners.find((w) => w.userId === p.userId);
-                    if (found)
-                        p.prizeEarned = share;
-                    // update user analytics: add attempt and if winner add points
-                    try {
-                        const user = yield user_model_1.default.findById(p.userId);
-                        if (user) {
-                            user.analytics.lifetime.attempts =
-                                (user.analytics.lifetime.attempts || 0) + 1;
-                            if (found) {
-                                user.analytics.lifetime.totalPoints =
-                                    (user.analytics.lifetime.totalPoints || 0) + 1;
-                            }
-                            yield user.save();
-                        }
-                    }
-                    catch (err) {
-                        // ignore
-                    }
-                }
-                ev.status = "finished";
-                yield ev.save();
-                // save instant leaderboard doc
-                const entries = ranked.map((r) => ({
-                    userId: r.userId,
-                    puzzlesSolved: 1,
-                    points: r.prizeEarned || 0,
+            // Check if it's Sunday (end of week)
+            if (now.getDay() === 0) {
+                // Calculate the week's date range (Monday to Sunday)
+                const weekEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const weekStart = new Date(weekEnd);
+                weekStart.setDate(weekStart.getDate() - 6); // Go back 6 days to Monday
+                // Get all first-time solved attempts from this week
+                const weeklyAttempts = yield puzzleAttempt_model_1.default.aggregate([
+                    {
+                        $match: {
+                            firstTimeSolved: true,
+                            timestamp: { $gte: weekStart, $lt: weekEnd },
+                        },
+                    },
+                    {
+                        $group: {
+                            _id: "$userId",
+                            puzzlesSolved: { $sum: 1 },
+                            points: { $sum: "$pointsEarned" },
+                        },
+                    },
+                    { $sort: { puzzlesSolved: -1, points: -1 } },
+                    { $limit: 100 },
+                ]);
+                const entries = weeklyAttempts.map((a) => ({
+                    userId: a._id,
+                    puzzlesSolved: a.puzzlesSolved,
+                    points: a.points,
                 }));
-                yield leaderboard_model_1.default.create({
-                    type: "instant",
-                    date: now.toISOString(),
-                    entries,
-                    instantEventId: String(ev._id),
-                });
+                // Create weekly leaderboard
+                const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd.toISOString().slice(0, 10)}`;
+                yield leaderboard_model_1.default.findOneAndUpdate({ type: "weekly", date: weekKey }, { type: "weekly", date: weekKey, entries }, { upsert: true });
+                console.log(`Created weekly leaderboard for week: ${weekKey}`);
             }
         }
         catch (err) {
-            // swallow scheduler errors but log
             // eslint-disable-next-line no-console
             console.error("Scheduler error:", err);
         }
-    }), 30 * 1000);
+    }), dailyCheckInterval);
+    // Hourly scheduler for checking expired campaigns
+    setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            yield (0, exports.checkExpiredCampaigns)();
+        }
+        catch (err) {
+            // eslint-disable-next-line no-console
+            console.error("Campaign expiry check error:", err);
+        }
+    }), hourlyCheckInterval);
+    // Run expired campaign check immediately on startup
+    (0, exports.checkExpiredCampaigns)();
 };
 exports.startScheduler = startScheduler;
+// Check and mark expired campaigns as ended
+const checkExpiredCampaigns = () => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        // Skip if database is not connected
+        if (mongoose_1.default.connection.readyState !== 1) {
+            return;
+        }
+        const now = new Date();
+        // Find all active campaigns that have passed their end date
+        // Only auto-end campaigns that have been paid for
+        const result = yield puzzleCampaign_model_1.default.updateMany({
+            status: "active",
+            paymentStatus: "paid", // Only end paid campaigns
+            endDate: { $lt: now },
+        }, {
+            $set: { status: "ended" },
+        });
+        if (result.modifiedCount > 0) {
+            console.log(`✅ Marked ${result.modifiedCount} campaign(s) as ended`);
+        }
+    }
+    catch (error) {
+        console.error("Error checking expired campaigns:", error);
+    }
+});
+exports.checkExpiredCampaigns = checkExpiredCampaigns;

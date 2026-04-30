@@ -15,6 +15,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const mongoose_1 = __importDefault(require("mongoose"));
 require("dotenv/config");
 const dbUrl = process.env.DB_URI || "";
+// Add connection event listeners
+mongoose_1.default.connection.on("connected", () => {
+    console.log("MongoDB connection established");
+});
+mongoose_1.default.connection.on("error", (err) => {
+    console.error("MongoDB connection error:", err);
+});
+mongoose_1.default.connection.on("disconnected", () => {
+    console.log("MongoDB disconnected");
+});
 //connect database
 const connectDB = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!dbUrl) {
@@ -25,11 +35,14 @@ const connectDB = () => __awaiter(void 0, void 0, void 0, function* () {
         return;
     }
     try {
-        const data = yield mongoose_1.default.connect(dbUrl);
+        const data = yield mongoose_1.default.connect(dbUrl, {
+            serverSelectionTimeoutMS: 30000, // 30 seconds timeout for initial connection
+            socketTimeoutMS: 45000, // 45 seconds for socket operations
+        });
         console.log(`Database connected with ${data.connection.host}`);
     }
     catch (error) {
-        console.error(error);
+        console.error("Database connection error:", error.message);
         // retry after 5s
         setTimeout(connectDB, 5000).unref();
     }

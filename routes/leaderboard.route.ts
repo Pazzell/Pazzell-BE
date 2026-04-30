@@ -1,17 +1,15 @@
 import express from "express";
 import {
-  getDailyLeaderboard,
-  getInstantLeaderboard,
+  getWeeklyLeaderboard,
+  getLeaderboardByWeek,
+  getAllTimeLeaderboard,
 } from "../controllers/leaderboard.controller";
-import { isAuthenticated } from "../utils/auth";
 
 const router = express.Router();
 
-router.get("/leaderboards/daily", isAuthenticated, getDailyLeaderboard);
-router.get(
-  "/leaderboards/instant/:eventId",
-  isAuthenticated,
-  getInstantLeaderboard
-);
+// Public endpoints - no authentication required
+router.get("/leaderboards/weekly", getWeeklyLeaderboard);
+router.get("/leaderboards/weekly/:weekKey", getLeaderboardByWeek);
+router.get("/leaderboards/all-time", getAllTimeLeaderboard);
 
 export default router;

@@ -6,25 +6,22 @@ export interface IInstantParticipant {
   timeTaken?: number;
   movesTaken?: number;
   submitted?: boolean;
-  prizeEarned?: number;
+  rank?: number;
 }
 
 export interface IInstantEvent extends Document {
-  title?: string;
-  campaignId?: string;
-  entryAmount: number;
+  title: string;
+  campaignId: string;
   startAt: Date;
   endAt: Date;
   participants: IInstantParticipant[];
-  prizePool: number;
   status: "pending" | "running" | "finished";
 }
 
 const instantEventSchema: Schema<IInstantEvent> = new mongoose.Schema(
   {
-    title: { type: String },
-    campaignId: { type: String },
-    entryAmount: { type: Number, required: true },
+    title: { type: String, required: true },
+    campaignId: { type: String, required: true },
     startAt: { type: Date, required: true },
     endAt: { type: Date, required: true },
     participants: [
@@ -34,10 +31,9 @@ const instantEventSchema: Schema<IInstantEvent> = new mongoose.Schema(
         timeTaken: { type: Number },
         movesTaken: { type: Number },
         submitted: { type: Boolean, default: false },
-        prizeEarned: { type: Number, default: 0 },
+        rank: { type: Number },
       },
     ],
-    prizePool: { type: Number, default: 0 },
     status: {
       type: String,
       enum: ["pending", "running", "finished"],

@@ -16,19 +16,22 @@ exports.submitInstantResult = exports.joinInstantEvent = exports.createInstantEv
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const instantEvent_model_1 = __importDefault(require("../models/instantEvent.model"));
-const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
-// create instant event
+// create instant event (1-hour duration, free to join)
 exports.createInstantEvent = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { title, campaignId, entryAmount, startAt, endAt } = req.body;
+        const { title, campaignId, startAt } = req.body;
+        if (!title || !campaignId || !startAt) {
+            return next(new ErrorHandler_1.default("title, campaignId, and startAt are required fields", 400));
+        }
+        const startDate = new Date(startAt);
+        // Automatically set event duration to 1 hour
+        const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
         const event = yield instantEvent_model_1.default.create({
             title,
             campaignId,
-            entryAmount: Number(entryAmount),
-            startAt: new Date(startAt),
-            endAt: new Date(endAt),
+            startAt: startDate,
+            endAt: endDate,
             participants: [],
-            prizePool: 0,
             status: "pending",
         });
         res.status(201).json({ success: true, event });
@@ -37,7 +40,7 @@ exports.createInstantEvent = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
         return next(new ErrorHandler_1.default(error.message, 400));
     }
 }));
-// join event
+// join event (free, no payment required)
 exports.joinInstantEvent = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { eventId } = req.params;
@@ -48,17 +51,27 @@ exports.joinInstantEvent = (0, catchAsyncError_1.CatchAsyncError)((req, res, nex
         const event = yield instantEvent_model_1.default.findById(eventId);
         if (!event)
             return next(new ErrorHandler_1.default("Event not found", 404));
-        if (event.status !== "pending")
-            return next(new ErrorHandler_1.default("Event not open for joining", 400));
-        // add participant and add to prize pool
+        // Check if event is still open (pending or running status)
+        if (event.status === "finished") {
+            return next(new ErrorHandler_1.default("Event has ended", 400));
+        }
+        // Check if user already joined
+        const alreadyJoined = event.participants.some((p) => String(p.userId) === userId);
+        if (alreadyJoined) {
+            return next(new ErrorHandler_1.default("Already joined this event", 400));
+        }
+        // Add participant (free to join)
         event.participants.push({
             userId: userId,
             joinedAt: new Date(),
             submitted: false,
         });
-        event.prizePool = (event.prizePool || 0) + (event.entryAmount || 0);
         yield event.save();
-        res.status(200).json({ success: true, event });
+        res.status(200).json({
+            success: true,
+            message: "Successfully joined the event",
+            event,
+        });
     }
     catch (error) {
         return next(new ErrorHandler_1.default(error.message, 400));
@@ -73,53 +86,44 @@ exports.submitInstantResult = (0, catchAsyncError_1.CatchAsyncError)((req, res, 
         const userId = user && user._id ? String(user._id) : undefined;
         if (!userId)
             return next(new ErrorHandler_1.default("Invalid user session", 401));
+        if (typeof timeTaken !== "number" ||
+            typeof movesTaken !== "number" ||
+            timeTaken <= 0 ||
+            movesTaken <= 0) {
+            return next(new ErrorHandler_1.default("timeTaken and movesTaken must be positive numbers", 400));
+        }
         const event = yield instantEvent_model_1.default.findById(eventId);
         if (!event)
             return next(new ErrorHandler_1.default("Event not found", 404));
-        // find participant
+        if (event.status === "finished") {
+            return next(new ErrorHandler_1.default("Event has ended", 400));
+        }
+        // Find participant
         const p = event.participants.find((pp) => String(pp.userId) === userId);
-        if (!p)
-            return next(new ErrorHandler_1.default("User not a participant", 400));
+        if (!p) {
+            return next(new ErrorHandler_1.default("You must join the event before submitting", 400));
+        }
+        if (p.submitted) {
+            return next(new ErrorHandler_1.default("You have already submitted your result", 400));
+        }
+        // Save participant's result
         p.timeTaken = timeTaken;
         p.movesTaken = movesTaken;
         p.submitted = true;
         yield event.save();
-        // if event ended or all participants submitted, finalize
-        const now = new Date();
-        const shouldFinalize = now >= event.endAt ||
-            event.participants.every((pp) => pp.submitted === true);
-        if (shouldFinalize && event.status !== "finished") {
-            // rank participants by timeTaken asc then movesTaken asc
-            const ranked = event.participants
-                .filter((pp) => typeof pp.timeTaken === "number")
-                .sort((a, b) => {
-                if ((a.timeTaken || 0) !== (b.timeTaken || 0))
-                    return (a.timeTaken || 0) - (b.timeTaken || 0);
-                return (a.movesTaken || 0) - (b.movesTaken || 0);
-            });
-            const winners = ranked.slice(0, 3);
-            const share = winners.length
-                ? Math.floor((event.prizePool || 0) / winners.length)
-                : 0;
-            for (const w of winners) {
-                w.prizeEarned = share;
-            }
-            event.status = "finished";
-            yield event.save();
-            // save instant leaderboard
-            const entries = ranked.map((r) => ({
-                userId: r.userId,
-                puzzlesSolved: 1,
-                points: r.prizeEarned || 0,
-            }));
-            yield leaderboard_model_1.default.create({
-                type: "instant",
-                date: new Date().toISOString(),
-                entries,
-                instantEventId: String(event._id),
-            });
-        }
-        res.status(200).json({ success: true, event });
+        // Format time for display (e.g., "2min:50sec")
+        const minutes = Math.floor(timeTaken / 60);
+        const seconds = timeTaken % 60;
+        const timeFormatted = `${minutes}min:${seconds}sec`;
+        res.status(200).json({
+            success: true,
+            message: `You completed this campaign in ${timeFormatted} with ${movesTaken} moves`,
+            result: {
+                timeTaken,
+                movesTaken,
+                timeFormatted,
+            },
+        });
     }
     catch (error) {
         return next(new ErrorHandler_1.default(error.message, 400));

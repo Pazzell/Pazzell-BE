@@ -339,6 +339,8 @@ Content-Type: multipart/form-data
 - `description` (Text, required): Campaign description.
 - `questions` (Text, required): Stringified JSON array of question objects.
 - `timeLimit` (Text, required): Campaign duration in hours (e.g., "24").
+- `brandUrl` (Text, optional): Brand website or social link (e.g., "https://brand.example.com").
+- `videoUrl` (Text, optional): Optional promotional video URL (YouTube/Vimeo).
 
 **Questions Format (stringified JSON):**
 
@@ -379,6 +381,8 @@ curl -X POST 'http://localhost:3000/api/v1/brands/campaigns' \
     "brandId": "brand_user_id",
     "title": "Logo Quiz Challenge",
     "description": "Test your brand knowledge",
+    "brandUrl": "https://brand.example.com",
+    "videoUrl": "https://youtu.be/example",
     "puzzleImageUrl": "https://storage.googleapis.com/bucket/puzzles/...",
     "originalImageUrl": "https://storage.googleapis.com/bucket/puzzles/...",
     "questions": [

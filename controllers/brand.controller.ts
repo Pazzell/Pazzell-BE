@@ -5,6 +5,31 @@ import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import BrandModel from "../models/brand.model";
 import { bucket } from "../firebaseConfig";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
+import UserModel from "../models/user.model";
+import PackageModel from "../models/package.model";
+
+// Package pricing
+const PACKAGE_PRICES = {
+  basic: 7000, // ₦7,000
+  premium: 10000, // ₦10,000
+};
+
+// Convert hours to number of weeks (rounded up to cover partial weeks)
+const getWeeksFromHours = (timeLimitHours: number): number => {
+  const hoursPerWeek = 24 * 7; // 168
+  if (!timeLimitHours || timeLimitHours <= 0) return 1;
+  return Math.max(1, Math.ceil(timeLimitHours / hoursPerWeek));
+};
+
+// Multiplier formula provided: Multiplier = 0.9 * n + 10^{-n}
+// Return the multiplier rounded DOWN to one decimal place to normalize to 10% discount
+const calculateDurationFactor = (timeLimitHours: number): number => {
+  const weeks = getWeeksFromHours(timeLimitHours);
+  if (weeks === 1) return 1.0;
+  const multiplierRaw = 0.9 * weeks + Math.pow(10, -weeks);
+  const multiplierRoundedDown = Math.floor(multiplierRaw * 10) / 10; // e.g. 1.81 -> 1.8
+  return multiplierRoundedDown;
+};
 
 // Create a puzzle campaign (brands only). Expects multipart upload with one file: "image" (used for both scrambled and original)
 export const createCampaign = CatchAsyncError(
@@ -14,7 +39,40 @@ export const createCampaign = CatchAsyncError(
       if (brandUser.role !== "brand")
         return next(new ErrorHandler("Only brands can create campaigns", 403));
 
-      const { questions, title, description } = req.body;
+      const {
+        questions,
+        title,
+        description,
+        gameType,
+        words,
+        packageId,
+        brandUrl,
+        campaignUrl,
+        videoUrl,
+        timeLimit,
+      } = req.body;
+
+      // Validate packageId
+      if (!packageId || typeof packageId !== "string") {
+        return next(
+          new ErrorHandler(
+            "packageId is required and must be a valid string",
+            400
+          )
+        );
+      }
+
+      // Verify package exists
+      const packageData = await PackageModel.findById(packageId);
+      if (!packageData) {
+        return next(
+          new ErrorHandler("Invalid package. Package not found.", 404)
+        );
+      }
+
+      if (!packageData.isActive) {
+        return next(new ErrorHandler("Selected package is not available", 400));
+      }
 
       // validate required fields
       if (!title || typeof title !== "string" || title.trim() === "") {
@@ -38,15 +96,70 @@ export const createCampaign = CatchAsyncError(
         );
       }
 
-      // multer stores single-file uploads in req.file, or older setups may place files in req.files
-      const filesAny: any = req.files;
-      const uploadedFile: any =
-        (req as any).file ||
-        filesAny?.image?.[0] ||
-        filesAny?.puzzleImage?.[0] ||
-        filesAny?.originalImage?.[0];
+      // Validate gameType field
+      const validGameTypes = [
+        "sliding_puzzle",
+        "card_matching",
+        "whack_a_mole",
+        "word_hunt",
+      ];
+      const campaignGameType = gameType || "sliding_puzzle";
+      if (!validGameTypes.includes(campaignGameType)) {
+        return next(
+          new ErrorHandler(
+            "gameType must be one of: sliding_puzzle, card_matching, whack_a_mole, word_hunt",
+            400
+          )
+        );
+      }
 
-      if (!uploadedFile) return next(new ErrorHandler("Missing image", 400));
+      // Parse words array if it's a string (from form-data)
+      let parsedWords: string[] = [];
+      if (words) {
+        if (typeof words === "string") {
+          try {
+            parsedWords = JSON.parse(words);
+          } catch {
+            // If parsing fails, try splitting by comma
+            parsedWords = words
+              .split(",")
+              .map((w) => w.trim())
+              .filter((w) => w.length > 0);
+          }
+        } else if (Array.isArray(words)) {
+          parsedWords = words;
+        }
+      }
+
+      // For word_hunt games, validate words array
+      if (campaignGameType === "word_hunt") {
+        if (!parsedWords || parsedWords.length === 0) {
+          return next(
+            new ErrorHandler(
+              "words array is required for word_hunt games and must contain at least one word",
+              400
+            )
+          );
+        }
+      }
+
+      // Get brand profile (no restriction on number of campaigns)
+      const brand = await BrandModel.findOne({ userId: brandUser._id });
+      if (!brand) {
+        return next(new ErrorHandler("Brand profile not found", 404));
+      }
+
+      // multer stores single-file upload in req.file
+      const uploadedFile: any = (req as any).file;
+
+      if (!uploadedFile) {
+        return next(
+          new ErrorHandler(
+            'Missing image file. Please upload using field name "image"',
+            400
+          )
+        );
+      }
 
       // use a single timestamp so both stored names are related
       const now = Date.now();
@@ -148,35 +261,113 @@ export const createCampaign = CatchAsyncError(
         return Number.isFinite(n) ? n : null;
       };
 
-      const timeLimitVal = getNumericFromBody("timeLimit");
-      if (timeLimitVal === null || timeLimitVal === undefined) {
+      // Validate timeLimit
+      const parsedTimeLimit = Number(timeLimit);
+      if (!timeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
         return next(
           new ErrorHandler(
-            "timeLimit (hours) is required and must be a number",
+            "timeLimit is required and must be a positive number (in hours)",
             400
           )
         );
       }
 
-      const campaign = await PuzzleCampaignModel.create({
+      // Get package type and calculate totalBudget
+      const packageType =
+        packageData.name?.toLowerCase() === "premium" ? "premium" : "basic";
+      const basePrice = PACKAGE_PRICES[packageType];
+
+      // Weeks selected by brand (rounded up)
+      const weeks = getWeeksFromHours(parsedTimeLimit);
+
+      // Full allocated budget that the brand should receive (no discount)
+      const allocatedBudget = basePrice * weeks; // e.g., 2 weeks => 7000 * 2 = 14000
+
+      // Compute charged multiplier (rounded DOWN to 1 decimal as requested)
+      const chargedMultiplier = calculateDurationFactor(parsedTimeLimit); // e.g., 1.8 for 2 weeks
+      const chargedAmount = Math.round(basePrice * chargedMultiplier); // amount brand will pay
+
+      // Compute daily allocation spread across the selected duration (days) using allocated budget
+      const days = Math.max(1, Math.ceil(parsedTimeLimit / 24));
+      const dailyAllocation = Number((allocatedBudget / days).toFixed(2));
+
+      // Set placeholder dates - actual dates will be set when payment is made
+      const currentDate = new Date();
+      const placeholderEndDate = new Date(
+        currentDate.getTime() + parsedTimeLimit * 60 * 60 * 1000
+      );
+
+      // Prepare campaign data
+      // All new campaigns start as draft until payment is verified
+      const campaignData: any = {
         brandId: brandUser._id,
+        packageId: packageId,
+        packageType: packageType,
+        gameType: campaignGameType,
         title: title.trim(),
         description: description.trim(),
+        brandUrl: brandUrl?.trim() || null,
+        campaignUrl: campaignUrl?.trim() || null,
+        videoUrl: videoUrl?.trim() || null,
         puzzleImageUrl: puzzleUrl,
         originalImageUrl: originalUrl,
         questions: parsedQuestions,
-        timeLimit: timeLimitVal,
-      });
+        timeLimit: parsedTimeLimit,
+        status: "draft", // Always start as draft
+        paymentStatus: "unpaid", // All new campaigns start as unpaid
+        // Payment not yet completed: store expected charged amount; actual
+        // `totalBudget` (allocated) will be set after payment (to the paid amount).
+        totalBudget: 0,
+        expectedChargeAmount: chargedAmount,
+        dailyAllocation: 0,
+        budgetRemaining: 0,
+        budgetUsed: 0,
+        startDate: currentDate, // Placeholder - will be updated on payment
+        endDate: placeholderEndDate, // Placeholder - will be updated on payment
+      };
 
-      // update brand campaigns list
+      // For word_hunt games, add words array
+      if (campaignGameType === "word_hunt" && parsedWords.length > 0) {
+        campaignData.words = parsedWords;
+      }
+
+      const campaign = await PuzzleCampaignModel.create(campaignData);
+
+      // Update brand campaigns list (no restrictions on number of campaigns)
       await BrandModel.findOneAndUpdate(
         { userId: brandUser._id },
         { $push: { campaigns: campaign._id } }
       );
 
-      res.status(201).json({ success: true, campaign });
+      // Convert to plain object to ensure all fields are included
+      const campaignResponse = campaign.toObject();
+
+      // Add package name to response
+      const responseWithPackageName = {
+        ...campaignResponse,
+        packageName: packageData.name,
+      };
+
+      console.log(
+        "Campaign created. Has campaignUrl?",
+        "campaignUrl" in responseWithPackageName
+      );
+      console.log(
+        "campaignUrl value in response:",
+        responseWithPackageName.campaignUrl
+      );
+      console.log(
+        "brandUrl value in response:",
+        responseWithPackageName.brandUrl
+      );
+
+      res
+        .status(201)
+        .json({ success: true, campaign: responseWithPackageName });
     } catch (error: any) {
-      return next(new ErrorHandler(error.message, 400));
+      return next(
+        new ErrorHandler(`Failed to create campaign: ${error.message}`, 500)
+      );
     }
   }
 );
@@ -195,12 +386,50 @@ export const getCampaignAnalytics = CatchAsyncError(
         brandId: brandUser._id,
       }).lean();
 
-      const campaignsAnalytics = [] as any[];
+      const campaignsAnalytics: any[] = [];
 
+      // prepare campaign ids for bulk queries
+      const campaignIds = campaigns.map((c) => String(c._id));
+
+      // Fetch all attempts for brand campaigns in one query
+      const allAttempts = await PuzzleAttemptModel.find({
+        campaignId: { $in: campaignIds },
+      }).lean();
+
+      // Aggregated metrics
+      const totalCampaigns = campaigns.length;
+      const activeCampaigns = campaigns.filter(
+        (c) => c.status === "active"
+      ).length;
+      const totalBudgetUsed = campaigns.reduce(
+        (s, c) => s + (Number(c.budgetUsed) || 0),
+        0
+      );
+
+      // total games played across brand
+      const totalGamesPlayed = allAttempts.length;
+
+      // unique players across all brand campaigns
+      const uniquePlayerIds = Array.from(
+        new Set(allAttempts.map((a) => String(a.userId)))
+      );
+      const uniquePlayers = uniquePlayerIds.filter(
+        (id) => id && id !== "undefined"
+      ).length;
+
+      // average gameplay time (in ms) across all attempts
+      const avgPlayTime = allAttempts.length
+        ? Math.round(
+            allAttempts.reduce((s, a) => s + (a.timeTaken || 0), 0) /
+              allAttempts.length
+          )
+        : 0;
+
+      // per-campaign analytics
       for (const c of campaigns) {
-        const attempts = await PuzzleAttemptModel.find({
-          campaignId: c._id.toString(),
-        }).lean();
+        const attempts = allAttempts.filter(
+          (a) => String(a.campaignId) === String(c._id)
+        );
         const plays = attempts.length;
         const completions = attempts.filter((a) => a.solved).length;
         const avgCompletionTime = attempts.filter((a) => a.solved).length
@@ -213,12 +442,12 @@ export const getCampaignAnalytics = CatchAsyncError(
           : 0;
 
         // question correctness rates
-        const qCorrectCounts: number[] = c.questions.map(() => 0);
+        const qCorrectCounts: number[] = (c.questions || []).map(() => 0);
         for (const a of attempts) {
           if (Array.isArray(a.answers)) {
             for (
               let i = 0;
-              i < a.answers.length && i < c.questions.length;
+              i < a.answers.length && i < (c.questions || []).length;
               i++
             ) {
               if (a.answers[i] === c.questions[i].correctIndex)
@@ -238,9 +467,72 @@ export const getCampaignAnalytics = CatchAsyncError(
         });
       }
 
-      res.status(200).json({ success: true, campaigns: campaignsAnalytics });
+      res.status(200).json({
+        success: true,
+        analytics: {
+          totalCampaigns,
+          activeCampaigns,
+          totalBudgetUsed,
+          totalGamesPlayed,
+          uniquePlayers,
+          avgPlayTime,
+          campaigns: campaignsAnalytics,
+        },
+      });
     } catch (error: any) {
-      return next(new ErrorHandler(error.message, 400));
+      return next(
+        new ErrorHandler(
+          `Failed to fetch campaign analytics: ${error.message}`,
+          500
+        )
+      );
+    }
+  }
+);
+
+// Get all brands
+export const getAllBrands = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Find all users with role 'brand'
+      const brandUsers = await UserModel.find({ role: "brand" })
+        .select("_id name email companyName avatar isVerified createdAt")
+        .lean();
+
+      // Get brand details for each brand user
+      const brands = await Promise.all(
+        brandUsers.map(async (brandUser) => {
+          const brandProfile = await BrandModel.findOne({
+            userId: brandUser._id,
+          }).lean();
+          const campaignCount = await PuzzleCampaignModel.countDocuments({
+            brandId: brandUser._id,
+          });
+
+          return {
+            _id: brandUser._id,
+            name: brandUser.name,
+            email: brandUser.email,
+            companyName: brandUser.companyName,
+            avatar: brandUser.avatar,
+            isVerified: brandUser.isVerified,
+            createdAt: (brandUser as any).createdAt,
+            brandDetails: brandProfile
+              ? {
+                  companyEmail: brandProfile.companyEmail,
+                  verified: brandProfile.verified,
+                  totalCampaigns: campaignCount,
+                }
+              : null,
+          };
+        })
+      );
+
+      res.status(200).json({ success: true, brands });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(`Failed to fetch brands: ${error.message}`, 500)
+      );
     }
   }
 );

@@ -5,9 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const mongoose_1 = __importDefault(require("mongoose"));
 const instantEventSchema = new mongoose_1.default.Schema({
-    title: { type: String },
-    campaignId: { type: String },
-    entryAmount: { type: Number, required: true },
+    title: { type: String, required: true },
+    campaignId: { type: String, required: true },
     startAt: { type: Date, required: true },
     endAt: { type: Date, required: true },
     participants: [
@@ -17,10 +16,9 @@ const instantEventSchema = new mongoose_1.default.Schema({
             timeTaken: { type: Number },
             movesTaken: { type: Number },
             submitted: { type: Boolean, default: false },
-            prizeEarned: { type: Number, default: 0 },
+            rank: { type: Number },
         },
     ],
-    prizePool: { type: Number, default: 0 },
     status: {
         type: String,
         enum: ["pending", "running", "finished"],

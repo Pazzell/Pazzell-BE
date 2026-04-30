@@ -1,45 +1,126 @@
-import nodemailer, {Transporter} from 'nodemailer';
-import ejs from 'ejs';
-import path from 'path';
+import nodemailer, { Transporter } from "nodemailer";
+import sgMail from "@sendgrid/mail";
+import ejs from "ejs";
+import path from "path";
 
-
-import 'dotenv/config';
+import "dotenv/config";
 
 //email option interface
-interface EmailOptions{
-    email:string;
-    subject:string;
-    template:string;
-    data: {[key:string]:any};
+interface EmailOptions {
+  email: string;
+  subject: string;
+  template: string;
+  data: { [key: string]: any };
 }
 
-const sendMail = async (options: EmailOptions): Promise <void> => {
-    const transporter: Transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT || '587'),
-        service: process.env.SMTP_SERVICE,
-        auth:{
-            user: process.env.SMTP_MAIL,
-            pass: process.env.SMTP_PASSWORD,
-        }
-    });
+const sendMail = async (options: EmailOptions): Promise<void> => {
+  // Determine which email provider to use (default: gmail)
+  // Set EMAIL_PROVIDER=twilio in your environment to use Twilio SendGrid
+  // Set EMAIL_PROVIDER=gmail to use Gmail
+  let emailProvider = (process.env.EMAIL_PROVIDER || "gmail").toLowerCase();
 
-    const {email,subject,template,data} = options;
+  // Debug logging
+  console.log("Email Debug:", {
+    EMAIL_PROVIDER: process.env.EMAIL_PROVIDER,
+    SENDGRID_API_KEY: process.env.SENDGRID_API_KEY ? "✅ Set" : "❌ Not set",
+    TWILIO_SMTP_FROM: process.env.TWILIO_SMTP_FROM || "Not set",
+    SMTP_MAIL: process.env.SMTP_MAIL ? "⚠️ Set" : "✅ Not set",
+    SMTP_PASSWORD: process.env.SMTP_PASSWORD ? "⚠️ Set" : "✅ Not set",
+    resolvedProvider: emailProvider,
+  });
 
-    // get the pdath to the email template file
-    const templatePath = path.join(__dirname,'../mails',template);
+  // If Gmail SMTP credentials are present prefer Gmail for sending emails.
+  // This allows quickly falling back to the previously working Gmail setup
+  // while keeping the Twilio/SendGrid configuration available for later debugging.
+  if (process.env.SMTP_MAIL && process.env.SMTP_PASSWORD) {
+    emailProvider = "gmail";
+  }
 
-    // Render the email template with EJS
-    const html:string = await ejs.renderFile(templatePath,data);
+  let transportConfig: any;
 
-    const mailOptions = {
-        from: process.env.SMTP_MAIL,
+  if (emailProvider === "twilio" || emailProvider === "sendgrid") {
+    // Prefer SendGrid Web API if API key is provided, otherwise fallback to SMTP
+    if (process.env.SENDGRID_API_KEY) {
+      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+      // Render template (below) then send via SendGrid API
+      const { email, subject, template, data } = options;
+      const templatePath = path.join(__dirname, "../mails", template);
+      const html: string = await ejs.renderFile(templatePath, data);
+      const fromEmail = process.env.TWILIO_SMTP_FROM || process.env.SMTP_MAIL;
+      const msg: any = {
         to: email,
+        from: fromEmail,
         subject,
-        html
-    };
+        html,
+      };
+      await sgMail.send(msg);
+      return;
+    }
 
-    await transporter.sendMail(mailOptions);
+    // Twilio SendGrid SMTP Configuration (fallback)
+    transportConfig = {
+      host: process.env.TWILIO_SMTP_HOST || "smtp.sendgrid.net",
+      port: parseInt(process.env.TWILIO_SMTP_PORT || "587"),
+      secure: false, // Use TLS
+      auth: {
+        user: process.env.TWILIO_SMTP_USER || "apikey", // SendGrid uses "apikey" as username
+        pass: process.env.TWILIO_SMTP_PASSWORD, // Your SendGrid API Key
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
+    };
+  } else {
+    // Gmail SMTP Configuration (default)
+    const port = parseInt(process.env.SMTP_PORT || "587");
+    transportConfig = {
+      host: process.env.SMTP_HOST,
+      port: port,
+      secure: port === 465, // true for 465 (SSL), false for other ports (TLS/STARTTLS)
+      service: process.env.SMTP_SERVICE,
+      auth: {
+        user: process.env.SMTP_MAIL,
+        pass: process.env.SMTP_PASSWORD,
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
+    };
+  }
+
+  const transporter: Transporter = nodemailer.createTransport(transportConfig);
+
+  const { email, subject, template, data } = options;
+
+  // get the path to the email template file
+  // In production (compiled to dist), mails folder is copied to dist/mails
+  // __dirname in compiled JS will be <root>/dist/utils, so ../mails points to <root>/dist/mails
+  // In development with ts-node-dev, __dirname is <root>/utils, so ../mails points to <root>/mails
+  const templatePath = path.join(__dirname, "../mails", template);
+
+  // Render the email template with EJS
+  const html: string = await ejs.renderFile(templatePath, data);
+
+  // Determine the sender email based on the provider
+  const fromEmail =
+    emailProvider === "twilio" || emailProvider === "sendgrid"
+      ? process.env.TWILIO_SMTP_FROM || process.env.SMTP_MAIL
+      : process.env.SMTP_MAIL;
+
+  const mailOptions = {
+    from: fromEmail,
+    to: email,
+    subject,
+    html,
+  };
+
+  await transporter.sendMail(mailOptions);
 };
 
 export default sendMail;

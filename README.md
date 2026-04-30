@@ -873,4 +873,4 @@ SMTP_PASSWORD=your_app_password
 
 ## Support
 
-For issues or clarifications, refer to the backend repository or contact the backend development team.
+For issues or clarifications, refer to the backend repository or contact the backend development teams.

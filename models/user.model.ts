@@ -7,6 +7,7 @@ export interface IUserAnalytics {
   lifetime: {
     puzzlesSolved: number;
     totalPoints: number;
+    totalEarnings: number;
     totalTime: number; // in ms
     totalMoves: number;
     attempts: number;
@@ -19,7 +20,10 @@ export interface IUserAnalytics {
 }
 
 export interface IUser extends Document {
-  name: string;
+  name?: string; // deprecated, kept for brand users
+  firstName?: string; // for gamer users
+  lastName?: string; // for gamer users
+  username?: string; // for gamer users
   email: string;
   password?: string;
   avatar?: string;
@@ -36,7 +40,10 @@ export interface IUser extends Document {
 
 const userSchema: Schema<IUser> = new mongoose.Schema(
   {
-    name: { type: String, required: true },
+    name: { type: String },
+    firstName: { type: String },
+    lastName: { type: String },
+    username: { type: String, unique: true, sparse: true },
     email: { type: String, required: true, index: true, unique: true },
     password: { type: String },
     avatar: { type: String },
@@ -48,6 +55,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       lifetime: {
         puzzlesSolved: { type: Number, default: 0 },
         totalPoints: { type: Number, default: 0 },
+        totalEarnings: { type: Number, default: 0 },
         totalTime: { type: Number, default: 0 },
         totalMoves: { type: Number, default: 0 },
         attempts: { type: Number, default: 0 },

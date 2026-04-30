@@ -1,12 +1,16 @@
 import mongoose from "mongoose";
-import InstantEventModel from "../models/instantEvent.model";
 import LeaderboardModel from "../models/leaderboard.model";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
+import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 
-// Polling scheduler to manage instant events: start events, finalize ended events.
+// Weekly leaderboard scheduler
 export const startScheduler = () => {
-  // run every 30 seconds
+  // Run once per day at midnight to check if we need to finalize the weekly leaderboard
+  const dailyCheckInterval = 24 * 60 * 60 * 1000; // 24 hours
+  const hourlyCheckInterval = 60 * 60 * 1000; // 1 hour
+
+  // Daily scheduler for weekly leaderboard
   setInterval(async () => {
     try {
       // Skip if database is not connected
@@ -16,78 +20,99 @@ export const startScheduler = () => {
 
       const now = new Date();
 
-      // start pending events whose startAt <= now
-      const toStart = await InstantEventModel.find({
-        status: "pending",
-        startAt: { $lte: now },
-      });
-      for (const ev of toStart) {
-        ev.status = "running";
-        await ev.save();
-      }
+      // Check if it's Sunday (end of week)
+      if (now.getDay() === 0) {
+        // Calculate the week's date range (Monday to Sunday)
+        const weekEnd = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate()
+        );
+        const weekStart = new Date(weekEnd);
+        weekStart.setDate(weekStart.getDate() - 6); // Go back 6 days to Monday
 
-      // finalize running events whose endAt <= now
-      const toFinalize = await InstantEventModel.find({
-        status: "running",
-        endAt: { $lte: now },
-      });
-      for (const ev of toFinalize) {
-        // rank participants by timeTaken asc, then movesTaken asc
-        const ranked = ev.participants
-          .filter((p) => typeof p.timeTaken === "number")
-          .sort((a, b) => {
-            if ((a.timeTaken || 0) !== (b.timeTaken || 0))
-              return (a.timeTaken || 0) - (b.timeTaken || 0);
-            return (a.movesTaken || 0) - (b.movesTaken || 0);
-          });
+        // Get all first-time solved attempts from this week
+        const weeklyAttempts = await PuzzleAttemptModel.aggregate([
+          {
+            $match: {
+              firstTimeSolved: true,
+              timestamp: { $gte: weekStart, $lt: weekEnd },
+            },
+          },
+          {
+            $group: {
+              _id: "$userId",
+              puzzlesSolved: { $sum: 1 },
+              points: { $sum: "$pointsEarned" },
+            },
+          },
+          { $sort: { puzzlesSolved: -1, points: -1 } },
+          { $limit: 100 },
+        ]);
 
-        const winners = ranked.slice(0, 3);
-        const share = winners.length
-          ? Math.floor((ev.prizePool || 0) / winners.length)
-          : 0;
-
-        // persist prizeEarned on participants and update user analytics
-        for (const p of ev.participants) {
-          const found = winners.find((w) => w.userId === p.userId);
-          if (found) p.prizeEarned = share;
-
-          // update user analytics: add attempt and if winner add points
-          try {
-            const user = await UserModel.findById(p.userId);
-            if (user) {
-              user.analytics.lifetime.attempts =
-                (user.analytics.lifetime.attempts || 0) + 1;
-              if (found) {
-                user.analytics.lifetime.totalPoints =
-                  (user.analytics.lifetime.totalPoints || 0) + 1;
-              }
-              await user.save();
-            }
-          } catch (err) {
-            // ignore
-          }
-        }
-
-        ev.status = "finished";
-        await ev.save();
-
-        // save instant leaderboard doc
-        const entries = ranked.map((r) => ({
-          userId: r.userId,
-          puzzlesSolved: 1,
-          points: r.prizeEarned || 0,
+        const entries = weeklyAttempts.map((a: any) => ({
+          userId: a._id,
+          puzzlesSolved: a.puzzlesSolved,
+          points: a.points,
         }));
-        await LeaderboardModel.create({
-          type: "instant",
-          date: now.toISOString(),
-          entries,
-          instantEventId: String(ev._id),
-        });
+
+        // Create weekly leaderboard
+        const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd.toISOString().slice(0, 10)}`;
+        await LeaderboardModel.findOneAndUpdate(
+          { type: "weekly", date: weekKey },
+          { type: "weekly", date: weekKey, entries },
+          { upsert: true }
+        );
+
+        console.log(`Created weekly leaderboard for week: ${weekKey}`);
       }
     } catch (err) {
-      // swallow scheduler errors but log
       // eslint-disable-next-line no-console
       console.error("Scheduler error:", err);
     }
-  }, 30 * 1000);
+  }, dailyCheckInterval);
+
+  // Hourly scheduler for checking expired campaigns
+  setInterval(async () => {
+    try {
+      await checkExpiredCampaigns();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Campaign expiry check error:", err);
+    }
+  }, hourlyCheckInterval);
+
+  // Run expired campaign check immediately on startup
+  checkExpiredCampaigns();
+};
+
+// Check and mark expired campaigns as ended
+export const checkExpiredCampaigns = async () => {
+  try {
+    // Skip if database is not connected
+    if (mongoose.connection.readyState !== 1) {
+      return;
+    }
+
+    const now = new Date();
+
+    // Find all active campaigns that have passed their end date
+    // Only auto-end campaigns that have been paid for
+    const result = await PuzzleCampaignModel.updateMany(
+      {
+        status: "active",
+        paymentStatus: "paid",  // Only end paid campaigns
+        endDate: { $lt: now },
+      },
+      {
+        $set: { status: "ended" },
+      }
+    );
+
+    if (result.modifiedCount > 0) {
+      console.log(`✅ Marked ${result.modifiedCount} campaign(s) as ended`);
+    }
+  } catch (error) {
+    console.error("Error checking expired campaigns:", error);
+  }
 };

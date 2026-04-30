@@ -9,10 +9,14 @@ const cors_1 = __importDefault(require("cors"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 require("dotenv/config");
 const auth_route_1 = __importDefault(require("./routes/auth.route"));
-const puzzle_route_1 = __importDefault(require("./routes/puzzle.route"));
+const campaign_route_1 = __importDefault(require("./routes/campaign.route"));
 const brand_route_1 = __importDefault(require("./routes/brand.route"));
 const leaderboard_route_1 = __importDefault(require("./routes/leaderboard.route"));
-const instant_route_1 = __importDefault(require("./routes/instant.route"));
+const user_route_1 = __importDefault(require("./routes/user.route"));
+const package_route_1 = __importDefault(require("./routes/package.route"));
+const payment_route_1 = __importDefault(require("./routes/payment.route"));
+const analytics_route_1 = __importDefault(require("./routes/analytics.route"));
+const error_1 = require("./middlewares/error");
 const app = (0, express_1.default)();
 exports.app = app;
 //body parser
@@ -24,7 +28,7 @@ app.use((0, cors_1.default)({
     origin: "*",
 }));
 // routes
-app.use("/api/v1", auth_route_1.default, puzzle_route_1.default, brand_route_1.default, leaderboard_route_1.default, instant_route_1.default);
+app.use("/api/v1", auth_route_1.default, campaign_route_1.default, brand_route_1.default, leaderboard_route_1.default, user_route_1.default, package_route_1.default, payment_route_1.default, analytics_route_1.default);
 //testing api
 app.use("/test", (req, res) => {
     res.status(200).json({
@@ -84,3 +88,5 @@ app.all("*", (req, res, next) => {
     err.statusCode = 404;
     next(err);
 });
+// Global error handler - must be last
+app.use(error_1.ErrorMiddleware);

@@ -1,28 +1,26 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 export interface ILeaderboard extends Document {
-  type: "daily" | "instant";
-  date: string; // ISO date for daily
+  type: "weekly";
+  date: string; // week range string (e.g., "2025-01-06_to_2025-01-12")
   entries: {
     userId: string;
-    puzzlesSolved: number;
+    puzzlesSolved?: number;
     points: number;
   }[];
-  instantEventId?: string;
 }
 
 const leaderboardSchema: Schema<ILeaderboard> = new mongoose.Schema(
   {
-    type: { type: String, enum: ["daily", "instant"], required: true },
+    type: { type: String, enum: ["weekly"], required: true, default: "weekly" },
     date: { type: String, required: true },
     entries: [
       {
         userId: { type: String, required: true },
-        puzzlesSolved: { type: Number, default: 0 },
+        puzzlesSolved: { type: Number },
         points: { type: Number, default: 0 },
       },
     ],
-    instantEventId: { type: String },
   },
   { timestamps: true }
 );

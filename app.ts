@@ -3,10 +3,14 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
 import authRouter from "./routes/auth.route";
-import puzzleRouter from "./routes/puzzle.route";
+import campaignRouter from "./routes/campaign.route";
 import brandRouter from "./routes/brand.route";
 import leaderboardRouter from "./routes/leaderboard.route";
-import instantRouter from "./routes/instant.route";
+import userRouter from "./routes/user.route";
+import packageRouter from "./routes/package.route";
+import paymentRouter from "./routes/payment.route";
+import analyticsRouter from "./routes/analytics.route";
+import { ErrorMiddleware } from "./middlewares/error";
 
 const app = express();
 
@@ -27,10 +31,13 @@ app.use(
 app.use(
   "/api/v1",
   authRouter,
-  puzzleRouter,
+  campaignRouter,
   brandRouter,
   leaderboardRouter,
-  instantRouter
+  userRouter,
+  packageRouter,
+  paymentRouter,
+  analyticsRouter
 );
 
 //testing api
@@ -94,5 +101,8 @@ app.all("*", (req: Request, res: Response, next: NextFunction) => {
   err.statusCode = 404;
   next(err);
 });
+
+// Global error handler - must be last
+app.use(ErrorMiddleware);
 
 export { app };

@@ -4,13 +4,16 @@ import mongoose from "mongoose";
 import connectDB from "./utils/db";
 import LeaderboardModel from "./models/leaderboard.model";
 import { startScheduler } from "./utils/scheduler";
+import { initializePackages } from "./controllers/package.controller";
 
 //create server
 const PORT = process.env.PORT || 4000;
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server is connected http://localhost:${process.env.PORT}`);
-  connectDB();
+  await connectDB();
+  // Initialize packages after database connection
+  await initializePackages();
   // schedule daily leaderboard reset at local midnight
   const scheduleDailyReset = async () => {
     const now = new Date();

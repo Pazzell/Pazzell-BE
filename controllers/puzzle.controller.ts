@@ -5,13 +5,22 @@ import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
 
-// List available puzzles (paginated minimal)
+// List available puzzles (can filter by gameType)
 export const listPuzzles = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const campaigns = await PuzzleCampaignModel.find().select(
-        "_id brandId puzzleImageUrl timeLimit questions createdAt"
+      const { gameType } = req.query;
+
+      // Build filter
+      const filter: any = {};
+      if (gameType === "puzzle" || gameType === "wordHunt") {
+        filter.gameType = gameType;
+      }
+
+      const campaigns = await PuzzleCampaignModel.find(filter).select(
+        "_id brandId gameType title description puzzleImageUrl timeLimit questions words createdAt"
       );
+
       res.status(200).json({ success: true, campaigns });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
@@ -37,7 +46,6 @@ export const getPuzzle = CatchAsyncError(
             question: q.question,
             choices: q.choices,
           })),
-          timeLimit: campaign.timeLimit,
         },
       });
     } catch (error: any) {
@@ -134,7 +142,11 @@ export const submitPuzzle = CatchAsyncError(
         await userDoc.save();
       }
 
-      res.status(201).json({ success: true, attempt });
+      res.status(201).json({
+        success: true,
+        attempt,
+        gameType: campaign.gameType,
+      });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
     }

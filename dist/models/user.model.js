@@ -17,7 +17,10 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 require("dotenv/config");
 const userSchema = new mongoose_1.default.Schema({
-    name: { type: String, required: true },
+    name: { type: String },
+    firstName: { type: String },
+    lastName: { type: String },
+    username: { type: String, unique: true, sparse: true },
     email: { type: String, required: true, index: true, unique: true },
     password: { type: String },
     avatar: { type: String },
@@ -29,6 +32,7 @@ const userSchema = new mongoose_1.default.Schema({
         lifetime: {
             puzzlesSolved: { type: Number, default: 0 },
             totalPoints: { type: Number, default: 0 },
+            totalEarnings: { type: Number, default: 0 },
             totalTime: { type: Number, default: 0 },
             totalMoves: { type: Number, default: 0 },
             attempts: { type: Number, default: 0 },

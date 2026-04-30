@@ -4,21 +4,34 @@ import ErrorHandler from "../utils/ErrorHandler";
 import InstantEventModel from "../models/instantEvent.model";
 import LeaderboardModel from "../models/leaderboard.model";
 
-// create instant event
+// create instant event (1-hour duration, free to join)
 export const createInstantEvent = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { title, campaignId, entryAmount, startAt, endAt } = req.body;
+      const { title, campaignId, startAt } = req.body;
+
+      if (!title || !campaignId || !startAt) {
+        return next(
+          new ErrorHandler(
+            "title, campaignId, and startAt are required fields",
+            400
+          )
+        );
+      }
+
+      const startDate = new Date(startAt);
+      // Automatically set event duration to 1 hour
+      const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
       const event = await InstantEventModel.create({
         title,
         campaignId,
-        entryAmount: Number(entryAmount),
-        startAt: new Date(startAt),
-        endAt: new Date(endAt),
+        startAt: startDate,
+        endAt: endDate,
         participants: [],
-        prizePool: 0,
         status: "pending",
       });
+
       res.status(201).json({ success: true, event });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
@@ -26,29 +39,45 @@ export const createInstantEvent = CatchAsyncError(
   }
 );
 
-// join event
+// join event (free, no payment required)
 export const joinInstantEvent = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { eventId } = req.params;
       const user = req.user as any;
       const userId = user && user._id ? String(user._id) : undefined;
+
       if (!userId) return next(new ErrorHandler("Invalid user session", 401));
+
       const event = await InstantEventModel.findById(eventId);
       if (!event) return next(new ErrorHandler("Event not found", 404));
-      if (event.status !== "pending")
-        return next(new ErrorHandler("Event not open for joining", 400));
 
-      // add participant and add to prize pool
+      // Check if event is still open (pending or running status)
+      if (event.status === "finished") {
+        return next(new ErrorHandler("Event has ended", 400));
+      }
+
+      // Check if user already joined
+      const alreadyJoined = event.participants.some(
+        (p) => String(p.userId) === userId
+      );
+      if (alreadyJoined) {
+        return next(new ErrorHandler("Already joined this event", 400));
+      }
+
+      // Add participant (free to join)
       event.participants.push({
         userId: userId,
         joinedAt: new Date(),
         submitted: false,
       });
-      event.prizePool = (event.prizePool || 0) + (event.entryAmount || 0);
       await event.save();
 
-      res.status(200).json({ success: true, event });
+      res.status(200).json({
+        success: true,
+        message: "Successfully joined the event",
+        event,
+      });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
     }
@@ -63,58 +92,64 @@ export const submitInstantResult = CatchAsyncError(
       const { timeTaken, movesTaken } = req.body;
       const user = req.user as any;
       const userId = user && user._id ? String(user._id) : undefined;
+
       if (!userId) return next(new ErrorHandler("Invalid user session", 401));
+
+      if (
+        typeof timeTaken !== "number" ||
+        typeof movesTaken !== "number" ||
+        timeTaken <= 0 ||
+        movesTaken <= 0
+      ) {
+        return next(
+          new ErrorHandler(
+            "timeTaken and movesTaken must be positive numbers",
+            400
+          )
+        );
+      }
+
       const event = await InstantEventModel.findById(eventId);
       if (!event) return next(new ErrorHandler("Event not found", 404));
 
-      // find participant
+      if (event.status === "finished") {
+        return next(new ErrorHandler("Event has ended", 400));
+      }
+
+      // Find participant
       const p = event.participants.find((pp) => String(pp.userId) === userId);
-      if (!p) return next(new ErrorHandler("User not a participant", 400));
+      if (!p) {
+        return next(
+          new ErrorHandler("You must join the event before submitting", 400)
+        );
+      }
+
+      if (p.submitted) {
+        return next(
+          new ErrorHandler("You have already submitted your result", 400)
+        );
+      }
+
+      // Save participant's result
       p.timeTaken = timeTaken;
       p.movesTaken = movesTaken;
       p.submitted = true;
       await event.save();
 
-      // if event ended or all participants submitted, finalize
-      const now = new Date();
-      const shouldFinalize =
-        now >= event.endAt ||
-        event.participants.every((pp) => pp.submitted === true);
-      if (shouldFinalize && event.status !== "finished") {
-        // rank participants by timeTaken asc then movesTaken asc
-        const ranked = event.participants
-          .filter((pp) => typeof pp.timeTaken === "number")
-          .sort((a, b) => {
-            if ((a.timeTaken || 0) !== (b.timeTaken || 0))
-              return (a.timeTaken || 0) - (b.timeTaken || 0);
-            return (a.movesTaken || 0) - (b.movesTaken || 0);
-          });
+      // Format time for display (e.g., "2min:50sec")
+      const minutes = Math.floor(timeTaken / 60);
+      const seconds = timeTaken % 60;
+      const timeFormatted = `${minutes}min:${seconds}sec`;
 
-        const winners = ranked.slice(0, 3);
-        const share = winners.length
-          ? Math.floor((event.prizePool || 0) / winners.length)
-          : 0;
-        for (const w of winners) {
-          w.prizeEarned = share;
-        }
-        event.status = "finished";
-        await event.save();
-
-        // save instant leaderboard
-        const entries = ranked.map((r) => ({
-          userId: r.userId,
-          puzzlesSolved: 1,
-          points: r.prizeEarned || 0,
-        }));
-        await LeaderboardModel.create({
-          type: "instant",
-          date: new Date().toISOString(),
-          entries,
-          instantEventId: String(event._id),
-        });
-      }
-
-      res.status(200).json({ success: true, event });
+      res.status(200).json({
+        success: true,
+        message: `You completed this campaign in ${timeFormatted} with ${movesTaken} moves`,
+        result: {
+          timeTaken,
+          movesTaken,
+          timeFormatted,
+        },
+      });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
     }
