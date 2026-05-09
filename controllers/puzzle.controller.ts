@@ -4,6 +4,8 @@ import ErrorHandler from "../utils/ErrorHandler";
 import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
+import ReferralModel from "../models/referral.model";
+import ReferralEventModel from "../models/referralEvent.model";
 
 // List available puzzles (can filter by gameType)
 export const listPuzzles = CatchAsyncError(
@@ -98,7 +100,14 @@ export const submitPuzzle = CatchAsyncError(
         if (!prev) firstTime = true;
       }
 
-      const pointsEarned = firstTime ? 1 : 0;
+      const FIXED_POINTS: { [key: string]: number } = {
+        spot_the_difference: 2,
+        card_matching: 3,
+        sliding_puzzle: 4,
+        word_hunt: 1,
+      };
+
+      const pointsEarned = firstTime ? FIXED_POINTS[campaign.gameType] || 0 : 0;
 
       const attempt = await PuzzleAttemptModel.create({
         userId: userId,
@@ -140,6 +149,31 @@ export const submitPuzzle = CatchAsyncError(
           userDoc.puzzlesSolved.push(id);
         }
         await userDoc.save();
+
+        // If this is the user's first successful solve, mark any referral as successful
+        try {
+          if (firstTime && userId) {
+            const referral = await ReferralModel.findOne({
+              referredUserId: String(userId),
+              successful: false,
+            });
+            if (referral) {
+              referral.successful = true;
+              referral.successfulAt = new Date();
+              await referral.save();
+
+              // record referral event
+              await ReferralEventModel.create({
+                referrerId: referral.referrerId,
+                referredUserId: referral.referredUserId,
+                eventType: "first_puzzle",
+              });
+            }
+          }
+        } catch (err) {
+          // non-fatal: log and continue
+          console.error("Referral marking failed:", err);
+        }
       }
 
       res.status(201).json({

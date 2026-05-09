@@ -1,0 +1,200 @@
+{
+  "info": {
+    "name": "Pazzell API - Core",
+    "_postman_id": "pazzell-core-collection",
+    "description": "Core API requests for local testing. Set {{base_url}} and {{accessToken}} variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Gamer - Register (Email)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"John Gamer\",\n  \"email\": \"gamer@example.com\",\n  \"password\": \"securePassword123\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/auth/gamer/register" }
+      }
+    },
+    {
+      "name": "Gamer - Activate",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activation_token\": \"<activation_token>\",\n  \"activation_code\": \"123456\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/auth/gamer/activate" }
+      }
+    },
+    {
+      "name": "Auth - Resend Activation",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"user@example.com\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/auth/user/resend-activation" }
+      }
+    },
+    {
+      "name": "Gamer - Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"gamer@example.com\",\n  \"password\": \"securePassword123\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/auth/gamer/login" }
+      }
+    },
+    {
+      "name": "Auth - Logout",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{base_url}}/auth/logout" }
+      }
+    },
+    {
+      "name": "Brand - Create Campaign (multipart)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "image", "type": "file", "src": "/path/to/image.png" },
+            { "key": "title", "type": "text", "value": "Logo Quiz Challenge" },
+            {
+              "key": "description",
+              "type": "text",
+              "value": "Test your brand knowledge"
+            },
+            {
+              "key": "questions",
+              "type": "text",
+              "value": "[{\"question\":\"Which company has a bitten apple logo?\",\"choices\":[\"Microsoft\",\"Apple\",\"Dell\",\"Asus\"],\"correctIndex\":1}]"
+            },
+            { "key": "timeLimit", "type": "text", "value": "24" }
+          ]
+        },
+        "url": { "raw": "{{base_url}}/brands/campaigns" }
+      }
+    },
+    {
+      "name": "Puzzles - List",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{base_url}}/puzzles?page=1&limit=10" }
+      }
+    },
+    {
+      "name": "Puzzles - Get Single",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{base_url}}/puzzles/:id" },
+        "description": "Replace :id with campaign id"
+      }
+    },
+    {
+      "name": "Puzzles - Submit Attempt",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"timeTaken\": 5000,\n  \"movesTaken\": 12,\n  \"solved\": true,\n  \"answers\": [1, 0, 2]\n}"
+        },
+        "url": { "raw": "{{base_url}}/puzzles/:id/submit" }
+      }
+    },
+    {
+      "name": "Leaderboards - Weekly",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{base_url}}/leaderboards/weekly?limit=100" }
+      }
+    },
+    {
+      "name": "Leaderboards - Monthly",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{base_url}}/leaderboards/monthly" }
+      }
+    },
+    {
+      "name": "User - Profile",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{base_url}}/users/profile" }
+      }
+    },
+    {
+      "name": "Referrals - Summary (admin/brand)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/referrals/summary?month=2026-05&limit=50"
+        }
+      }
+    },
+    {
+      "name": "Referrals - Events",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/referrals/events?month=2026-05&eventType=first_puzzle"
+        }
+      }
+    },
+    {
+      "name": "Brands - Analytics",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{base_url}}/brands/analytics" }
+      }
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:4000/api/v1" },
+    { "key": "accessToken", "value": "" }
+  ]
+}

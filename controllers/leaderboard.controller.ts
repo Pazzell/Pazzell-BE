@@ -5,6 +5,10 @@ import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import LeaderboardModel from "../models/leaderboard.model";
 import UserModel from "../models/user.model";
 
+const MONTHLY_PRIZES: number[] = [
+  100000, 60000, 50000, 40000, 35000, 30000, 25000, 20000, 15000, 10000,
+];
+
 // Get current week's leaderboard
 export const getWeeklyLeaderboard = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -50,9 +54,10 @@ export const getWeeklyLeaderboard = CatchAsyncError(
             _id: "$userId",
             puzzlesSolved: { $sum: 1 },
             points: { $sum: "$pointsEarned" },
+            avgTime: { $avg: "$timeTaken" },
           },
         },
-        { $sort: { points: -1, puzzlesSolved: -1 } },
+        { $sort: { points: -1, avgTime: 1, puzzlesSolved: -1 } },
         { $limit: 100 },
       ]);
 
@@ -60,10 +65,13 @@ export const getWeeklyLeaderboard = CatchAsyncError(
         userId: a._id,
         puzzlesSolved: a.puzzlesSolved,
         points: a.points,
+        avgTime: a.avgTime || null,
       }));
 
       // Create week key
-      const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd.toISOString().slice(0, 10)}`;
+      const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd
+        .toISOString()
+        .slice(0, 10)}`;
 
       // upsert leaderboard document for this week
       await LeaderboardModel.findOneAndUpdate(
@@ -82,11 +90,17 @@ export const getWeeklyLeaderboard = CatchAsyncError(
           return {
             position: index + 1,
             userId: entry.userId,
-            fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
+            fullName: user
+              ? `${user.firstName} ${user.lastName}`
+              : "Unknown User",
             username: user?.username || "",
             avatar: user?.avatar || "",
             puzzlesSolved: entry.puzzlesSolved,
             points: entry.points,
+            avgCompletionTimeMs: entry.avgTime || null,
+            avgCompletionTimeSec: entry.avgTime
+              ? Math.round(entry.avgTime / 1000)
+              : null,
             amountEarned: entry.points, // Points = amount earned
           };
         })
@@ -109,6 +123,138 @@ export const getWeeklyLeaderboard = CatchAsyncError(
           currentDate: now.toISOString(),
         },
       });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 400));
+    }
+  }
+);
+
+// Get current month's leaderboard (monthly)
+export const getMonthlyLeaderboard = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const now = new Date();
+      const monthKey = `${now.getFullYear()}-${String(
+        now.getMonth() + 1
+      ).padStart(2, "0")}`;
+
+      // Try to fetch existing monthly leaderboard
+      const board = await LeaderboardModel.findOne({
+        type: "monthly",
+        date: monthKey,
+      });
+      let entries: any[] = [];
+      if (board && board.entries && board.entries.length) {
+        entries = board.entries.map((e: any, idx: number) => ({
+          position: idx + 1,
+          userId: e.userId,
+          points: e.points,
+          puzzlesSolved: e.puzzlesSolved || 0,
+          prizeAmount: MONTHLY_PRIZES[idx] || 0,
+        }));
+      }
+
+      const entriesWithUserDetails = await Promise.all(
+        entries.map(async (entry: any) => {
+          const user = await UserModel.findById(entry.userId)
+            .select("firstName lastName username avatar")
+            .lean();
+          return {
+            position: entry.position,
+            userId: entry.userId,
+            fullName: user
+              ? `${user.firstName} ${user.lastName}`
+              : "Unknown User",
+            username: user?.username || "",
+            avatar: user?.avatar || "",
+            puzzlesSolved: entry.puzzlesSolved,
+            points: entry.points,
+            prizeAmount: entry.prizeAmount,
+          };
+        })
+      );
+
+      res.status(200).json({
+        success: true,
+        leaderboard: {
+          type: "monthly",
+          monthKey,
+          totalPlayers: entriesWithUserDetails.length,
+          entries: entriesWithUserDetails,
+          jackpot: {
+            amount: 65000,
+            note: "Top 10 qualify for ₦65,000 Jackpot Draw",
+          },
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 400));
+    }
+  }
+);
+
+// Get monthly leaderboard by monthKey (YYYY-MM)
+export const getLeaderboardByMonth = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { monthKey } = req.params; // e.g., "2026-04"
+      const board = await LeaderboardModel.findOne({
+        type: "monthly",
+        date: monthKey,
+      });
+      if (!board) {
+        return res
+          .status(200)
+          .json({
+            success: true,
+            leaderboard: {
+              type: "monthly",
+              monthKey,
+              totalPlayers: 0,
+              entries: [],
+            },
+          });
+      }
+
+      const entries = board.entries.map((e: any, idx: number) => ({
+        position: idx + 1,
+        userId: e.userId,
+        points: e.points,
+        puzzlesSolved: e.puzzlesSolved || 0,
+        prizeAmount: MONTHLY_PRIZES[idx] || 0,
+      }));
+
+      const entriesWithUserDetails = await Promise.all(
+        entries.map(async (entry: any) => {
+          const user = await UserModel.findById(entry.userId)
+            .select("firstName lastName username avatar")
+            .lean();
+          return {
+            position: entry.position,
+            userId: entry.userId,
+            fullName: user
+              ? `${user.firstName} ${user.lastName}`
+              : "Unknown User",
+            username: user?.username || "",
+            avatar: user?.avatar || "",
+            puzzlesSolved: entry.puzzlesSolved,
+            points: entry.points,
+            prizeAmount: entry.prizeAmount,
+          };
+        })
+      );
+
+      res
+        .status(200)
+        .json({
+          success: true,
+          leaderboard: {
+            type: "monthly",
+            monthKey,
+            totalPlayers: entriesWithUserDetails.length,
+            entries: entriesWithUserDetails,
+          },
+        });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
     }
@@ -148,7 +294,9 @@ export const getLeaderboardByWeek = CatchAsyncError(
           return {
             position: index + 1,
             userId: entry.userId,
-            fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
+            fullName: user
+              ? `${user.firstName} ${user.lastName}`
+              : "Unknown User",
             username: user?.username || "",
             avatar: user?.avatar || "",
             puzzlesSolved: entry.puzzlesSolved,
@@ -177,7 +325,7 @@ export const getLeaderboardByWeek = CatchAsyncError(
 export const getAllTimeLeaderboard = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Aggregate all puzzle attempts (no time filter)
+      // Aggregate all puzzle attempts (no time filter) and compute avg completion time
       const agg = await PuzzleAttemptModel.aggregate([
         {
           $match: {
@@ -189,9 +337,10 @@ export const getAllTimeLeaderboard = CatchAsyncError(
             _id: "$userId",
             puzzlesSolved: { $sum: 1 },
             points: { $sum: "$pointsEarned" },
+            avgTime: { $avg: "$timeTaken" },
           },
         },
-        { $sort: { points: -1, puzzlesSolved: -1 } },
+        { $sort: { points: -1, avgTime: 1, puzzlesSolved: -1 } },
         { $limit: 100 },
       ]);
 
@@ -199,6 +348,7 @@ export const getAllTimeLeaderboard = CatchAsyncError(
         userId: a._id,
         puzzlesSolved: a.puzzlesSolved,
         points: a.points,
+        avgTime: a.avgTime || null,
       }));
 
       // Fetch user details for each entry
@@ -211,11 +361,17 @@ export const getAllTimeLeaderboard = CatchAsyncError(
           return {
             position: index + 1,
             userId: entry.userId,
-            fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
+            fullName: user
+              ? `${user.firstName} ${user.lastName}`
+              : "Unknown User",
             username: user?.username || "",
             avatar: user?.avatar || "",
             puzzlesSolved: entry.puzzlesSolved,
             points: entry.points,
+            avgCompletionTimeMs: entry.avgTime || null,
+            avgCompletionTimeSec: entry.avgTime
+              ? Math.round(entry.avgTime / 1000)
+              : null,
             amountEarned: entry.points, // Points = amount earned
           };
         })
@@ -230,7 +386,12 @@ export const getAllTimeLeaderboard = CatchAsyncError(
         },
       });
     } catch (error: any) {
-      return next(new ErrorHandler(`Failed to fetch all-time leaderboard: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(
+          `Failed to fetch all-time leaderboard: ${error.message}`,
+          500
+        )
+      );
     }
   }
 );

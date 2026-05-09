@@ -121,6 +121,38 @@ Verify gamer email using the activation token and code from email.
 
 ---
 
+### 2.1 Resend Activation
+
+**POST** `/auth/user/resend-activation`
+
+Resend the activation email for both gamers and brands. Useful if the original activation email was lost or expired.
+
+**Request Body:**
+
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "success": true,
+  "message": "Activation email resent to user@example.com",
+  "activationToken": "eyJhbGc..."
+}
+```
+
+**Error Cases:**
+
+- `400`: Missing `email` in request.
+- `404`: User not found.
+- `400`: Account already verified.
+
+---
+
 ### 3. Gamer Login (Email)
 
 **POST** `/auth/gamer/login`
@@ -755,6 +787,48 @@ All error responses follow this format:
   createdAt: Date,
   updatedAt: Date
 }
+```
+
+---
+
+## Postman Collection & Example Requests
+
+You can import the provided Postman collection at `docs/postman_collection.json` into Postman or Hopscotch.
+
+Postman import steps:
+
+- Open Postman → Import → File → select `docs/postman_collection.json`.
+- Set the environment variable `base_url` to `http://localhost:4000/api/v1` and `accessToken` after login.
+
+Quick cURL examples:
+
+- Register gamer:
+
+```bash
+curl -X POST '{{base_url}}/auth/gamer/register' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"John Gamer","email":"gamer@example.com","password":"securePassword123"}'
+```
+
+- Brand create campaign (multipart):
+
+```bash
+curl -X POST '{{base_url}}/brands/campaigns' \
+  -H 'Authorization: Bearer <ACCESS_TOKEN>' \
+  -F 'image=@/path/to/image.png' \
+  -F 'title=Logo Quiz Challenge' \
+  -F 'description=Test your brand knowledge' \
+  -F 'questions=[{"question":"Which company has a bitten apple logo?","choices":["Microsoft","Apple","Dell","Asus"],"correctIndex":1}]' \
+  -F 'timeLimit=24'
+```
+
+- Submit puzzle attempt:
+
+```bash
+curl -X POST '{{base_url}}/puzzles/<CAMPAIGN_ID>/submit' \
+  -H 'Authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'Content-Type: application/json' \
+  -d '{"timeTaken":5000,"movesTaken":12,"solved":true,"answers":[1,0,2]}'
 ```
 
 ### Puzzle Campaign Model

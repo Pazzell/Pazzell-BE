@@ -27,6 +27,8 @@ const ejs_1 = __importDefault(require("ejs"));
 const sendEmail_1 = __importDefault(require("../utils/sendEmail"));
 const user_controller_1 = require("./user.controller");
 const userHelpers_1 = require("../utils/userHelpers");
+const referral_model_1 = __importDefault(require("../models/referral.model"));
+const referralEvent_model_1 = __importDefault(require("../models/referralEvent.model"));
 // Create password reset token
 const createResetToken = (userId) => {
     const token = jsonwebtoken_1.default.sign({ userId }, process.env.ACTIVATION_SECRET, { expiresIn: "15m" });
@@ -66,7 +68,8 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                 lastName = nameParts.slice(1).join(" ") || "";
             }
             const username = yield (0, userHelpers_1.generateUsername)(profile.email);
-            const avatar = profile.picture || (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName}`.trim() || profile.email);
+            const avatar = profile.picture ||
+                (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName}`.trim() || profile.email);
             user = yield user_model_1.default.create({
                 firstName,
                 lastName,
@@ -77,6 +80,39 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                 role: "gamer",
                 isVerified: true,
             });
+            // capture referral if provided in request body
+            try {
+                const { referrerId, referrerUsername, referralCode } = req.body;
+                const refLookup = referrerId || referrerUsername || referralCode;
+                if (refLookup) {
+                    const refUser = yield user_model_1.default.findOne({
+                        $or: [
+                            { _id: refLookup },
+                            { username: refLookup },
+                            { email: refLookup },
+                        ],
+                    });
+                    if (refUser && String(refUser._id) !== String(user._id)) {
+                        try {
+                            yield referral_model_1.default.create({
+                                referrerId: String(refUser._id),
+                                referredUserId: String(user._id),
+                            });
+                            yield referralEvent_model_1.default.create({
+                                referrerId: String(refUser._id),
+                                referredUserId: String(user._id),
+                                eventType: "signup",
+                            });
+                        }
+                        catch (e) {
+                            // ignore duplicate or other errors
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                console.error("Referral capture failed during Google signup", e);
+            }
         }
         else {
             // ensure googleId is stored
@@ -107,7 +143,7 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
         if (existing)
             return next(new ErrorHandler_1.default("This email is already registered. Please use a different email or try logging in.", 409));
         const username = yield (0, userHelpers_1.generateUsername)(email);
-        const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ''}`.trim() || email);
+        const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ""}`.trim() || email);
         // Create activation token BEFORE creating user
         const activationToken = (0, user_controller_1.createActivationToken)({
             firstName,
@@ -138,6 +174,39 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
                 role: "gamer",
                 isVerified: false,
             });
+            // capture referral at signup
+            try {
+                const { referrerId, referrerUsername, referralCode } = req.body;
+                const refLookup = referrerId || referrerUsername || referralCode;
+                if (refLookup) {
+                    const refUser = yield user_model_1.default.findOne({
+                        $or: [
+                            { _id: refLookup },
+                            { username: refLookup },
+                            { email: refLookup },
+                        ],
+                    });
+                    if (refUser && String(refUser._id) !== String(user._id)) {
+                        try {
+                            yield referral_model_1.default.create({
+                                referrerId: String(refUser._id),
+                                referredUserId: String(user._id),
+                            });
+                            yield referralEvent_model_1.default.create({
+                                referrerId: String(refUser._id),
+                                referredUserId: String(user._id),
+                                eventType: "signup",
+                            });
+                        }
+                        catch (e) {
+                            // ignore duplicate or other errors
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                console.error("Referral capture failed during signup", e);
+            }
             res.status(201).json({
                 success: true,
                 message: "Registration successful! Please check your email to verify your account.",
@@ -180,7 +249,9 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
             // For brands, ensure brand profile exists
             if (role === "brand") {
                 const { companyName } = decoded.user;
-                const brandProfile = yield brand_model_1.default.findOne({ userId: existingUser._id });
+                const brandProfile = yield brand_model_1.default.findOne({
+                    userId: existingUser._id,
+                });
                 if (!brandProfile) {
                     yield brand_model_1.default.create({
                         userId: existingUser._id,
@@ -198,7 +269,7 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
         if (role === "gamer") {
             const { firstName, lastName } = decoded.user;
             const username = yield (0, userHelpers_1.generateUsername)(email);
-            const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ''}`.trim() || email);
+            const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ""}`.trim() || email);
             user = yield user_model_1.default.create({
                 firstName,
                 lastName: lastName || "",
@@ -209,6 +280,39 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 role: "gamer",
                 isVerified: true,
             });
+            // capture referral if activation token included referrer info
+            try {
+                const { referrerId, referrerUsername, referralCode } = decoded.user;
+                const refLookup = referrerId || referrerUsername || referralCode;
+                if (refLookup) {
+                    const refUser = yield user_model_1.default.findOne({
+                        $or: [
+                            { _id: refLookup },
+                            { username: refLookup },
+                            { email: refLookup },
+                        ],
+                    });
+                    if (refUser && String(refUser._id) !== String(user._id)) {
+                        try {
+                            yield referral_model_1.default.create({
+                                referrerId: String(refUser._id),
+                                referredUserId: String(user._id),
+                            });
+                            yield referralEvent_model_1.default.create({
+                                referrerId: String(refUser._id),
+                                referredUserId: String(user._id),
+                                eventType: "signup",
+                            });
+                        }
+                        catch (e) {
+                            // ignore duplicate or other errors
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                console.error("Referral capture failed during activation signup", e);
+            }
         }
         else if (role === "brand") {
             const { name, companyName } = decoded.user;

@@ -39,7 +39,12 @@ const puzzleCampaignSchema = new mongoose_1.default.Schema({
     packageId: { type: String, required: true, index: true },
     gameType: {
         type: String,
-        enum: ["sliding_puzzle", "card_matching", "whack_a_mole", "word_hunt"],
+        enum: [
+            "sliding_puzzle",
+            "card_matching",
+            "spot_the_difference",
+            "word_hunt",
+        ],
         required: true,
         default: "sliding_puzzle",
     },
@@ -50,6 +55,7 @@ const puzzleCampaignSchema = new mongoose_1.default.Schema({
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
     originalImageUrl: { type: String, required: true },
+    cardImages: { type: [String], default: [] },
     questions: [
         {
             question: { type: String, required: true },

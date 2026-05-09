@@ -9,7 +9,11 @@ export interface IQuestion {
 export interface IPuzzleCampaign extends Document {
   brandId: string;
   packageId: string; // reference to package
-  gameType: "sliding_puzzle" | "card_matching" | "whack_a_mole" | "word_hunt";
+  gameType:
+    | "sliding_puzzle"
+    | "card_matching"
+    | "spot_the_difference"
+    | "word_hunt";
   title: string;
   description: string;
   brandUrl?: string; // brand's website or social media URL
@@ -17,6 +21,7 @@ export interface IPuzzleCampaign extends Document {
   videoUrl?: string; // optional promotional video URL
   puzzleImageUrl: string;
   originalImageUrl: string;
+  cardImages?: string[];
   questions: IQuestion[];
   words?: string[]; // for word_hunt games only
   timeLimit: number; // campaign duration in hours
@@ -41,7 +46,12 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
     packageId: { type: String, required: true, index: true },
     gameType: {
       type: String,
-      enum: ["sliding_puzzle", "card_matching", "whack_a_mole", "word_hunt"],
+      enum: [
+        "sliding_puzzle",
+        "card_matching",
+        "spot_the_difference",
+        "word_hunt",
+      ],
       required: true,
       default: "sliding_puzzle",
     },
@@ -52,6 +62,7 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
     originalImageUrl: { type: String, required: true },
+    cardImages: { type: [String], default: [] },
     questions: [
       {
         question: { type: String, required: true },

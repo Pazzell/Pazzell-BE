@@ -36,7 +36,7 @@ export const getActiveCampaigns = CatchAsyncError(
       const validGameTypes = [
         "sliding_puzzle",
         "card_matching",
-        "whack_a_mole",
+        "spot_the_difference",
         "word_hunt",
       ];
       if (gameType && validGameTypes.includes(gameType as string)) {
@@ -116,7 +116,7 @@ export const getAllCampaigns = CatchAsyncError(
       const validGameTypes = [
         "sliding_puzzle",
         "card_matching",
-        "whack_a_mole",
+        "spot_the_difference",
         "word_hunt",
       ];
       if (gameType && validGameTypes.includes(gameType as string)) {
@@ -457,72 +457,19 @@ export const submitCampaign = CatchAsyncError(
       const canEarnPointsNow =
         body.solved && allQuestionsCorrect && todaysSuccessCount < 1;
 
-      // Calculate points using weighted scoring formula only if eligible
+      // Simplified fixed-point scoring (time/moves recorded but not used)
       let pointsEarned = 0;
 
       if (canEarnPointsNow) {
-        // Configuration parameters
-        const basePoints = 10;
-        const optimalTime = 60; // seconds
-        const optimalMoves = 50;
-        const speedWeight = 0.4;
-        const efficiencyWeight = 0.4;
-        const completionWeight = 0.2;
-        const maxSpeedMultiplier = 2.0;
-        const maxEfficiencyMultiplier = 2.0;
-
-        // Difficulty multipliers based on game type
-        const difficultyMultipliers: { [key: string]: number } = {
-          card_matching: 1,
-          whack_a_mole: 1.5,
-          sliding_puzzle: 2,
+        const FIXED_POINTS: { [key: string]: number } = {
+          spot_the_difference: 2,
+          card_matching: 3,
+          sliding_puzzle: 4,
           word_hunt: 1,
         };
 
-        // Convert timeTaken from milliseconds to seconds
-        const actualTimeSeconds = body.timeTaken / 1000;
-        const actualMoves = body.movesTaken;
-
-        // Calculate speed score (faster = higher score, capped at maxSpeedMultiplier)
-        const speedScore = Math.min(
-          optimalTime / actualTimeSeconds,
-          maxSpeedMultiplier
-        );
-
-        // Calculate move efficiency score (fewer moves = higher score, capped at maxEfficiencyMultiplier)
-        const moveScore = Math.min(
-          optimalMoves / actualMoves,
-          maxEfficiencyMultiplier
-        );
-
-        // Completion bonus (always 1 if completed)
-        const completionBonus = 1;
-
-        // Calculate weighted multiplier
-        const weightedMultiplier =
-          speedScore * speedWeight +
-          moveScore * efficiencyWeight +
-          completionBonus * completionWeight;
-
-        // Get difficulty multiplier for game type
-        const difficultyMultiplier =
-          difficultyMultipliers[campaign.gameType] || 1;
-
-        // Calculate final points
-        pointsEarned = Math.round(
-          basePoints * weightedMultiplier * difficultyMultiplier
-        );
-
-        console.log(`Points Calculation:`, {
-          gameType: campaign.gameType,
-          actualTimeSeconds,
-          actualMoves,
-          speedScore,
-          moveScore,
-          weightedMultiplier,
-          difficultyMultiplier,
-          pointsEarned,
-        });
+        pointsEarned = FIXED_POINTS[campaign.gameType] || 0;
+        console.log(`Points (fixed) for ${campaign.gameType}:`, pointsEarned);
       }
 
       console.log(
