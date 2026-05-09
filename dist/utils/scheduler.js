@@ -14,8 +14,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkExpiredCampaigns = exports.startScheduler = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
-const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 // Weekly leaderboard scheduler
 const startScheduler = () => {
@@ -30,39 +28,23 @@ const startScheduler = () => {
                 return;
             }
             const now = new Date();
-            // Check if it's Sunday (end of week)
-            if (now.getDay() === 0) {
-                // Calculate the week's date range (Monday to Sunday)
-                const weekEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                const weekStart = new Date(weekEnd);
-                weekStart.setDate(weekStart.getDate() - 6); // Go back 6 days to Monday
-                // Get all first-time solved attempts from this week
-                const weeklyAttempts = yield puzzleAttempt_model_1.default.aggregate([
-                    {
-                        $match: {
-                            firstTimeSolved: true,
-                            timestamp: { $gte: weekStart, $lt: weekEnd },
-                        },
-                    },
-                    {
-                        $group: {
-                            _id: "$userId",
-                            puzzlesSolved: { $sum: 1 },
-                            points: { $sum: "$pointsEarned" },
-                        },
-                    },
-                    { $sort: { puzzlesSolved: -1, points: -1 } },
-                    { $limit: 100 },
-                ]);
-                const entries = weeklyAttempts.map((a) => ({
-                    userId: a._id,
-                    puzzlesSolved: a.puzzlesSolved,
-                    points: a.points,
-                }));
-                // Create weekly leaderboard
-                const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd.toISOString().slice(0, 10)}`;
-                yield leaderboard_model_1.default.findOneAndUpdate({ type: "weekly", date: weekKey }, { type: "weekly", date: weekKey, entries }, { upsert: true });
-                console.log(`Created weekly leaderboard for week: ${weekKey}`);
+            // Monthly finalization: if today is the last day of the month, finalize the previous month
+            const tomorrow = new Date(now);
+            tomorrow.setDate(now.getDate() + 1);
+            if (tomorrow.getDate() === 1) {
+                // it's the last day of the month
+                // finalize previous month key (current month)
+                const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+                try {
+                    // dynamic import must include .js extension under `module: node16` resolution
+                    // TypeScript will resolve the `.ts` file at compile time and emit a runtime import to `.js`.
+                    const { finalizeMonthlyRewards } = yield import("../services/rewards.service.js");
+                    const result = yield finalizeMonthlyRewards(monthKey);
+                    console.log(`Monthly rewards finalized for ${monthKey}:`, result);
+                }
+                catch (err) {
+                    console.error("Monthly finalization error:", err);
+                }
             }
         }
         catch (err) {

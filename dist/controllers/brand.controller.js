@@ -18,6 +18,8 @@ const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const brand_model_1 = __importDefault(require("../models/brand.model"));
 const firebaseConfig_1 = require("../firebaseConfig");
+const spotDifference_service_1 = require("../services/puzzle/spotDifference.service");
+const cardMatching_service_1 = require("../services/puzzle/cardMatching.service");
 const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
 const package_model_1 = __importDefault(require("../models/package.model"));
@@ -76,12 +78,12 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         const validGameTypes = [
             "sliding_puzzle",
             "card_matching",
-            "whack_a_mole",
+            "spot_the_difference",
             "word_hunt",
         ];
         const campaignGameType = gameType || "sliding_puzzle";
         if (!validGameTypes.includes(campaignGameType)) {
-            return next(new ErrorHandler_1.default("gameType must be one of: sliding_puzzle, card_matching, whack_a_mole, word_hunt", 400));
+            return next(new ErrorHandler_1.default("gameType must be one of: sliding_puzzle, card_matching, spot_the_difference, word_hunt", 400));
         }
         // Parse words array if it's a string (from form-data)
         let parsedWords = [];
@@ -131,8 +133,40 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             yield fileRef.makePublic();
             return `https://storage.googleapis.com/${firebaseConfig_1.bucket.name}/${name}`;
         });
-        const puzzleUrl = yield uploadBuffer(uploadedFile, puzzleName);
+        // Always upload the original image
         const originalUrl = yield uploadBuffer(uploadedFile, originalName);
+        // For card_matching campaigns, auto-generate 8 unique pairs (16 cards)
+        let puzzleUrl;
+        let cardImages = [];
+        if (campaignGameType === "card_matching") {
+            const buffers = yield (0, cardMatching_service_1.generateCardPairBuffers)(uploadedFile.buffer); // 16 buffers
+            // upload each card buffer
+            for (let i = 0; i < buffers.length; i++) {
+                const cardName = `puzzles/${now}-card-${i}-${uploadedFile.originalname}.png`;
+                const fakeFile = {
+                    buffer: buffers[i],
+                    mimetype: uploadedFile.mimetype,
+                };
+                // uploadBuffer will make public and return URL
+                const url = yield uploadBuffer(fakeFile, cardName);
+                cardImages.push(url);
+            }
+            // For compatibility keep puzzleImageUrl pointing to the first card
+            puzzleUrl =
+                cardImages[0] || (yield uploadBuffer(uploadedFile, puzzleName));
+        }
+        else if (campaignGameType === "spot_the_difference") {
+            const modifiedBuffer = yield (0, spotDifference_service_1.generateSpotDifferenceImage)(uploadedFile.buffer);
+            // upload modified buffer
+            const fakeFile = {
+                buffer: modifiedBuffer,
+                mimetype: uploadedFile.mimetype,
+            };
+            puzzleUrl = yield uploadBuffer(fakeFile, puzzleName);
+        }
+        else {
+            puzzleUrl = yield uploadBuffer(uploadedFile, puzzleName);
+        }
         // parse questions (expected as JSON string or array)
         let parsedQuestions = [];
         const rawQuestions = (_b = questions !== null && questions !== void 0 ? questions : (_a = req.body) === null || _a === void 0 ? void 0 : _a.questions) !== null && _b !== void 0 ? _b : (_c = req.body) === null || _c === void 0 ? void 0 : _c.question;
@@ -257,6 +291,12 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         // For word_hunt games, add words array
         if (campaignGameType === "word_hunt" && parsedWords.length > 0) {
             campaignData.words = parsedWords;
+        }
+        // For card_matching campaigns, attach generated card images
+        if (campaignGameType === "card_matching" &&
+            cardImages &&
+            cardImages.length > 0) {
+            campaignData.cardImages = cardImages;
         }
         const campaign = yield puzzleCampaign_model_1.default.create(campaignData);
         // Update brand campaigns list (no restrictions on number of campaigns)

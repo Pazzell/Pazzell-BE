@@ -10,6 +10,7 @@ import userRouter from "./routes/user.route";
 import packageRouter from "./routes/package.route";
 import paymentRouter from "./routes/payment.route";
 import analyticsRouter from "./routes/analytics.route";
+import referralRouter from "./routes/referral.route";
 import { ErrorMiddleware } from "./middlewares/error";
 
 const app = express();
@@ -33,6 +34,7 @@ app.use(
   authRouter,
   campaignRouter,
   brandRouter,
+  referralRouter,
   leaderboardRouter,
   userRouter,
   packageRouter,

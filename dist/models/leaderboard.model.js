@@ -5,7 +5,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const mongoose_1 = __importDefault(require("mongoose"));
 const leaderboardSchema = new mongoose_1.default.Schema({
-    type: { type: String, enum: ["weekly"], required: true, default: "weekly" },
+    type: {
+        type: String,
+        enum: ["weekly", "monthly"],
+        required: true,
+        default: "weekly",
+    },
     date: { type: String, required: true },
     entries: [
         {

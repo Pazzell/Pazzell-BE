@@ -16,6 +16,7 @@ const user_route_1 = __importDefault(require("./routes/user.route"));
 const package_route_1 = __importDefault(require("./routes/package.route"));
 const payment_route_1 = __importDefault(require("./routes/payment.route"));
 const analytics_route_1 = __importDefault(require("./routes/analytics.route"));
+const referral_route_1 = __importDefault(require("./routes/referral.route"));
 const error_1 = require("./middlewares/error");
 const app = (0, express_1.default)();
 exports.app = app;
@@ -28,7 +29,7 @@ app.use((0, cors_1.default)({
     origin: "*",
 }));
 // routes
-app.use("/api/v1", auth_route_1.default, campaign_route_1.default, brand_route_1.default, leaderboard_route_1.default, user_route_1.default, package_route_1.default, payment_route_1.default, analytics_route_1.default);
+app.use("/api/v1", auth_route_1.default, campaign_route_1.default, brand_route_1.default, referral_route_1.default, leaderboard_route_1.default, user_route_1.default, package_route_1.default, payment_route_1.default, analytics_route_1.default);
 //testing api
 app.use("/test", (req, res) => {
     res.status(200).json({

@@ -1,8 +1,8 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 export interface ILeaderboard extends Document {
-  type: "weekly";
-  date: string; // week range string (e.g., "2025-01-06_to_2025-01-12")
+  type: "weekly" | "monthly";
+  date: string; // week range string (e.g., "2025-01-06_to_2025-01-12") or monthKey (e.g., "2026-04")
   entries: {
     userId: string;
     puzzlesSolved?: number;
@@ -12,7 +12,12 @@ export interface ILeaderboard extends Document {
 
 const leaderboardSchema: Schema<ILeaderboard> = new mongoose.Schema(
   {
-    type: { type: String, enum: ["weekly"], required: true, default: "weekly" },
+    type: {
+      type: String,
+      enum: ["weekly", "monthly"],
+      required: true,
+      default: "weekly",
+    },
     date: { type: String, required: true },
     entries: [
       {
