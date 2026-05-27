@@ -11,6 +11,7 @@ const referralSchema = new mongoose_1.default.Schema({
     successful: { type: Boolean, default: false },
     successfulAt: { type: Date },
 }, { timestamps: true });
-referralSchema.index({ referrerId: 1 });
+// `referrerId` already has `index: true` in the field definition above.
+// Avoid duplicate index declaration to prevent Mongoose duplicate index warnings.
 const ReferralModel = mongoose_1.default.model("Referral", referralSchema);
 exports.default = ReferralModel;

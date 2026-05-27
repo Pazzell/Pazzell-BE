@@ -17,7 +17,7 @@ const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const brand_model_1 = __importDefault(require("../models/brand.model"));
-const firebaseConfig_1 = require("../firebaseConfig");
+const storageFactory_1 = require("../services/storage/storageFactory");
 const spotDifference_service_1 = require("../services/puzzle/spotDifference.service");
 const cardMatching_service_1 = require("../services/puzzle/cardMatching.service");
 const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
@@ -124,14 +124,20 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         const now = Date.now();
         const puzzleName = `puzzles/${now}-puzzle-${uploadedFile.originalname}`;
         const originalName = `puzzles/${now}-original-${uploadedFile.originalname}`;
+        const storage = (0, storageFactory_1.getStorageService)();
         const uploadBuffer = (file, name) => __awaiter(void 0, void 0, void 0, function* () {
-            const fileRef = firebaseConfig_1.bucket.file(name);
-            yield fileRef.save(file.buffer, {
-                resumable: false,
-                contentType: file.mimetype,
+            // name already includes folder prefix (e.g. "puzzles/..."), split it
+            const slashIdx = name.indexOf("/");
+            const folder = slashIdx !== -1 ? name.substring(0, slashIdx) : "puzzles";
+            const fileName = slashIdx !== -1 ? name.substring(slashIdx + 1) : name;
+            const result = yield storage.uploadFile({
+                buffer: file.buffer,
+                mimetype: file.mimetype,
+                originalname: fileName,
+                folder,
+                fileName,
             });
-            yield fileRef.makePublic();
-            return `https://storage.googleapis.com/${firebaseConfig_1.bucket.name}/${name}`;
+            return result.url;
         });
         // Always upload the original image
         const originalUrl = yield uploadBuffer(uploadedFile, originalName);

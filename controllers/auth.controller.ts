@@ -11,7 +11,7 @@ import jwt from "jsonwebtoken";
 import { Secret } from "jsonwebtoken";
 import path from "path";
 import ejs from "ejs";
-import sendMail from "../utils/sendEmail";
+import { getEmailService } from "../services/email/emailFactory";
 import { createActivationToken } from "./user.controller";
 import { generateUsername, generateAvatar } from "../utils/userHelpers";
 import ReferralModel from "../models/referral.model";
@@ -190,7 +190,7 @@ export const registerGamer = CatchAsyncError(
           path.join(__dirname, "../mails/activation-mail.ejs"),
           data
         );
-        await sendMail({
+        await getEmailService().sendMail({
           email,
           subject: "Verify your gamer account",
           template: "activation-mail.ejs",
@@ -484,7 +484,7 @@ export const registerBrand = CatchAsyncError(
           path.join(__dirname, "../mails/activation-mail.ejs"),
           data
         );
-        await sendMail({
+        await getEmailService().sendMail({
           email,
           subject: "Activate your brand account",
           template: "activation-mail.ejs",
@@ -599,7 +599,7 @@ export const resendActivation = CatchAsyncError(
       const data = { user: { name: displayName }, activationCode };
 
       // Send activation email
-      await sendMail({
+      await getEmailService().sendMail({
         email: user.email,
         subject: "Verify your account",
         template: "activation-mail.ejs",
@@ -667,7 +667,7 @@ export const forgotPassword = CatchAsyncError(
       const data = { user: { name: userName }, resetLink };
 
       try {
-        await sendMail({
+        await getEmailService().sendMail({
           email: user.email,
           subject: "Reset Your Password - Tex Resolve",
           template: "reset-password.ejs",

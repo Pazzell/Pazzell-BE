@@ -18,6 +18,8 @@ const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const transaction_model_1 = __importDefault(require("../models/transaction.model"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const payment_1 = require("../services/payment");
+const queueFactory_1 = require("../services/queue/queueFactory");
+const notificationFactory_1 = require("../services/notification/notificationFactory");
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 // Log payment configuration on startup
 console.log("✅ Payment Gateway: Paystack");
@@ -162,6 +164,27 @@ exports.verifyPayment = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
             campaign.startDate = now;
             campaign.endDate = endDate;
             yield campaign.save();
+            // Enqueue payment event (no-op when PAYMENT_QUEUE_PROVIDER=none)
+            (0, queueFactory_1.getPaymentQueue)().enqueue({
+                reference: transaction.reference,
+                transactionId: String(transaction._id),
+                campaignId: String(transaction.campaignId),
+                brandId: String(transaction.brandId),
+                amount: transaction.amount,
+                currency: transaction.currency || "NGN",
+                event: "payment.verified",
+                timestamp: new Date().toISOString(),
+            }).catch((e) => console.error("Queue enqueue error:", e));
+            // Publish notification (no-op when NOTIFICATION_PROVIDER=none)
+            (0, notificationFactory_1.getNotificationService)().publish({
+                subject: "Payment Verified",
+                message: `Payment ${transaction.reference} verified for campaign ${transaction.campaignId}`,
+                topicKey: "payment",
+                metadata: {
+                    reference: transaction.reference,
+                    campaignId: String(transaction.campaignId),
+                },
+            }).catch((e) => console.error("SNS publish error:", e));
             res.status(200).json({
                 success: true,
                 message: "Payment verified successfully",
@@ -233,6 +256,25 @@ exports.paystackWebhook = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 yield transaction.save();
                 // Activate campaign
                 yield activateCampaignAfterPayment(transaction, event.data);
+                // Enqueue webhook payment event (no-op when PAYMENT_QUEUE_PROVIDER=none)
+                (0, queueFactory_1.getPaymentQueue)().enqueue({
+                    reference,
+                    transactionId: String(transaction._id),
+                    campaignId: String(transaction.campaignId),
+                    brandId: String(transaction.brandId),
+                    amount: transaction.amount,
+                    currency: transaction.currency || "NGN",
+                    event: "webhook.received",
+                    rawPaystackData: event.data,
+                    timestamp: new Date().toISOString(),
+                }).catch((e) => console.error("Queue enqueue error:", e));
+                // Publish notification (no-op when NOTIFICATION_PROVIDER=none)
+                (0, notificationFactory_1.getNotificationService)().publish({
+                    subject: "Webhook Payment Success",
+                    message: `Webhook charge.success for reference ${reference}`,
+                    topicKey: "payment",
+                    metadata: { reference, campaignId: String(transaction.campaignId) },
+                }).catch((e) => console.error("SNS publish error:", e));
             }
         }
         res.status(200).send("Webhook received");

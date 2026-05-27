@@ -3,7 +3,7 @@ import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
 import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import BrandModel from "../models/brand.model";
-import { bucket } from "../firebaseConfig";
+import { getStorageService } from "../services/storage/storageFactory";
 import { generateSpotDifferenceImage } from "../services/puzzle/spotDifference.service";
 import { generateCardPairBuffers } from "../services/puzzle/cardMatching.service";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
@@ -168,14 +168,20 @@ export const createCampaign = CatchAsyncError(
       const puzzleName = `puzzles/${now}-puzzle-${uploadedFile.originalname}`;
       const originalName = `puzzles/${now}-original-${uploadedFile.originalname}`;
 
+      const storage = getStorageService();
       const uploadBuffer = async (file: any, name: string) => {
-        const fileRef = bucket.file(name);
-        await fileRef.save(file.buffer, {
-          resumable: false,
-          contentType: file.mimetype,
+        // name already includes folder prefix (e.g. "puzzles/..."), split it
+        const slashIdx = name.indexOf("/");
+        const folder = slashIdx !== -1 ? name.substring(0, slashIdx) : "puzzles";
+        const fileName = slashIdx !== -1 ? name.substring(slashIdx + 1) : name;
+        const result = await storage.uploadFile({
+          buffer: file.buffer,
+          mimetype: file.mimetype,
+          originalname: fileName,
+          folder,
+          fileName,
         });
-        await fileRef.makePublic();
-        return `https://storage.googleapis.com/${bucket.name}/${name}`;
+        return result.url;
       };
 
       // Always upload the original image

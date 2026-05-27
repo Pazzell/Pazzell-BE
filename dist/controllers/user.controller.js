@@ -19,10 +19,10 @@ const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
-const firebaseConfig_1 = require("../firebaseConfig");
+const storageFactory_1 = require("../services/storage/storageFactory");
 const ejs_1 = __importDefault(require("ejs"));
 const path_1 = __importDefault(require("path"));
-const sendEmail_1 = __importDefault(require("../utils/sendEmail"));
+const emailFactory_1 = require("../services/email/emailFactory");
 const redis_1 = require("../utils/redis");
 require("dotenv/config");
 const jwt_1 = require("../utils/jwt");
@@ -46,7 +46,7 @@ exports.registerUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
         yield ejs_1.default.renderFile(path_1.default.join(__dirname, "../mails/activation-mail.ejs"), data);
         //send email to user
         try {
-            yield (0, sendEmail_1.default)({
+            yield (0, emailFactory_1.getEmailService)().sendMail({
                 email: user.email,
                 subject: "Activate your account",
                 template: "activation-mail.ejs",
@@ -423,16 +423,16 @@ exports.updateGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
         // Handle avatar upload (file or URL)
         const uploadedFile = req.file;
         if (uploadedFile) {
-            // File was uploaded - upload to Firebase Storage
             const now = Date.now();
-            const avatarName = `avatars/${userId}-${now}-${uploadedFile.originalname}`;
-            const fileRef = firebaseConfig_1.bucket.file(avatarName);
-            yield fileRef.save(uploadedFile.buffer, {
-                resumable: false,
-                contentType: uploadedFile.mimetype,
+            const fileName = `${userId}-${now}-${uploadedFile.originalname}`;
+            const result = yield (0, storageFactory_1.getStorageService)().uploadFile({
+                buffer: uploadedFile.buffer,
+                mimetype: uploadedFile.mimetype,
+                originalname: fileName,
+                folder: "avatars",
+                fileName,
             });
-            yield fileRef.makePublic();
-            updateData.avatar = `https://storage.googleapis.com/${firebaseConfig_1.bucket.name}/${avatarName}`;
+            updateData.avatar = result.url;
         }
         else if (avatar && typeof avatar === "string") {
             // URL was provided as string
@@ -496,16 +496,16 @@ exports.updateBrandProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
         // Handle avatar upload (file or URL)
         const uploadedFile = req.file;
         if (uploadedFile) {
-            // File was uploaded - upload to Firebase Storage
             const now = Date.now();
-            const avatarName = `avatars/${userId}-${now}-${uploadedFile.originalname}`;
-            const fileRef = firebaseConfig_1.bucket.file(avatarName);
-            yield fileRef.save(uploadedFile.buffer, {
-                resumable: false,
-                contentType: uploadedFile.mimetype,
+            const fileName = `${userId}-${now}-${uploadedFile.originalname}`;
+            const result = yield (0, storageFactory_1.getStorageService)().uploadFile({
+                buffer: uploadedFile.buffer,
+                mimetype: uploadedFile.mimetype,
+                originalname: fileName,
+                folder: "avatars",
+                fileName,
             });
-            yield fileRef.makePublic();
-            userUpdateData.avatar = `https://storage.googleapis.com/${firebaseConfig_1.bucket.name}/${avatarName}`;
+            userUpdateData.avatar = result.url;
         }
         else if (avatar && typeof avatar === "string") {
             // URL was provided as string

@@ -24,7 +24,7 @@ require("../firebaseConfig");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const path_1 = __importDefault(require("path"));
 const ejs_1 = __importDefault(require("ejs"));
-const sendEmail_1 = __importDefault(require("../utils/sendEmail"));
+const emailFactory_1 = require("../services/email/emailFactory");
 const user_controller_1 = require("./user.controller");
 const userHelpers_1 = require("../utils/userHelpers");
 const referral_model_1 = __importDefault(require("../models/referral.model"));
@@ -157,7 +157,7 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
         // Try to send email first
         try {
             yield ejs_1.default.renderFile(path_1.default.join(__dirname, "../mails/activation-mail.ejs"), data);
-            yield (0, sendEmail_1.default)({
+            yield (0, emailFactory_1.getEmailService)().sendMail({
                 email,
                 subject: "Verify your gamer account",
                 template: "activation-mail.ejs",
@@ -387,7 +387,7 @@ exports.registerBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
         // Try to send email first
         try {
             yield ejs_1.default.renderFile(path_1.default.join(__dirname, "../mails/activation-mail.ejs"), data);
-            yield (0, sendEmail_1.default)({
+            yield (0, emailFactory_1.getEmailService)().sendMail({
                 email,
                 subject: "Activate your brand account",
                 template: "activation-mail.ejs",
@@ -484,7 +484,7 @@ exports.resendActivation = (0, catchAsyncError_1.CatchAsyncError)((req, res, nex
         const activationCode = activationToken.activationCode;
         const data = { user: { name: displayName }, activationCode };
         // Send activation email
-        yield (0, sendEmail_1.default)({
+        yield (0, emailFactory_1.getEmailService)().sendMail({
             email: user.email,
             subject: "Verify your account",
             template: "activation-mail.ejs",
@@ -531,7 +531,7 @@ exports.forgotPassword = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         // Send reset email with link
         const data = { user: { name: userName }, resetLink };
         try {
-            yield (0, sendEmail_1.default)({
+            yield (0, emailFactory_1.getEmailService)().sendMail({
                 email: user.email,
                 subject: "Reset Your Password - Tex Resolve",
                 template: "reset-password.ejs",
