@@ -52,6 +52,7 @@ export const createCampaign = CatchAsyncError(
         campaignUrl,
         videoUrl,
         timeLimit,
+        weeksToRun,
       } = req.body;
 
       // Validate packageId
@@ -302,12 +303,13 @@ export const createCampaign = CatchAsyncError(
         return Number.isFinite(n) ? n : null;
       };
 
-      // Validate timeLimit
-      const parsedTimeLimit = Number(timeLimit);
-      if (!timeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
+      // Validate timeLimit — accept either timeLimit (hours) or weeksToRun (weeks)
+      const rawTimeLimit = timeLimit ?? (weeksToRun ? Number(weeksToRun) * 7 * 24 : undefined);
+      const parsedTimeLimit = Number(rawTimeLimit);
+      if (!rawTimeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
         return next(
           new ErrorHandler(
-            "timeLimit is required and must be a positive number (in hours)",
+            "timeLimit (hours) or weeksToRun (weeks) is required and must be a positive number",
             400
           )
         );

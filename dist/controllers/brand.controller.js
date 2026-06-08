@@ -52,7 +52,7 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         const brandUser = req.user;
         if (brandUser.role !== "brand")
             return next(new ErrorHandler_1.default("Only brands can create campaigns", 403));
-        const { questions, title, description, gameType, words, packageId, brandUrl, campaignUrl, videoUrl, timeLimit, } = req.body;
+        const { questions, title, description, gameType, words, packageId, brandUrl, campaignUrl, videoUrl, timeLimit, weeksToRun, } = req.body;
         // Validate packageId
         if (!packageId || typeof packageId !== "string") {
             return next(new ErrorHandler_1.default("packageId is required and must be a valid string", 400));
@@ -245,10 +245,11 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             const n = Number(v);
             return Number.isFinite(n) ? n : null;
         };
-        // Validate timeLimit
-        const parsedTimeLimit = Number(timeLimit);
-        if (!timeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
-            return next(new ErrorHandler_1.default("timeLimit is required and must be a positive number (in hours)", 400));
+        // Validate timeLimit — accept either timeLimit (hours) or weeksToRun (weeks)
+        const rawTimeLimit = timeLimit !== null && timeLimit !== void 0 ? timeLimit : (weeksToRun ? Number(weeksToRun) * 7 * 24 : undefined);
+        const parsedTimeLimit = Number(rawTimeLimit);
+        if (!rawTimeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
+            return next(new ErrorHandler_1.default("timeLimit (hours) or weeksToRun (weeks) is required and must be a positive number", 400));
         }
         // Get package type and calculate totalBudget
         const packageType = ((_d = packageData.name) === null || _d === void 0 ? void 0 : _d.toLowerCase()) === "premium" ? "premium" : "basic";
