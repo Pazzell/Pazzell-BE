@@ -1,21 +1,14 @@
-# Use a newer stable Node.js version
-FROM node:20-alpine
-
-# Set working directory
+FROM node:22-alpine AS builder
 WORKDIR /app
-
-# Copy package files
 COPY package.json package-lock.json* ./
-
-# Install dependencies
-RUN npm install 
-
-# Copy source files
+RUN npm ci
 COPY . .
+RUN npm run build
 
-# Expose application port
+FROM node:22-alpine AS production
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist ./dist
 EXPOSE 4000
-
-# Start the application
-CMD ["npm", "run", "dev"]
-
+CMD ["npm", "start"]
