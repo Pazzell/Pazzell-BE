@@ -61,14 +61,12 @@ export const ErrorMiddleware = (err: any, req: Request, res: Response, next: Nex
         err.message = err.message || "The requested resource was not found.";
     }
 
-    // Log error for debugging (only in development)
-    if (process.env.NODE_ENV === "development") {
-        console.error("Error:", {
-            message: err.message,
-            statusCode: err.statusCode,
-            stack: err.stack,
-        });
-    }
+    // Always log errors so they appear in docker logs
+    console.error("Error:", {
+        message: err.message,
+        statusCode: err.statusCode,
+        ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+    });
 
     // Send error response
     res.status(Number(err.statusCode)).json({
