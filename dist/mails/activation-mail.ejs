@@ -1,98 +1,193 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Tex Resolve Activation Email</title>
+    <title>Pazzell - Activate Your Account</title>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style type="text/css">
-      /* Base */
       body {
         margin: 0;
         padding: 0;
         min-width: 100%;
-        font-family: Arial, sans-serif;
+        font-family: 'Space Grotesk', Arial, sans-serif;
         font-size: 16px;
-        line-height: 1.5;
-        background-color: #faf2f2;
-        color: #161515;
+        line-height: 1.6;
+        background-color: #0f0f1a;
+        color: #F8F9FF;
       }
       a {
-        color: #000;
+        color: #00D9FF;
         text-decoration: none;
-      }
-      h1 {
-        font-size: 24px;
-        font-weight: 700;
-        line-height: 1.25;
-        margin-top: 0;
-        margin-bottom: 15px;
-        text-align: center;
       }
       p {
         margin-top: 0;
-        margin-bottom: 24px;
+        margin-bottom: 20px;
+        color: #c8cce0;
       }
-      table td {
-        vertical-align: top;
-      }
-      /* Layout */
       .email-wrapper {
         max-width: 600px;
         margin: 0 auto;
+        border-radius: 16px;
+        overflow: hidden;
+        border: 1px solid rgba(108, 92, 231, 0.2);
       }
       .email-header {
-        background-color: #15252b;
-        padding: 24px;
-        color: #ffffff;
+        background: linear-gradient(135deg, #1A1A2E 0%, #16213e 100%);
+        padding: 40px 32px 32px;
+        text-align: center;
+        border-bottom: 1px solid rgba(108, 92, 231, 0.3);
+        position: relative;
+      }
+      .brand-name {
+        font-family: 'Fredoka', 'Space Grotesk', Arial, sans-serif;
+        font-size: 36px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        background: linear-gradient(135deg, #00D9FF, #00E676);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        color: #00D9FF;
+        display: inline-block;
+        margin: 0 0 8px;
+      }
+      .header-tagline {
+        font-size: 13px;
+        color: rgba(248, 249, 255, 0.5);
+        margin: 0;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      .accent-bar {
+        height: 3px;
+        background: linear-gradient(90deg, #6C5CE7, #00D9FF, #00E676);
+        margin: 0;
       }
       .email-body {
+        padding: 40px 32px;
+        background-color: #1A1A2E;
+      }
+      .greeting {
+        font-size: 20px;
+        font-weight: 600;
+        color: #F8F9FF;
+        margin-bottom: 16px;
+      }
+      .otp-label {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: rgba(248, 249, 255, 0.5);
+        text-align: center;
+        margin-bottom: 12px;
+      }
+      .otp-box {
+        background: linear-gradient(135deg, rgba(108, 92, 231, 0.15), rgba(0, 217, 255, 0.1));
+        border: 1px solid rgba(108, 92, 231, 0.4);
+        border-radius: 12px;
         padding: 24px;
-        background-color: #ffffff;
+        text-align: center;
+        margin: 24px 0;
+      }
+      .otp-code {
+        font-family: 'Fredoka', 'Space Grotesk', monospace;
+        font-size: 42px;
+        font-weight: 700;
+        letter-spacing: 10px;
+        color: #00D9FF;
+        display: block;
+        margin: 0;
+      }
+      .timer-note {
+        font-size: 13px;
+        color: rgba(248, 249, 255, 0.5);
+        margin-top: 10px;
+        display: block;
+      }
+      .info-box {
+        background: rgba(0, 230, 118, 0.08);
+        border: 1px solid rgba(0, 230, 118, 0.2);
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin-top: 24px;
+      }
+      .info-box p {
+        font-size: 13px;
+        color: rgba(248, 249, 255, 0.6);
+        margin: 0;
       }
       .email-footer {
-        background-color: #f6f6f6;
-        padding: 24px;
-      }
-      /* Buttons */
-      .button {
-        display: inline-block;
-        background-color: #0070f3;
-        color: #ffffff;
-        font-size: 16px;
-        font-weight: 700;
+        background-color: #13131f;
+        padding: 24px 32px;
         text-align: center;
-        text-decoration: none;
-        padding: 12px 24px;
-        border-radius: 4px;
+        border-top: 1px solid rgba(108, 92, 231, 0.15);
+      }
+      .footer-brand {
+        font-family: 'Fredoka', Arial, sans-serif;
+        font-size: 18px;
+        font-weight: 600;
+        color: #6C5CE7;
+        margin-bottom: 8px;
+      }
+      .footer-text {
+        font-size: 12px;
+        color: rgba(248, 249, 255, 0.3);
+        margin: 0;
+      }
+      .footer-text a {
+        color: #00D9FF;
+      }
+      .divider {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(108, 92, 231, 0.3), transparent);
+        margin: 20px 0;
+        border: none;
       }
     </style>
   </head>
   <body>
-    <div class="email-wrapper">
-      <div class="email-header">
-        <h1>Welcome to Tex Resolve</h1>
-      </div>
-      <div class="email-body">
-        <p>Hello <%= user.name %>,</p>
-        <p>
-          Thank you for registering with Tex Resolve. To activate your account,
-          please use the following activation code:
-        </p>
-        <h2><%= activationCode %></h2>
-        <p>
-          Please enter this code on the activation page within the next 5
-          minutes.
-        </p>
-        <p>
-          If you did not register for a Tex Resolve account, please ignore this
-          email.
-        </p>
-      </div>
-      <div class="email-footer">
-        <p>
-          If you have any questions, please don't hesitate to contact us at
-          <a href="mailto:support@plars.com">support@texResolve.com</a>
-        </p>
+    <div style="padding: 24px 16px; background-color: #0f0f1a;">
+      <div class="email-wrapper">
+        <div class="email-header">
+          <div class="brand-name">Pazzell</div>
+          <p class="header-tagline">Play Puzzles &bull; Win Prizes &bull; Earn Money</p>
+        </div>
+        <div class="accent-bar"></div>
+        <div class="email-body">
+          <p class="greeting">Hey <%= user.name %> 👋</p>
+          <p>
+            Welcome to <strong style="color: #F8F9FF;">Pazzell</strong> — where every puzzle is a chance to win!
+            To activate your account and start playing, use the verification code below:
+          </p>
+
+          <div class="otp-box">
+            <span class="otp-label">Your activation code</span>
+            <span class="otp-code"><%= activationCode %></span>
+            <span class="timer-note">⏱ Expires in 5 minutes</span>
+          </div>
+
+          <p>
+            Enter this code on the activation page to unlock your account and join thousands of players competing for real prizes.
+          </p>
+
+          <hr class="divider" />
+
+          <div class="info-box">
+            <p>🔒 If you didn't create a Pazzell account, you can safely ignore this email. Your inbox is safe.</p>
+          </div>
+        </div>
+        <div class="email-footer">
+          <div class="footer-brand">Pazzell</div>
+          <p class="footer-text">
+            Questions? Reach us at
+            <a href="mailto:support@pazzell.com">support@pazzell.com</a>
+          </p>
+          <p class="footer-text" style="margin-top: 6px;">
+            &copy; <%= new Date().getFullYear() %> Pazzell. All rights reserved.
+          </p>
+        </div>
       </div>
     </div>
   </body>

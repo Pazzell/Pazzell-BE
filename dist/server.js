@@ -26,34 +26,36 @@ app_1.app.listen(PORT, () => __awaiter(void 0, void 0, void 0, function* () {
     yield (0, db_1.default)();
     // Initialize packages after database connection
     yield (0, package_controller_1.initializePackages)();
-    // schedule daily leaderboard reset at local midnight
-    const scheduleDailyReset = () => __awaiter(void 0, void 0, void 0, function* () {
+    // schedule monthly leaderboard reset at the end of each month (midnight on 1st of next month)
+    const scheduleMonthlyReset = () => {
         const now = new Date();
-        const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-        const delay = next.getTime() - now.getTime();
+        const firstOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        const delay = firstOfNextMonth.getTime() - now.getTime();
         setTimeout(function resetAndSchedule() {
             return __awaiter(this, void 0, void 0, function* () {
                 try {
-                    // Skip if database is not connected
                     if (mongoose_1.default.connection.readyState === 1) {
-                        const todayKey = new Date().toISOString().slice(0, 10);
-                        // keep today's leaderboard; remove older daily leaderboards
+                        const now = new Date();
+                        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+                        // keep current month's leaderboard; remove all older monthly leaderboards
                         yield leaderboard_model_1.default.deleteMany({
-                            type: "daily",
-                            date: { $ne: todayKey },
+                            type: "monthly",
+                            date: { $ne: currentMonthKey },
                         });
-                        console.log("Daily leaderboard reset completed");
+                        console.log(`Monthly leaderboard reset completed. Current month: ${currentMonthKey}`);
                     }
                 }
                 catch (err) {
-                    console.error("Error resetting daily leaderboard:", err);
+                    console.error("Error resetting monthly leaderboard:", err);
                 }
-                // schedule next run in 24h
-                setTimeout(resetAndSchedule, 24 * 60 * 60 * 1000);
+                // schedule next run for the 1st of the following month
+                const next = new Date();
+                const nextRun = new Date(next.getFullYear(), next.getMonth() + 1, 1);
+                setTimeout(resetAndSchedule, nextRun.getTime() - Date.now());
             });
         }, delay);
-    });
-    scheduleDailyReset();
+    };
+    scheduleMonthlyReset();
     // start instant event scheduler
     (0, scheduler_1.startScheduler)();
 }));
