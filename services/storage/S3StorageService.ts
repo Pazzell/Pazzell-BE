@@ -14,9 +14,10 @@ import {
 
 export class S3StorageService implements IStorageService {
   private bucket = process.env.AWS_S3_BUCKET_NAME!;
+  private region = process.env.AWS_REGION || "us-east-1";
   private baseUrl =
     process.env.AWS_S3_PUBLIC_BASE_URL ||
-    `https://${process.env.AWS_S3_BUCKET_NAME}.s3.amazonaws.com`;
+    `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${this.region}.amazonaws.com`;
 
   async uploadFile(options: UploadFileOptions): Promise<UploadedFileResult> {
     const { buffer, mimetype, originalname, folder, fileName } = options;
