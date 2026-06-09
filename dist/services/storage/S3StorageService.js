@@ -17,8 +17,9 @@ const awsClients_1 = require("../../aws/awsClients");
 class S3StorageService {
     constructor() {
         this.bucket = process.env.AWS_S3_BUCKET_NAME;
+        this.region = process.env.AWS_REGION || "us-east-1";
         this.baseUrl = process.env.AWS_S3_PUBLIC_BASE_URL ||
-            `https://${process.env.AWS_S3_BUCKET_NAME}.s3.amazonaws.com`;
+            `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${this.region}.amazonaws.com`;
     }
     uploadFile(options) {
         return __awaiter(this, void 0, void 0, function* () {
