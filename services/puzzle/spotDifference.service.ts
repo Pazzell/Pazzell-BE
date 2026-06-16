@@ -8,7 +8,7 @@ export async function generateSpotDifferenceImage(originalBuffer: Buffer) {
   const h = image.getHeight();
 
   // Create several small colored stickers/rectangles to composite onto the image
-  const variants = 8; // number of differences
+  const variants = 24; // number of differences (tripled from original 8)
   for (let i = 0; i < variants; i++) {
     const size = Math.max(
       12,

@@ -30,22 +30,24 @@ export const getWeeklyLeaderboard = CatchAsyncError(
       weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
       weekEnd.setHours(23, 59, 59, 999);
 
-      // DEBUG: Count all attempts regardless of week
+      // DEBUG: Count all point-earning attempts regardless of week
       const totalAttempts = await PuzzleAttemptModel.countDocuments({
-        firstTimeSolved: true,
+        pointsEarned: { $gt: 0 },
       });
 
-      // DEBUG: Count attempts in current week
+      // DEBUG: Count point-earning attempts in current week
       const weekAttempts = await PuzzleAttemptModel.countDocuments({
-        firstTimeSolved: true,
+        pointsEarned: { $gt: 0 },
         timestamp: { $gte: weekStart, $lte: weekEnd },
       });
 
-      // count firstTimeSolved attempts that occurred this week grouped by user
+      // count point-earning attempts that occurred this week grouped by user
+      // (pointsEarned > 0 rather than firstTimeSolved: true, since players can
+      // earn points again on later days for the same campaign)
       const agg = await PuzzleAttemptModel.aggregate([
         {
           $match: {
-            firstTimeSolved: true,
+            pointsEarned: { $gt: 0 },
             timestamp: { $gte: weekStart, $lte: weekEnd },
           },
         },
@@ -137,22 +139,59 @@ export const getMonthlyLeaderboard = CatchAsyncError(
       const monthKey = `${now.getFullYear()}-${String(
         now.getMonth() + 1
       ).padStart(2, "0")}`;
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(
+        now.getFullYear(),
+        now.getMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+        999
+      );
 
-      // Try to fetch existing monthly leaderboard
-      const board = await LeaderboardModel.findOne({
-        type: "monthly",
-        date: monthKey,
-      });
-      let entries: any[] = [];
-      if (board && board.entries && board.entries.length) {
-        entries = board.entries.map((e: any, idx: number) => ({
-          position: idx + 1,
-          userId: e.userId,
-          points: e.points,
-          puzzlesSolved: e.puzzlesSolved || 0,
-          prizeAmount: MONTHLY_PRIZES[idx] || 0,
-        }));
-      }
+      // Compute live standings for the current month (pointsEarned > 0,
+      // since players can earn points on multiple days within the month)
+      const agg = await PuzzleAttemptModel.aggregate([
+        {
+          $match: {
+            pointsEarned: { $gt: 0 },
+            timestamp: { $gte: monthStart, $lte: monthEnd },
+          },
+        },
+        {
+          $group: {
+            _id: "$userId",
+            puzzlesSolved: { $sum: 1 },
+            points: { $sum: "$pointsEarned" },
+          },
+        },
+        { $sort: { points: -1, puzzlesSolved: -1 } },
+        { $limit: 100 },
+      ]);
+
+      const entries = agg.map((a: any, idx: number) => ({
+        position: idx + 1,
+        userId: a._id,
+        points: a.points,
+        puzzlesSolved: a.puzzlesSolved,
+        prizeAmount: MONTHLY_PRIZES[idx] || 0,
+      }));
+
+      // keep a cached snapshot up to date for this month
+      await LeaderboardModel.findOneAndUpdate(
+        { type: "monthly", date: monthKey },
+        {
+          type: "monthly",
+          date: monthKey,
+          entries: entries.map((e) => ({
+            userId: e.userId,
+            puzzlesSolved: e.puzzlesSolved,
+            points: e.points,
+          })),
+        },
+        { upsert: true }
+      );
 
       const entriesWithUserDetails = await Promise.all(
         entries.map(async (entry: any) => {
@@ -326,10 +365,12 @@ export const getAllTimeLeaderboard = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Aggregate all puzzle attempts (no time filter) and compute avg completion time
+      // (pointsEarned > 0 rather than firstTimeSolved: true, since players can
+      // earn points again on later days for the same campaign)
       const agg = await PuzzleAttemptModel.aggregate([
         {
           $match: {
-            firstTimeSolved: true,
+            pointsEarned: { $gt: 0 },
           },
         },
         {

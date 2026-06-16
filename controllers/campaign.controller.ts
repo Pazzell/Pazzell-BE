@@ -6,6 +6,12 @@ import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
 import PackageModel from "../models/package.model";
 import BrandModel from "../models/brand.model";
+import ReferralModel from "../models/referral.model";
+import ReferralEventModel from "../models/referralEvent.model";
+
+// Points awarded to the referrer once their referred user's referral is
+// marked successful (first solved puzzle)
+const REFERRAL_POINTS = 1;
 
 // Helper function to check and update expired campaigns
 const updateExpiredCampaigns = async () => {
@@ -516,6 +522,39 @@ export const submitCampaign = CatchAsyncError(
           userDoc.puzzlesSolved.push(campaignId);
         }
         await userDoc.save();
+
+        // If this is the user's first successful solve ever, mark any
+        // pending referral as successful and record the points + event.
+        // Referral points are NOT added to the referrer's lifetime totals:
+        // the referral reward is based on the highest referral points within
+        // a given month, so points must stay scoped to the month the
+        // referral became successful (via `successfulAt`) rather than
+        // accumulate permanently. Monthly rankings are computed on demand
+        // from the Referral collection (see getReferralSummary /
+        // finalizeMonthlyRewards), which resets naturally each month.
+        try {
+          if (firstTime && userId) {
+            const referral = await ReferralModel.findOne({
+              referredUserId: String(userId),
+              successful: false,
+            });
+            if (referral) {
+              referral.successful = true;
+              referral.successfulAt = new Date();
+              referral.pointsAwarded = REFERRAL_POINTS;
+              await referral.save();
+
+              await ReferralEventModel.create({
+                referrerId: referral.referrerId,
+                referredUserId: referral.referredUserId,
+                eventType: "first_puzzle",
+              });
+            }
+          }
+        } catch (err) {
+          // non-fatal: log and continue
+          console.error("Referral marking failed:", err);
+        }
       }
 
       // Remove user from "currently playing" after submitting
@@ -554,10 +593,13 @@ export const updateCampaign = CatchAsyncError(
       if (!campaign) return next(new ErrorHandler("Campaign not found", 404));
 
       // Only the owning brand or admins can update
-      if (
-        user.role === "brand" &&
-        String(campaign.brandId) !== String(user._id)
-      ) {
+      if (user.role === "brand") {
+        if (String(campaign.brandId) !== String(user._id)) {
+          return next(
+            new ErrorHandler("Not authorized to edit this campaign", 403)
+          );
+        }
+      } else if (user.role !== "admin") {
         return next(
           new ErrorHandler("Not authorized to edit this campaign", 403)
         );
@@ -594,7 +636,25 @@ export const updateCampaign = CatchAsyncError(
         { new: true }
       ).lean();
 
-      res.status(200).json({ success: true, campaign: updated });
+      if (!updated) return next(new ErrorHandler("Campaign not found", 404));
+
+      // Enrich response with brandName/packageName, matching the shape
+      // returned by the other campaign endpoints (get/list).
+      const brand = await UserModel.findById(updated.brandId)
+        .select("name companyName")
+        .lean();
+      const packageData = await PackageModel.findById(updated.packageId)
+        .select("name")
+        .lean();
+
+      res.status(200).json({
+        success: true,
+        campaign: {
+          ...updated,
+          brandName: brand?.companyName || brand?.name || "Unknown Brand",
+          packageName: packageData?.name || null,
+        },
+      });
     } catch (error: any) {
       return next(
         new ErrorHandler(`Failed to update campaign: ${error.message}`, 500)

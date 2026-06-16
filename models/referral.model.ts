@@ -6,6 +6,7 @@ export interface IReferral extends Document {
   referredAt: Date;
   successful: boolean; // becomes true after referred user completes first puzzle
   successfulAt?: Date;
+  pointsAwarded: number; // points credited to the referrer once successful
 }
 
 const referralSchema: Schema<IReferral> = new mongoose.Schema(
@@ -15,6 +16,7 @@ const referralSchema: Schema<IReferral> = new mongoose.Schema(
     referredAt: { type: Date, default: Date.now },
     successful: { type: Boolean, default: false },
     successfulAt: { type: Date },
+    pointsAwarded: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
