@@ -5,6 +5,7 @@ import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import jwt, { Secret, JwtPayload } from "jsonwebtoken";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import LeaderboardModel from "../models/leaderboard.model";
+import ReferralModel from "../models/referral.model";
 import { getStorageService } from "../services/storage/storageFactory";
 
 import ejs from "ejs";
@@ -410,6 +411,48 @@ export const getGamerProfile = CatchAsyncError(
           : 0;
       weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
 
+      // Current month's referral standing (resets every month — see
+      // controllers/referral.controller.ts getReferralSummary for the
+      // same pattern). Referral points are never stored on the lifetime
+      // analytics fields, only on each Referral doc's pointsAwarded,
+      // scoped by successfulAt.
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(
+        now.getFullYear(),
+        now.getMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+        999
+      );
+      const monthKey = `${now.getFullYear()}-${String(
+        now.getMonth() + 1
+      ).padStart(2, "0")}`;
+
+      const referralAgg = await ReferralModel.aggregate([
+        {
+          $match: {
+            successful: true,
+            successfulAt: { $gte: monthStart, $lte: monthEnd },
+          },
+        },
+        {
+          $group: {
+            _id: "$referrerId",
+            successfulCount: { $sum: 1 },
+            pointsEarned: { $sum: "$pointsAwarded" },
+          },
+        },
+        { $sort: { pointsEarned: -1, successfulCount: -1 } },
+      ]);
+
+      const referralIndex = referralAgg.findIndex(
+        (entry: any) => String(entry._id) === String(userId)
+      );
+      const myReferralStats =
+        referralIndex !== -1 ? referralAgg[referralIndex] : null;
+
       res.status(200).json({
         success: true,
         profile: {
@@ -443,6 +486,12 @@ export const getGamerProfile = CatchAsyncError(
               attempts: weeklyStats.attempts,
               successRate: Math.round(weeklyStats.successRate * 100) / 100,
               leaderboardPosition: weeklyLeaderboardPosition,
+            },
+            referral: {
+              monthKey,
+              successfulCount: myReferralStats?.successfulCount || 0,
+              pointsEarned: myReferralStats?.pointsEarned || 0,
+              leaderboardPosition: referralIndex !== -1 ? referralIndex + 1 : null,
             },
           },
           puzzlesSolved: user.puzzlesSolved,

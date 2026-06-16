@@ -33,20 +33,22 @@ exports.getWeeklyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res,
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
         weekEnd.setHours(23, 59, 59, 999);
-        // DEBUG: Count all attempts regardless of week
+        // DEBUG: Count all point-earning attempts regardless of week
         const totalAttempts = yield puzzleAttempt_model_1.default.countDocuments({
-            firstTimeSolved: true,
+            pointsEarned: { $gt: 0 },
         });
-        // DEBUG: Count attempts in current week
+        // DEBUG: Count point-earning attempts in current week
         const weekAttempts = yield puzzleAttempt_model_1.default.countDocuments({
-            firstTimeSolved: true,
+            pointsEarned: { $gt: 0 },
             timestamp: { $gte: weekStart, $lte: weekEnd },
         });
-        // count firstTimeSolved attempts that occurred this week grouped by user
+        // count point-earning attempts that occurred this week grouped by user
+        // (pointsEarned > 0 rather than firstTimeSolved: true, since players can
+        // earn points again on later days for the same campaign)
         const agg = yield puzzleAttempt_model_1.default.aggregate([
             {
                 $match: {
-                    firstTimeSolved: true,
+                    pointsEarned: { $gt: 0 },
                     timestamp: { $gte: weekStart, $lte: weekEnd },
                 },
             },
@@ -122,21 +124,44 @@ exports.getMonthlyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res
     try {
         const now = new Date();
         const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-        // Try to fetch existing monthly leaderboard
-        const board = yield leaderboard_model_1.default.findOne({
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        // Compute live standings for the current month (pointsEarned > 0,
+        // since players can earn points on multiple days within the month)
+        const agg = yield puzzleAttempt_model_1.default.aggregate([
+            {
+                $match: {
+                    pointsEarned: { $gt: 0 },
+                    timestamp: { $gte: monthStart, $lte: monthEnd },
+                },
+            },
+            {
+                $group: {
+                    _id: "$userId",
+                    puzzlesSolved: { $sum: 1 },
+                    points: { $sum: "$pointsEarned" },
+                },
+            },
+            { $sort: { points: -1, puzzlesSolved: -1 } },
+            { $limit: 100 },
+        ]);
+        const entries = agg.map((a, idx) => ({
+            position: idx + 1,
+            userId: a._id,
+            points: a.points,
+            puzzlesSolved: a.puzzlesSolved,
+            prizeAmount: MONTHLY_PRIZES[idx] || 0,
+        }));
+        // keep a cached snapshot up to date for this month
+        yield leaderboard_model_1.default.findOneAndUpdate({ type: "monthly", date: monthKey }, {
             type: "monthly",
             date: monthKey,
-        });
-        let entries = [];
-        if (board && board.entries && board.entries.length) {
-            entries = board.entries.map((e, idx) => ({
-                position: idx + 1,
+            entries: entries.map((e) => ({
                 userId: e.userId,
+                puzzlesSolved: e.puzzlesSolved,
                 points: e.points,
-                puzzlesSolved: e.puzzlesSolved || 0,
-                prizeAmount: MONTHLY_PRIZES[idx] || 0,
-            }));
-        }
+            })),
+        }, { upsert: true });
         const entriesWithUserDetails = yield Promise.all(entries.map((entry) => __awaiter(void 0, void 0, void 0, function* () {
             const user = yield user_model_1.default.findById(entry.userId)
                 .select("firstName lastName username avatar")
@@ -288,10 +313,12 @@ exports.getLeaderboardByWeek = (0, catchAsyncError_1.CatchAsyncError)((req, res,
 exports.getAllTimeLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // Aggregate all puzzle attempts (no time filter) and compute avg completion time
+        // (pointsEarned > 0 rather than firstTimeSolved: true, since players can
+        // earn points again on later days for the same campaign)
         const agg = yield puzzleAttempt_model_1.default.aggregate([
             {
                 $match: {
-                    firstTimeSolved: true,
+                    pointsEarned: { $gt: 0 },
                 },
             },
             {

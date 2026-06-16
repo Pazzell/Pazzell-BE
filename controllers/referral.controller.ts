@@ -32,6 +32,7 @@ export const getReferralSummary = CatchAsyncError(
           $group: {
             _id: "$referrerId",
             successfulCount: { $sum: 1 },
+            pointsEarned: { $sum: "$pointsAwarded" },
             referred: { $push: "$referredUserId" },
           },
         },
@@ -49,6 +50,7 @@ export const getReferralSummary = CatchAsyncError(
             rank: idx + 1,
             user: user || { userId: row._id },
             successfulCount: row.successfulCount,
+            pointsEarned: row.pointsEarned || 0,
             referredUserIds: row.referred,
           };
         })

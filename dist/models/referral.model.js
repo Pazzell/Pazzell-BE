@@ -10,6 +10,7 @@ const referralSchema = new mongoose_1.default.Schema({
     referredAt: { type: Date, default: Date.now },
     successful: { type: Boolean, default: false },
     successfulAt: { type: Date },
+    pointsAwarded: { type: Number, default: 0 },
 }, { timestamps: true });
 // `referrerId` already has `index: true` in the field definition above.
 // Avoid duplicate index declaration to prevent Mongoose duplicate index warnings.

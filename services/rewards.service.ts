@@ -24,11 +24,12 @@ function monthRangeFromKey(monthKey: string) {
 export const finalizeMonthlyRewards = async (monthKey: string) => {
   const { start, end } = monthRangeFromKey(monthKey);
 
-  // 1) Compute monthly top 10 by points (firstTimeSolved within month)
+  // 1) Compute monthly top 10 by points (pointsEarned > 0 within month; players
+  // can earn points on multiple days, not just their first-ever solve)
   const agg = await PuzzleAttemptModel.aggregate([
     {
       $match: {
-        firstTimeSolved: true,
+        pointsEarned: { $gt: 0 },
         timestamp: { $gte: start, $lte: end },
       },
     },
