@@ -18,8 +18,6 @@ const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const brand_model_1 = __importDefault(require("../models/brand.model"));
 const storageFactory_1 = require("../services/storage/storageFactory");
-const spotDifference_service_1 = require("../services/puzzle/spotDifference.service");
-const cardMatching_service_1 = require("../services/puzzle/cardMatching.service");
 const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
 const package_model_1 = __importDefault(require("../models/package.model"));
@@ -120,59 +118,17 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         if (!uploadedFile) {
             return next(new ErrorHandler_1.default('Missing image file. Please upload using field name "image"', 400));
         }
-        // use a single timestamp so both stored names are related
         const now = Date.now();
-        const puzzleName = `puzzles/${now}-puzzle-${uploadedFile.originalname}`;
-        const originalName = `puzzles/${now}-original-${uploadedFile.originalname}`;
+        const puzzleName = `puzzles/${now}-${uploadedFile.originalname}`;
         const storage = (0, storageFactory_1.getStorageService)();
-        const uploadBuffer = (file, name) => __awaiter(void 0, void 0, void 0, function* () {
-            // name already includes folder prefix (e.g. "puzzles/..."), split it
-            const slashIdx = name.indexOf("/");
-            const folder = slashIdx !== -1 ? name.substring(0, slashIdx) : "puzzles";
-            const fileName = slashIdx !== -1 ? name.substring(slashIdx + 1) : name;
-            const result = yield storage.uploadFile({
-                buffer: file.buffer,
-                mimetype: file.mimetype,
-                originalname: fileName,
-                folder,
-                fileName,
-            });
-            return result.url;
+        const result = yield storage.uploadFile({
+            buffer: uploadedFile.buffer,
+            mimetype: uploadedFile.mimetype,
+            originalname: puzzleName.substring(puzzleName.indexOf("/") + 1),
+            folder: "puzzles",
+            fileName: puzzleName.substring(puzzleName.indexOf("/") + 1),
         });
-        // Always upload the original image
-        const originalUrl = yield uploadBuffer(uploadedFile, originalName);
-        // For card_matching campaigns, auto-generate 8 unique pairs (16 cards)
-        let puzzleUrl;
-        let cardImages = [];
-        if (campaignGameType === "card_matching") {
-            const buffers = yield (0, cardMatching_service_1.generateCardPairBuffers)(uploadedFile.buffer); // 16 buffers
-            // upload each card buffer
-            for (let i = 0; i < buffers.length; i++) {
-                const cardName = `puzzles/${now}-card-${i}-${uploadedFile.originalname}.png`;
-                const fakeFile = {
-                    buffer: buffers[i],
-                    mimetype: uploadedFile.mimetype,
-                };
-                // uploadBuffer will make public and return URL
-                const url = yield uploadBuffer(fakeFile, cardName);
-                cardImages.push(url);
-            }
-            // For compatibility keep puzzleImageUrl pointing to the first card
-            puzzleUrl =
-                cardImages[0] || (yield uploadBuffer(uploadedFile, puzzleName));
-        }
-        else if (campaignGameType === "spot_the_difference") {
-            const modifiedBuffer = yield (0, spotDifference_service_1.generateSpotDifferenceImage)(uploadedFile.buffer);
-            // upload modified buffer
-            const fakeFile = {
-                buffer: modifiedBuffer,
-                mimetype: uploadedFile.mimetype,
-            };
-            puzzleUrl = yield uploadBuffer(fakeFile, puzzleName);
-        }
-        else {
-            puzzleUrl = yield uploadBuffer(uploadedFile, puzzleName);
-        }
+        const puzzleUrl = result.url;
         // parse questions (expected as JSON string or array)
         let parsedQuestions = [];
         const rawQuestions = (_b = questions !== null && questions !== void 0 ? questions : (_a = req.body) === null || _a === void 0 ? void 0 : _a.questions) !== null && _b !== void 0 ? _b : (_c = req.body) === null || _c === void 0 ? void 0 : _c.question;
@@ -280,7 +236,6 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             campaignUrl: (campaignUrl === null || campaignUrl === void 0 ? void 0 : campaignUrl.trim()) || null,
             videoUrl: (videoUrl === null || videoUrl === void 0 ? void 0 : videoUrl.trim()) || null,
             puzzleImageUrl: puzzleUrl,
-            originalImageUrl: originalUrl,
             questions: parsedQuestions,
             timeLimit: parsedTimeLimit,
             status: "draft", // Always start as draft
@@ -298,12 +253,6 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         // For word_hunt games, add words array
         if (campaignGameType === "word_hunt" && parsedWords.length > 0) {
             campaignData.words = parsedWords;
-        }
-        // For card_matching campaigns, attach generated card images
-        if (campaignGameType === "card_matching" &&
-            cardImages &&
-            cardImages.length > 0) {
-            campaignData.cardImages = cardImages;
         }
         const campaign = yield puzzleCampaign_model_1.default.create(campaignData);
         // Update brand campaigns list (no restrictions on number of campaigns)

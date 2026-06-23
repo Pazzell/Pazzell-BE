@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 import {
   getActiveCampaigns,
   getAllCampaigns,
@@ -12,6 +13,7 @@ import {
 import { isAuthenticated } from "../utils/auth";
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Get all campaigns
 router.get("/campaigns", getAllCampaigns);
@@ -36,7 +38,7 @@ router.get("/campaigns/:campaignId", getCampaignById);
 router.post("/campaigns/:campaignId/submit", isAuthenticated, submitCampaign);
 
 // Update campaign
-router.patch("/campaigns/:campaignId", isAuthenticated, updateCampaign);
+router.patch("/campaigns/:campaignId", isAuthenticated, upload.single("image"), updateCampaign);
 
 // Delete campaign
 router.delete("/campaigns/:campaignId", isAuthenticated, deleteCampaign);

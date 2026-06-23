@@ -4,8 +4,6 @@ import ErrorHandler from "../utils/ErrorHandler";
 import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import BrandModel from "../models/brand.model";
 import { getStorageService } from "../services/storage/storageFactory";
-import { generateSpotDifferenceImage } from "../services/puzzle/spotDifference.service";
-import { generateCardPairBuffers } from "../services/puzzle/cardMatching.service";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
 import PackageModel from "../models/package.model";
@@ -164,62 +162,18 @@ export const createCampaign = CatchAsyncError(
         );
       }
 
-      // use a single timestamp so both stored names are related
       const now = Date.now();
-      const puzzleName = `puzzles/${now}-puzzle-${uploadedFile.originalname}`;
-      const originalName = `puzzles/${now}-original-${uploadedFile.originalname}`;
+      const puzzleName = `puzzles/${now}-${uploadedFile.originalname}`;
 
       const storage = getStorageService();
-      const uploadBuffer = async (file: any, name: string) => {
-        // name already includes folder prefix (e.g. "puzzles/..."), split it
-        const slashIdx = name.indexOf("/");
-        const folder = slashIdx !== -1 ? name.substring(0, slashIdx) : "puzzles";
-        const fileName = slashIdx !== -1 ? name.substring(slashIdx + 1) : name;
-        const result = await storage.uploadFile({
-          buffer: file.buffer,
-          mimetype: file.mimetype,
-          originalname: fileName,
-          folder,
-          fileName,
-        });
-        return result.url;
-      };
-
-      // Always upload the original image
-      const originalUrl = await uploadBuffer(uploadedFile, originalName);
-
-      // For card_matching campaigns, auto-generate 8 unique pairs (16 cards)
-      let puzzleUrl: string;
-      let cardImages: string[] = [];
-      if (campaignGameType === "card_matching") {
-        const buffers = await generateCardPairBuffers(uploadedFile.buffer); // 16 buffers
-        // upload each card buffer
-        for (let i = 0; i < buffers.length; i++) {
-          const cardName = `puzzles/${now}-card-${i}-${uploadedFile.originalname}.png`;
-          const fakeFile = {
-            buffer: buffers[i],
-            mimetype: uploadedFile.mimetype,
-          } as any;
-          // uploadBuffer will make public and return URL
-          const url = await uploadBuffer(fakeFile, cardName);
-          cardImages.push(url);
-        }
-        // For compatibility keep puzzleImageUrl pointing to the first card
-        puzzleUrl =
-          cardImages[0] || (await uploadBuffer(uploadedFile, puzzleName));
-      } else if (campaignGameType === "spot_the_difference") {
-        const modifiedBuffer = await generateSpotDifferenceImage(
-          uploadedFile.buffer
-        );
-        // upload modified buffer
-        const fakeFile = {
-          buffer: modifiedBuffer,
-          mimetype: uploadedFile.mimetype,
-        } as any;
-        puzzleUrl = await uploadBuffer(fakeFile, puzzleName);
-      } else {
-        puzzleUrl = await uploadBuffer(uploadedFile, puzzleName);
-      }
+      const result = await storage.uploadFile({
+        buffer: uploadedFile.buffer,
+        mimetype: uploadedFile.mimetype,
+        originalname: puzzleName.substring(puzzleName.indexOf("/") + 1),
+        folder: "puzzles",
+        fileName: puzzleName.substring(puzzleName.indexOf("/") + 1),
+      });
+      const puzzleUrl = result.url;
 
       // parse questions (expected as JSON string or array)
       let parsedQuestions: any[] = [];
@@ -353,7 +307,6 @@ export const createCampaign = CatchAsyncError(
         campaignUrl: campaignUrl?.trim() || null,
         videoUrl: videoUrl?.trim() || null,
         puzzleImageUrl: puzzleUrl,
-        originalImageUrl: originalUrl,
         questions: parsedQuestions,
         timeLimit: parsedTimeLimit,
         status: "draft", // Always start as draft
@@ -372,15 +325,6 @@ export const createCampaign = CatchAsyncError(
       // For word_hunt games, add words array
       if (campaignGameType === "word_hunt" && parsedWords.length > 0) {
         campaignData.words = parsedWords;
-      }
-
-      // For card_matching campaigns, attach generated card images
-      if (
-        campaignGameType === "card_matching" &&
-        cardImages &&
-        cardImages.length > 0
-      ) {
-        campaignData.cardImages = cardImages;
       }
 
       const campaign = await PuzzleCampaignModel.create(campaignData);

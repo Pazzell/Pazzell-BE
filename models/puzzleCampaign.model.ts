@@ -20,8 +20,6 @@ export interface IPuzzleCampaign extends Document {
   campaignUrl?: string; // specific URL for this campaign
   videoUrl?: string; // optional promotional video URL
   puzzleImageUrl: string;
-  originalImageUrl: string;
-  cardImages?: string[];
   questions: IQuestion[];
   words?: string[]; // for word_hunt games only
   timeLimit: number; // campaign duration in hours
@@ -61,8 +59,6 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
     campaignUrl: { type: String, required: false },
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
-    originalImageUrl: { type: String, required: true },
-    cardImages: { type: [String], default: [] },
     questions: [
       {
         question: { type: String, required: true },

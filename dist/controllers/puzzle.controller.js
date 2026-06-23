@@ -48,7 +48,6 @@ exports.getPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => _
             puzzle: {
                 puzzleId: campaign._id,
                 puzzleImageUrl: campaign.puzzleImageUrl,
-                originalImageUrl: campaign.originalImageUrl,
                 questions: campaign.questions.map((q) => ({
                     question: q.question,
                     choices: q.choices,
