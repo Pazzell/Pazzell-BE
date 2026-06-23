@@ -43,7 +43,6 @@ export const getPuzzle = CatchAsyncError(
         puzzle: {
           puzzleId: campaign._id,
           puzzleImageUrl: campaign.puzzleImageUrl,
-          originalImageUrl: campaign.originalImageUrl,
           questions: campaign.questions.map((q: any) => ({
             question: q.question,
             choices: q.choices,

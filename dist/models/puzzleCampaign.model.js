@@ -54,8 +54,6 @@ const puzzleCampaignSchema = new mongoose_1.default.Schema({
     campaignUrl: { type: String, required: false },
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
-    originalImageUrl: { type: String, required: true },
-    cardImages: { type: [String], default: [] },
     questions: [
         {
             question: { type: String, required: true },

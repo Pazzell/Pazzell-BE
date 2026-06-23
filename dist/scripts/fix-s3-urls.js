@@ -26,19 +26,11 @@ function run() {
         console.log("Connected.\n");
         const db = mongoose_1.default.connection.db;
         // --- puzzlecampaigns ---
-        const campResult = yield db.collection("puzzlecampaigns").updateMany({
-            $or: [
-                { puzzleImageUrl: { $regex: OLD } },
-                { originalImageUrl: { $regex: OLD } },
-            ],
-        }, [
+        const campResult = yield db.collection("puzzlecampaigns").updateMany({ puzzleImageUrl: { $regex: OLD } }, [
             {
                 $set: {
                     puzzleImageUrl: {
                         $replaceOne: { input: "$puzzleImageUrl", find: OLD, replacement: NEW },
-                    },
-                    originalImageUrl: {
-                        $replaceOne: { input: "$originalImageUrl", find: OLD, replacement: NEW },
                     },
                 },
             },

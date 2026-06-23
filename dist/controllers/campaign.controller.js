@@ -22,6 +22,7 @@ const package_model_1 = __importDefault(require("../models/package.model"));
 const brand_model_1 = __importDefault(require("../models/brand.model"));
 const referral_model_1 = __importDefault(require("../models/referral.model"));
 const referralEvent_model_1 = __importDefault(require("../models/referralEvent.model"));
+const storageFactory_1 = require("../services/storage/storageFactory");
 // Points awarded to the referrer once their referred user's referral is
 // marked successful (first solved puzzle)
 const REFERRAL_POINTS = 1;
@@ -54,7 +55,7 @@ exports.getActiveCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
             filter.gameType = gameType;
         }
         const campaigns = yield puzzleCampaign_model_1.default.find(filter)
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
             .lean();
         // Fetch brand names and package names for all campaigns
         const campaignsWithBrand = yield Promise.all(campaigns.map((campaign) => __awaiter(void 0, void 0, void 0, function* () {
@@ -77,7 +78,6 @@ exports.getActiveCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
-                originalImageUrl: campaign.originalImageUrl,
                 timeLimit: campaign.timeLimit,
                 questions: campaign.questions,
                 words: campaign.words,
@@ -129,7 +129,7 @@ exports.getAllCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
             filter.paymentStatus = paymentStatus;
         }
         const campaigns = yield puzzleCampaign_model_1.default.find(filter)
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
             .lean();
         // Fetch brand names and package names for all campaigns
         const campaignsWithBrand = yield Promise.all(campaigns.map((campaign) => __awaiter(void 0, void 0, void 0, function* () {
@@ -152,7 +152,6 @@ exports.getAllCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
-                originalImageUrl: campaign.originalImageUrl,
                 timeLimit: campaign.timeLimit,
                 questions: campaign.questions,
                 words: campaign.words,
@@ -182,7 +181,7 @@ exports.getCampaignsByBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, 
         yield updateExpiredCampaigns();
         const { brandId } = req.params;
         const campaigns = yield puzzleCampaign_model_1.default.find({ brandId })
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
             .lean();
         if (!campaigns || campaigns.length === 0) {
             return res.status(200).json({ success: true, campaigns: [] });
@@ -210,7 +209,6 @@ exports.getCampaignsByBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, 
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
-                originalImageUrl: campaign.originalImageUrl,
                 timeLimit: campaign.timeLimit,
                 questions: campaign.questions,
                 words: campaign.words,
@@ -266,7 +264,6 @@ exports.getCampaignById = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
-                originalImageUrl: campaign.originalImageUrl,
                 questions: campaign.questions.map((q) => ({
                     question: q.question,
                     choices: q.choices,
@@ -488,29 +485,44 @@ exports.updateCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         else if (user.role !== "admin") {
             return next(new ErrorHandler_1.default("Not authorized to edit this campaign", 403));
         }
-        // Allowed update fields
-        const updatable = [
-            "title",
-            "description",
-            "timeLimit",
-            "startDate",
-            "endDate",
-            "status",
-            "paymentStatus",
-            "totalBudget",
-            "dailyAllocation",
-            "budgetRemaining",
-            "budgetUsed",
-            "brandUrl",
-            "campaignUrl",
-            "videoUrl",
-            "questions",
-            "words",
-        ];
+        // Multipart fields arrive as strings — coerce before using
+        const body = req.body;
         const updates = {};
-        for (const key of updatable) {
-            if (req.body[key] !== undefined)
-                updates[key] = req.body[key];
+        const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl"];
+        for (const key of stringFields) {
+            if (body[key] !== undefined)
+                updates[key] = body[key];
+        }
+        if (body.timeLimit !== undefined)
+            updates.timeLimit = Number(body.timeLimit);
+        if (body.totalBudget !== undefined)
+            updates.totalBudget = Number(body.totalBudget);
+        if (body.dailyAllocation !== undefined)
+            updates.dailyAllocation = Number(body.dailyAllocation);
+        if (body.budgetRemaining !== undefined)
+            updates.budgetRemaining = Number(body.budgetRemaining);
+        if (body.budgetUsed !== undefined)
+            updates.budgetUsed = Number(body.budgetUsed);
+        if (body.questions !== undefined) {
+            updates.questions = typeof body.questions === "string" ? JSON.parse(body.questions) : body.questions;
+        }
+        if (body.words !== undefined) {
+            updates.words = typeof body.words === "string" ? JSON.parse(body.words) : body.words;
+        }
+        // Handle optional image replacement
+        const uploadedFile = req.file;
+        if (uploadedFile) {
+            const storage = (0, storageFactory_1.getStorageService)();
+            const now = Date.now();
+            const fileName = `${now}-${uploadedFile.originalname}`;
+            const result = yield storage.uploadFile({
+                buffer: uploadedFile.buffer,
+                mimetype: uploadedFile.mimetype,
+                originalname: fileName,
+                folder: "puzzles",
+                fileName,
+            });
+            updates.puzzleImageUrl = result.url;
         }
         const updated = yield puzzleCampaign_model_1.default.findByIdAndUpdate(campaignId, { $set: updates }, { new: true }).lean();
         if (!updated)

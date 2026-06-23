@@ -16,20 +16,12 @@ async function run() {
 
   // --- puzzlecampaigns ---
   const campResult = await db.collection("puzzlecampaigns").updateMany(
-    {
-      $or: [
-        { puzzleImageUrl: { $regex: OLD } },
-        { originalImageUrl: { $regex: OLD } },
-      ],
-    },
+    { puzzleImageUrl: { $regex: OLD } },
     [
       {
         $set: {
           puzzleImageUrl: {
             $replaceOne: { input: "$puzzleImageUrl", find: OLD, replacement: NEW },
-          },
-          originalImageUrl: {
-            $replaceOne: { input: "$originalImageUrl", find: OLD, replacement: NEW },
           },
         },
       },

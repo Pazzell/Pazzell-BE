@@ -8,6 +8,7 @@ import PackageModel from "../models/package.model";
 import BrandModel from "../models/brand.model";
 import ReferralModel from "../models/referral.model";
 import ReferralEventModel from "../models/referralEvent.model";
+import { getStorageService } from "../services/storage/storageFactory";
 
 // Points awarded to the referrer once their referred user's referral is
 // marked successful (first solved puzzle)
@@ -51,7 +52,7 @@ export const getActiveCampaigns = CatchAsyncError(
 
       const campaigns = await PuzzleCampaignModel.find(filter)
         .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
+          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
         )
         .lean();
 
@@ -77,7 +78,6 @@ export const getActiveCampaigns = CatchAsyncError(
             campaignUrl: campaign.campaignUrl,
             videoUrl: (campaign as any).videoUrl || null,
             puzzleImageUrl: campaign.puzzleImageUrl,
-            originalImageUrl: campaign.originalImageUrl,
             timeLimit: campaign.timeLimit,
             questions: campaign.questions,
             words: campaign.words,
@@ -146,7 +146,7 @@ export const getAllCampaigns = CatchAsyncError(
 
       const campaigns = await PuzzleCampaignModel.find(filter)
         .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
+          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
         )
         .lean();
 
@@ -172,7 +172,6 @@ export const getAllCampaigns = CatchAsyncError(
             campaignUrl: campaign.campaignUrl,
             videoUrl: (campaign as any).videoUrl || null,
             puzzleImageUrl: campaign.puzzleImageUrl,
-            originalImageUrl: campaign.originalImageUrl,
             timeLimit: campaign.timeLimit,
             questions: campaign.questions,
             words: campaign.words,
@@ -211,7 +210,7 @@ export const getCampaignsByBrand = CatchAsyncError(
 
       const campaigns = await PuzzleCampaignModel.find({ brandId })
         .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
+          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
         )
         .lean();
 
@@ -244,7 +243,6 @@ export const getCampaignsByBrand = CatchAsyncError(
             campaignUrl: campaign.campaignUrl,
             videoUrl: (campaign as any).videoUrl || null,
             puzzleImageUrl: campaign.puzzleImageUrl,
-            originalImageUrl: campaign.originalImageUrl,
             timeLimit: campaign.timeLimit,
             questions: campaign.questions,
             words: campaign.words,
@@ -313,7 +311,6 @@ export const getCampaignById = CatchAsyncError(
           campaignUrl: campaign.campaignUrl,
           videoUrl: (campaign as any).videoUrl || null,
           puzzleImageUrl: campaign.puzzleImageUrl,
-          originalImageUrl: campaign.originalImageUrl,
           questions: campaign.questions.map((q: any) => ({
             question: q.question,
             choices: q.choices,
@@ -605,29 +602,42 @@ export const updateCampaign = CatchAsyncError(
         );
       }
 
-      // Allowed update fields
-      const updatable = [
-        "title",
-        "description",
-        "timeLimit",
-        "startDate",
-        "endDate",
-        "status",
-        "paymentStatus",
-        "totalBudget",
-        "dailyAllocation",
-        "budgetRemaining",
-        "budgetUsed",
-        "brandUrl",
-        "campaignUrl",
-        "videoUrl",
-        "questions",
-        "words",
-      ];
-
+      // Multipart fields arrive as strings — coerce before using
+      const body = req.body as any;
       const updates: any = {};
-      for (const key of updatable) {
-        if (req.body[key] !== undefined) updates[key] = req.body[key];
+
+      const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl"];
+      for (const key of stringFields) {
+        if (body[key] !== undefined) updates[key] = body[key];
+      }
+
+      if (body.timeLimit !== undefined) updates.timeLimit = Number(body.timeLimit);
+      if (body.totalBudget !== undefined) updates.totalBudget = Number(body.totalBudget);
+      if (body.dailyAllocation !== undefined) updates.dailyAllocation = Number(body.dailyAllocation);
+      if (body.budgetRemaining !== undefined) updates.budgetRemaining = Number(body.budgetRemaining);
+      if (body.budgetUsed !== undefined) updates.budgetUsed = Number(body.budgetUsed);
+
+      if (body.questions !== undefined) {
+        updates.questions = typeof body.questions === "string" ? JSON.parse(body.questions) : body.questions;
+      }
+      if (body.words !== undefined) {
+        updates.words = typeof body.words === "string" ? JSON.parse(body.words) : body.words;
+      }
+
+      // Handle optional image replacement
+      const uploadedFile = (req as any).file;
+      if (uploadedFile) {
+        const storage = getStorageService();
+        const now = Date.now();
+        const fileName = `${now}-${uploadedFile.originalname}`;
+        const result = await storage.uploadFile({
+          buffer: uploadedFile.buffer,
+          mimetype: uploadedFile.mimetype,
+          originalname: fileName,
+          folder: "puzzles",
+          fileName,
+        });
+        updates.puzzleImageUrl = result.url;
       }
 
       const updated = await PuzzleCampaignModel.findByIdAndUpdate(
