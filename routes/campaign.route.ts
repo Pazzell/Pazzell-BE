@@ -9,6 +9,7 @@ import {
   submitCampaign,
   updateCampaign,
   deleteCampaign,
+  generateCampaignQuestions,
 } from "../controllers/campaign.controller";
 import { isAuthenticated } from "../utils/auth";
 
@@ -23,6 +24,13 @@ router.get("/campaigns/active", getActiveCampaigns);
 
 // Get campaigns by brand ID
 router.get("/campaigns/brand/:brandId", getCampaignsByBrand);
+
+// AI: generate 5 quiz questions from a brand passage (brand only)
+router.post(
+  "/campaigns/generate-questions",
+  isAuthenticated,
+  generateCampaignQuestions
+);
 
 // Check if current user has completed a campaign
 router.get(

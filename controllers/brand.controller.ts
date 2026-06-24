@@ -51,6 +51,7 @@ export const createCampaign = CatchAsyncError(
         videoUrl,
         timeLimit,
         weeksToRun,
+        passage,
       } = req.body;
 
       // Validate packageId
@@ -294,6 +295,16 @@ export const createCampaign = CatchAsyncError(
         currentDate.getTime() + parsedTimeLimit * 60 * 60 * 1000
       );
 
+      // Validate passage if provided
+      if (passage !== undefined && passage !== null && passage !== "") {
+        const passageTrimmed = String(passage).trim();
+        if (passageTrimmed.length > 1000) {
+          return next(
+            new ErrorHandler("passage must be 1000 characters or less", 400)
+          );
+        }
+      }
+
       // Prepare campaign data
       // All new campaigns start as draft until payment is verified
       const campaignData: any = {
@@ -307,6 +318,7 @@ export const createCampaign = CatchAsyncError(
         campaignUrl: campaignUrl?.trim() || null,
         videoUrl: videoUrl?.trim() || null,
         puzzleImageUrl: puzzleUrl,
+        passage: passage ? String(passage).trim() : undefined,
         questions: parsedQuestions,
         timeLimit: parsedTimeLimit,
         status: "draft", // Always start as draft

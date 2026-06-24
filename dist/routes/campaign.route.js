@@ -15,6 +15,8 @@ router.get("/campaigns", campaign_controller_1.getAllCampaigns);
 router.get("/campaigns/active", campaign_controller_1.getActiveCampaigns);
 // Get campaigns by brand ID
 router.get("/campaigns/brand/:brandId", campaign_controller_1.getCampaignsByBrand);
+// AI: generate 5 quiz questions from a brand passage (brand only)
+router.post("/campaigns/generate-questions", auth_1.isAuthenticated, campaign_controller_1.generateCampaignQuestions);
 // Check if current user has completed a campaign
 router.get("/campaigns/:campaignId/completion", auth_1.isAuthenticated, campaign_controller_1.checkCampaignCompletion);
 // Get single campaign by campaign ID

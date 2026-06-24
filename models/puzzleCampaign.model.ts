@@ -20,6 +20,7 @@ export interface IPuzzleCampaign extends Document {
   campaignUrl?: string; // specific URL for this campaign
   videoUrl?: string; // optional promotional video URL
   puzzleImageUrl: string;
+  passage?: string; // short brand passage used to generate quiz questions (max 500 chars)
   questions: IQuestion[];
   words?: string[]; // for word_hunt games only
   timeLimit: number; // campaign duration in hours
@@ -59,6 +60,7 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
     campaignUrl: { type: String, required: false },
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
+    passage: { type: String, required: false, maxlength: 1000 },
     questions: [
       {
         question: { type: String, required: true },
