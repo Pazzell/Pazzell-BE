@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteCampaign = exports.updateCampaign = exports.submitCampaign = exports.checkCampaignCompletion = exports.getCampaignById = exports.getCampaignsByBrand = exports.getAllCampaigns = exports.getActiveCampaigns = void 0;
+exports.deleteCampaign = exports.updateCampaign = exports.generateCampaignQuestions = exports.submitCampaign = exports.checkCampaignCompletion = exports.getCampaignById = exports.getCampaignsByBrand = exports.getAllCampaigns = exports.getActiveCampaigns = void 0;
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
@@ -23,6 +23,7 @@ const brand_model_1 = __importDefault(require("../models/brand.model"));
 const referral_model_1 = __importDefault(require("../models/referral.model"));
 const referralEvent_model_1 = __importDefault(require("../models/referralEvent.model"));
 const storageFactory_1 = require("../services/storage/storageFactory");
+const axios_1 = __importDefault(require("axios"));
 // Points awarded to the referrer once their referred user's referral is
 // marked successful (first solved puzzle)
 const REFERRAL_POINTS = 1;
@@ -55,7 +56,7 @@ exports.getActiveCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
             filter.gameType = gameType;
         }
         const campaigns = yield puzzleCampaign_model_1.default.find(filter)
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
             .lean();
         // Fetch brand names and package names for all campaigns
         const campaignsWithBrand = yield Promise.all(campaigns.map((campaign) => __awaiter(void 0, void 0, void 0, function* () {
@@ -78,6 +79,7 @@ exports.getActiveCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
+                passage: campaign.passage || null,
                 timeLimit: campaign.timeLimit,
                 questions: campaign.questions,
                 words: campaign.words,
@@ -129,7 +131,7 @@ exports.getAllCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
             filter.paymentStatus = paymentStatus;
         }
         const campaigns = yield puzzleCampaign_model_1.default.find(filter)
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
             .lean();
         // Fetch brand names and package names for all campaigns
         const campaignsWithBrand = yield Promise.all(campaigns.map((campaign) => __awaiter(void 0, void 0, void 0, function* () {
@@ -152,6 +154,7 @@ exports.getAllCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
+                passage: campaign.passage || null,
                 timeLimit: campaign.timeLimit,
                 questions: campaign.questions,
                 words: campaign.words,
@@ -181,7 +184,7 @@ exports.getCampaignsByBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, 
         yield updateExpiredCampaigns();
         const { brandId } = req.params;
         const campaigns = yield puzzleCampaign_model_1.default.find({ brandId })
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
             .lean();
         if (!campaigns || campaigns.length === 0) {
             return res.status(200).json({ success: true, campaigns: [] });
@@ -209,6 +212,7 @@ exports.getCampaignsByBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, 
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
+                passage: campaign.passage || null,
                 timeLimit: campaign.timeLimit,
                 questions: campaign.questions,
                 words: campaign.words,
@@ -264,6 +268,7 @@ exports.getCampaignById = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 campaignUrl: campaign.campaignUrl,
                 videoUrl: campaign.videoUrl || null,
                 puzzleImageUrl: campaign.puzzleImageUrl,
+                passage: campaign.passage || null,
                 questions: campaign.questions.map((q) => ({
                     question: q.question,
                     choices: q.choices,
@@ -466,6 +471,127 @@ exports.submitCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         return next(new ErrorHandler_1.default(`Failed to submit campaign result: ${error.message}`, 500));
     }
 }));
+// ---------------------------------------------------------------------------
+// AI provider helper — controlled by .env
+//
+//  To use OpenAI (ChatGPT):
+//    AI_PROVIDER=openai
+//    OPENAI_API_KEY=sk-...
+//
+//  To use Anthropic (Claude):
+//    AI_PROVIDER=claude
+//    ANTHROPIC_API_KEY=sk-ant-...
+//
+//  When AI_PROVIDER is not set it defaults to "openai".
+// ---------------------------------------------------------------------------
+const AI_PROMPT = (passage) => `Generate exactly 5 multiple-choice quiz questions based on the following short passage about a brand:\n\n"${passage}"\n\nRules:\n- Each question must have exactly 4 answer choices\n- Only one choice is correct per question\n- All questions must be answerable directly from the passage\n- Keep questions clear and concise\n- correctIndex must be the 0-based index (0, 1, 2, or 3) of the correct choice\n\nReturn ONLY a valid JSON array with no extra text, in this exact structure:\n[\n  {\n    "question": "Question text?",\n    "choices": ["Choice A", "Choice B", "Choice C", "Choice D"],\n    "correctIndex": 0\n  }\n]`;
+function callOpenAI(prompt) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c;
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey)
+            throw new Error("OPENAI_API_KEY is not set");
+        const response = yield axios_1.default.post("https://api.openai.com/v1/chat/completions", {
+            model: "gpt-4o-mini",
+            max_tokens: 1024,
+            messages: [{ role: "user", content: prompt }],
+        }, {
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+        });
+        const data = response.data;
+        return ((_c = (_b = (_a = data === null || data === void 0 ? void 0 : data.choices) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.message) === null || _c === void 0 ? void 0 : _c.content) || "";
+    });
+}
+function callClaude(prompt) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (!apiKey)
+            throw new Error("ANTHROPIC_API_KEY is not set");
+        const response = yield axios_1.default.post("https://api.anthropic.com/v1/messages", {
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1024,
+            messages: [{ role: "user", content: prompt }],
+        }, {
+            headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+        });
+        const data = response.data;
+        return ((_b = (_a = data === null || data === void 0 ? void 0 : data.content) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.text) || "";
+    });
+}
+// Generate 5 quiz questions from a brand passage using the configured AI provider
+exports.generateCampaignQuestions = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    try {
+        const user = req.user;
+        if (!user || user.role !== "brand") {
+            return next(new ErrorHandler_1.default("Only brands can generate quiz questions", 403));
+        }
+        const { passage } = req.body;
+        if (!passage || typeof passage !== "string" || passage.trim() === "") {
+            return next(new ErrorHandler_1.default("passage is required", 400));
+        }
+        const trimmedPassage = passage.trim();
+        if (trimmedPassage.length > 1000) {
+            return next(new ErrorHandler_1.default("passage must be 1000 characters or less", 400));
+        }
+        // Switch between AI providers based on AI_PROVIDER env var (defaults to openai)
+        const provider = (process.env.AI_PROVIDER || "openai").toLowerCase();
+        let rawText;
+        if (provider === "claude") {
+            rawText = yield callClaude(AI_PROMPT(trimmedPassage));
+        }
+        else {
+            rawText = yield callOpenAI(AI_PROMPT(trimmedPassage));
+        }
+        // Extract the JSON array from the response text
+        const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+            return next(new ErrorHandler_1.default("AI returned an unexpected response. Please try again.", 500));
+        }
+        let questions;
+        try {
+            questions = JSON.parse(jsonMatch[0]);
+        }
+        catch (_c) {
+            return next(new ErrorHandler_1.default("AI returned malformed JSON. Please try again.", 500));
+        }
+        if (!Array.isArray(questions) || questions.length === 0) {
+            return next(new ErrorHandler_1.default("AI did not return any questions. Please try again.", 500));
+        }
+        // Validate and normalise each question
+        const validated = questions.slice(0, 5).map((q, idx) => {
+            if (typeof q.question !== "string" ||
+                !Array.isArray(q.choices) ||
+                q.choices.length < 2 ||
+                typeof q.correctIndex !== "number") {
+                throw new Error(`Question ${idx + 1} has an invalid format`);
+            }
+            return {
+                question: q.question,
+                choices: q.choices.slice(0, 4).map(String),
+                correctIndex: Math.max(0, Math.min(q.correctIndex, q.choices.length - 1)),
+            };
+        });
+        res.status(200).json({ success: true, questions: validated, provider });
+    }
+    catch (error) {
+        if (((_a = error.response) === null || _a === void 0 ? void 0 : _a.status) === 401) {
+            return next(new ErrorHandler_1.default("AI service authentication failed", 500));
+        }
+        if (((_b = error.response) === null || _b === void 0 ? void 0 : _b.status) === 429) {
+            return next(new ErrorHandler_1.default("AI service rate limit reached. Please try again in a moment.", 429));
+        }
+        return next(new ErrorHandler_1.default(`Failed to generate questions: ${error.message}`, 500));
+    }
+}));
 // Update a campaign (brands can edit their own campaigns)
 exports.updateCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -488,7 +614,7 @@ exports.updateCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         // Multipart fields arrive as strings — coerce before using
         const body = req.body;
         const updates = {};
-        const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl"];
+        const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl", "passage"];
         for (const key of stringFields) {
             if (body[key] !== undefined)
                 updates[key] = body[key];

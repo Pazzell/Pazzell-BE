@@ -9,6 +9,7 @@ import BrandModel from "../models/brand.model";
 import ReferralModel from "../models/referral.model";
 import ReferralEventModel from "../models/referralEvent.model";
 import { getStorageService } from "../services/storage/storageFactory";
+import axios from "axios";
 
 // Points awarded to the referrer once their referred user's referral is
 // marked successful (first solved puzzle)
@@ -52,7 +53,7 @@ export const getActiveCampaigns = CatchAsyncError(
 
       const campaigns = await PuzzleCampaignModel.find(filter)
         .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
+          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
         )
         .lean();
 
@@ -78,6 +79,7 @@ export const getActiveCampaigns = CatchAsyncError(
             campaignUrl: campaign.campaignUrl,
             videoUrl: (campaign as any).videoUrl || null,
             puzzleImageUrl: campaign.puzzleImageUrl,
+            passage: (campaign as any).passage || null,
             timeLimit: campaign.timeLimit,
             questions: campaign.questions,
             words: campaign.words,
@@ -146,7 +148,7 @@ export const getAllCampaigns = CatchAsyncError(
 
       const campaigns = await PuzzleCampaignModel.find(filter)
         .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
+          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
         )
         .lean();
 
@@ -172,6 +174,7 @@ export const getAllCampaigns = CatchAsyncError(
             campaignUrl: campaign.campaignUrl,
             videoUrl: (campaign as any).videoUrl || null,
             puzzleImageUrl: campaign.puzzleImageUrl,
+            passage: (campaign as any).passage || null,
             timeLimit: campaign.timeLimit,
             questions: campaign.questions,
             words: campaign.words,
@@ -210,7 +213,7 @@ export const getCampaignsByBrand = CatchAsyncError(
 
       const campaigns = await PuzzleCampaignModel.find({ brandId })
         .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
+          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
         )
         .lean();
 
@@ -243,6 +246,7 @@ export const getCampaignsByBrand = CatchAsyncError(
             campaignUrl: campaign.campaignUrl,
             videoUrl: (campaign as any).videoUrl || null,
             puzzleImageUrl: campaign.puzzleImageUrl,
+            passage: (campaign as any).passage || null,
             timeLimit: campaign.timeLimit,
             questions: campaign.questions,
             words: campaign.words,
@@ -311,6 +315,7 @@ export const getCampaignById = CatchAsyncError(
           campaignUrl: campaign.campaignUrl,
           videoUrl: (campaign as any).videoUrl || null,
           puzzleImageUrl: campaign.puzzleImageUrl,
+          passage: (campaign as any).passage || null,
           questions: campaign.questions.map((q: any) => ({
             question: q.question,
             choices: q.choices,
@@ -577,6 +582,167 @@ export const submitCampaign = CatchAsyncError(
   }
 );
 
+// ---------------------------------------------------------------------------
+// AI provider helper — controlled by .env
+//
+//  To use OpenAI (ChatGPT):
+//    AI_PROVIDER=openai
+//    OPENAI_API_KEY=sk-...
+//
+//  To use Anthropic (Claude):
+//    AI_PROVIDER=claude
+//    ANTHROPIC_API_KEY=sk-ant-...
+//
+//  When AI_PROVIDER is not set it defaults to "openai".
+// ---------------------------------------------------------------------------
+
+const AI_PROMPT = (passage: string) =>
+  `Generate exactly 5 multiple-choice quiz questions based on the following short passage about a brand:\n\n"${passage}"\n\nRules:\n- Each question must have exactly 4 answer choices\n- Only one choice is correct per question\n- All questions must be answerable directly from the passage\n- Keep questions clear and concise\n- correctIndex must be the 0-based index (0, 1, 2, or 3) of the correct choice\n\nReturn ONLY a valid JSON array with no extra text, in this exact structure:\n[\n  {\n    "question": "Question text?",\n    "choices": ["Choice A", "Choice B", "Choice C", "Choice D"],\n    "correctIndex": 0\n  }\n]`;
+
+async function callOpenAI(prompt: string): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+
+  const response = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4o-mini",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: prompt }],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  const data = response.data as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return data?.choices?.[0]?.message?.content || "";
+}
+
+async function callClaude(prompt: string): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
+
+  const response = await axios.post(
+    "https://api.anthropic.com/v1/messages",
+    {
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: prompt }],
+    },
+    {
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  const data = response.data as { content?: Array<{ text?: string }> };
+  return data?.content?.[0]?.text || "";
+}
+
+// Generate 5 quiz questions from a brand passage using the configured AI provider
+export const generateCampaignQuestions = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user as any;
+      if (!user || user.role !== "brand") {
+        return next(
+          new ErrorHandler("Only brands can generate quiz questions", 403)
+        );
+      }
+
+      const { passage } = req.body;
+      if (!passage || typeof passage !== "string" || passage.trim() === "") {
+        return next(new ErrorHandler("passage is required", 400));
+      }
+      const trimmedPassage = passage.trim();
+      if (trimmedPassage.length > 1000) {
+        return next(
+          new ErrorHandler("passage must be 1000 characters or less", 400)
+        );
+      }
+
+      // Switch between AI providers based on AI_PROVIDER env var (defaults to openai)
+      const provider = (process.env.AI_PROVIDER || "openai").toLowerCase();
+      let rawText: string;
+
+      if (provider === "claude") {
+        rawText = await callClaude(AI_PROMPT(trimmedPassage));
+      } else {
+        rawText = await callOpenAI(AI_PROMPT(trimmedPassage));
+      }
+
+      // Extract the JSON array from the response text
+      const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        return next(
+          new ErrorHandler(
+            "AI returned an unexpected response. Please try again.",
+            500
+          )
+        );
+      }
+
+      let questions: any[];
+      try {
+        questions = JSON.parse(jsonMatch[0]);
+      } catch {
+        return next(
+          new ErrorHandler("AI returned malformed JSON. Please try again.", 500)
+        );
+      }
+
+      if (!Array.isArray(questions) || questions.length === 0) {
+        return next(
+          new ErrorHandler("AI did not return any questions. Please try again.", 500)
+        );
+      }
+
+      // Validate and normalise each question
+      const validated = questions.slice(0, 5).map((q: any, idx: number) => {
+        if (
+          typeof q.question !== "string" ||
+          !Array.isArray(q.choices) ||
+          q.choices.length < 2 ||
+          typeof q.correctIndex !== "number"
+        ) {
+          throw new Error(`Question ${idx + 1} has an invalid format`);
+        }
+        return {
+          question: q.question,
+          choices: q.choices.slice(0, 4).map(String),
+          correctIndex: Math.max(0, Math.min(q.correctIndex, q.choices.length - 1)),
+        };
+      });
+
+      res.status(200).json({ success: true, questions: validated, provider });
+    } catch (error: any) {
+      if (error.response?.status === 401) {
+        return next(new ErrorHandler("AI service authentication failed", 500));
+      }
+      if (error.response?.status === 429) {
+        return next(
+          new ErrorHandler(
+            "AI service rate limit reached. Please try again in a moment.",
+            429
+          )
+        );
+      }
+      return next(
+        new ErrorHandler(`Failed to generate questions: ${error.message}`, 500)
+      );
+    }
+  }
+);
+
 // Update a campaign (brands can edit their own campaigns)
 export const updateCampaign = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -606,7 +772,7 @@ export const updateCampaign = CatchAsyncError(
       const body = req.body as any;
       const updates: any = {};
 
-      const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl"];
+      const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl", "passage"];
       for (const key of stringFields) {
         if (body[key] !== undefined) updates[key] = body[key];
       }

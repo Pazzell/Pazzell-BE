@@ -50,7 +50,7 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         const brandUser = req.user;
         if (brandUser.role !== "brand")
             return next(new ErrorHandler_1.default("Only brands can create campaigns", 403));
-        const { questions, title, description, gameType, words, packageId, brandUrl, campaignUrl, videoUrl, timeLimit, weeksToRun, } = req.body;
+        const { questions, title, description, gameType, words, packageId, brandUrl, campaignUrl, videoUrl, timeLimit, weeksToRun, passage, } = req.body;
         // Validate packageId
         if (!packageId || typeof packageId !== "string") {
             return next(new ErrorHandler_1.default("packageId is required and must be a valid string", 400));
@@ -223,6 +223,13 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         // Set placeholder dates - actual dates will be set when payment is made
         const currentDate = new Date();
         const placeholderEndDate = new Date(currentDate.getTime() + parsedTimeLimit * 60 * 60 * 1000);
+        // Validate passage if provided
+        if (passage !== undefined && passage !== null && passage !== "") {
+            const passageTrimmed = String(passage).trim();
+            if (passageTrimmed.length > 1000) {
+                return next(new ErrorHandler_1.default("passage must be 1000 characters or less", 400));
+            }
+        }
         // Prepare campaign data
         // All new campaigns start as draft until payment is verified
         const campaignData = {
@@ -236,6 +243,7 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             campaignUrl: (campaignUrl === null || campaignUrl === void 0 ? void 0 : campaignUrl.trim()) || null,
             videoUrl: (videoUrl === null || videoUrl === void 0 ? void 0 : videoUrl.trim()) || null,
             puzzleImageUrl: puzzleUrl,
+            passage: passage ? String(passage).trim() : undefined,
             questions: parsedQuestions,
             timeLimit: parsedTimeLimit,
             status: "draft", // Always start as draft
