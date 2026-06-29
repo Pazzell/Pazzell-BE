@@ -593,6 +593,10 @@ export const submitCampaign = CatchAsyncError(
 //    AI_PROVIDER=claude
 //    ANTHROPIC_API_KEY=sk-ant-...
 //
+//  To use Google Gemini:
+//    AI_PROVIDER=gemini
+//    GEMINI_API_KEY=AIza...
+//
 //  When AI_PROVIDER is not set it defaults to "openai".
 // ---------------------------------------------------------------------------
 
@@ -648,6 +652,25 @@ async function callClaude(prompt: string): Promise<string> {
   return data?.content?.[0]?.text || "";
 }
 
+async function callGemini(prompt: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+
+  const response = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 1024 },
+    },
+    { headers: { "Content-Type": "application/json" } }
+  );
+
+  const data = response.data as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+}
+
 // Generate 5 quiz questions from a brand passage using the configured AI provider
 export const generateCampaignQuestions = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -676,6 +699,8 @@ export const generateCampaignQuestions = CatchAsyncError(
 
       if (provider === "claude") {
         rawText = await callClaude(AI_PROMPT(trimmedPassage));
+      } else if (provider === "gemini") {
+        rawText = await callGemini(AI_PROMPT(trimmedPassage));
       } else {
         rawText = await callOpenAI(AI_PROMPT(trimmedPassage));
       }
