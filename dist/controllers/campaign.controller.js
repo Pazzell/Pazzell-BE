@@ -482,6 +482,10 @@ exports.submitCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
 //    AI_PROVIDER=claude
 //    ANTHROPIC_API_KEY=sk-ant-...
 //
+//  To use Google Gemini:
+//    AI_PROVIDER=gemini
+//    GEMINI_API_KEY=AIza...
+//
 //  When AI_PROVIDER is not set it defaults to "openai".
 // ---------------------------------------------------------------------------
 const AI_PROMPT = (passage) => `Generate exactly 5 multiple-choice quiz questions based on the following short passage about a brand:\n\n"${passage}"\n\nRules:\n- Each question must have exactly 4 answer choices\n- Only one choice is correct per question\n- All questions must be answerable directly from the passage\n- Keep questions clear and concise\n- correctIndex must be the 0-based index (0, 1, 2, or 3) of the correct choice\n\nReturn ONLY a valid JSON array with no extra text, in this exact structure:\n[\n  {\n    "question": "Question text?",\n    "choices": ["Choice A", "Choice B", "Choice C", "Choice D"],\n    "correctIndex": 0\n  }\n]`;
@@ -526,6 +530,20 @@ function callClaude(prompt) {
         return ((_b = (_a = data === null || data === void 0 ? void 0 : data.content) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.text) || "";
     });
 }
+function callGemini(prompt) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e;
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey)
+            throw new Error("GEMINI_API_KEY is not set");
+        const response = yield axios_1.default.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: 1024 },
+        }, { headers: { "Content-Type": "application/json" } });
+        const data = response.data;
+        return ((_e = (_d = (_c = (_b = (_a = data === null || data === void 0 ? void 0 : data.candidates) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.content) === null || _c === void 0 ? void 0 : _c.parts) === null || _d === void 0 ? void 0 : _d[0]) === null || _e === void 0 ? void 0 : _e.text) || "";
+    });
+}
 // Generate 5 quiz questions from a brand passage using the configured AI provider
 exports.generateCampaignQuestions = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
@@ -547,6 +565,9 @@ exports.generateCampaignQuestions = (0, catchAsyncError_1.CatchAsyncError)((req,
         let rawText;
         if (provider === "claude") {
             rawText = yield callClaude(AI_PROMPT(trimmedPassage));
+        }
+        else if (provider === "gemini") {
+            rawText = yield callGemini(AI_PROMPT(trimmedPassage));
         }
         else {
             rawText = yield callOpenAI(AI_PROMPT(trimmedPassage));
