@@ -411,11 +411,9 @@ export const getGamerProfile = CatchAsyncError(
           : 0;
       weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
 
-      // Current month's referral standing (resets every month — see
-      // controllers/referral.controller.ts getReferralSummary for the
-      // same pattern). Referral points are never stored on the lifetime
-      // analytics fields, only on each Referral doc's pointsAwarded,
-      // scoped by successfulAt.
+      const monthKey = `${now.getFullYear()}-${String(
+        now.getMonth() + 1
+      ).padStart(2, "0")}`;
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       const monthEnd = new Date(
         now.getFullYear(),
@@ -426,10 +424,18 @@ export const getGamerProfile = CatchAsyncError(
         59,
         999
       );
-      const monthKey = `${now.getFullYear()}-${String(
-        now.getMonth() + 1
-      ).padStart(2, "0")}`;
 
+      // All referrals this user has ever made (pending + successful)
+      const allMyReferrals = await ReferralModel.find({
+        referrerId: String(userId),
+      }).lean();
+      const successfulReferrals = allMyReferrals.filter((r: any) => r.successful);
+      const totalReferralPoints = successfulReferrals.reduce(
+        (sum: number, r: any) => sum + (r.pointsAwarded || 0),
+        0
+      );
+
+      // Monthly referral leaderboard position (competitive ranking)
       const referralAgg = await ReferralModel.aggregate([
         {
           $match: {
@@ -450,8 +456,6 @@ export const getGamerProfile = CatchAsyncError(
       const referralIndex = referralAgg.findIndex(
         (entry: any) => String(entry._id) === String(userId)
       );
-      const myReferralStats =
-        referralIndex !== -1 ? referralAgg[referralIndex] : null;
 
       res.status(200).json({
         success: true,
@@ -489,8 +493,10 @@ export const getGamerProfile = CatchAsyncError(
             },
             referral: {
               monthKey,
-              successfulCount: myReferralStats?.successfulCount || 0,
-              pointsEarned: myReferralStats?.pointsEarned || 0,
+              totalReferrals: allMyReferrals.length,
+              successfulReferrals: successfulReferrals.length,
+              pendingReferrals: allMyReferrals.length - successfulReferrals.length,
+              totalPointsEarned: totalReferralPoints,
               leaderboardPosition: referralIndex !== -1 ? referralIndex + 1 : null,
             },
           },
