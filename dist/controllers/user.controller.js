@@ -299,14 +299,16 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 ? weeklyStats.successfulAttempts / weeklyStats.attempts
                 : 0;
         weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
-        // Current month's referral standing (resets every month — see
-        // controllers/referral.controller.ts getReferralSummary for the
-        // same pattern). Referral points are never stored on the lifetime
-        // analytics fields, only on each Referral doc's pointsAwarded,
-        // scoped by successfulAt.
+        const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
         const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-        const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        // All referrals this user has ever made (pending + successful)
+        const allMyReferrals = yield referral_model_1.default.find({
+            referrerId: String(userId),
+        }).lean();
+        const successfulReferrals = allMyReferrals.filter((r) => r.successful);
+        const totalReferralPoints = successfulReferrals.reduce((sum, r) => sum + (r.pointsAwarded || 0), 0);
+        // Monthly referral leaderboard position (competitive ranking)
         const referralAgg = yield referral_model_1.default.aggregate([
             {
                 $match: {
@@ -324,7 +326,6 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
             { $sort: { pointsEarned: -1, successfulCount: -1 } },
         ]);
         const referralIndex = referralAgg.findIndex((entry) => String(entry._id) === String(userId));
-        const myReferralStats = referralIndex !== -1 ? referralAgg[referralIndex] : null;
         res.status(200).json({
             success: true,
             profile: {
@@ -361,8 +362,10 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                     },
                     referral: {
                         monthKey,
-                        successfulCount: (myReferralStats === null || myReferralStats === void 0 ? void 0 : myReferralStats.successfulCount) || 0,
-                        pointsEarned: (myReferralStats === null || myReferralStats === void 0 ? void 0 : myReferralStats.pointsEarned) || 0,
+                        totalReferrals: allMyReferrals.length,
+                        successfulReferrals: successfulReferrals.length,
+                        pendingReferrals: allMyReferrals.length - successfulReferrals.length,
+                        totalPointsEarned: totalReferralPoints,
                         leaderboardPosition: referralIndex !== -1 ? referralIndex + 1 : null,
                     },
                 },

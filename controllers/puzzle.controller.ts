@@ -149,7 +149,9 @@ export const submitPuzzle = CatchAsyncError(
         }
         await userDoc.save();
 
-        // If this is the user's first successful solve, mark any referral as successful
+        // If this is the user's first successful solve, mark any referral as
+        // successful and credit points to the referrer.
+        const REFERRAL_POINTS = 10;
         try {
           if (firstTime && userId) {
             const referral = await ReferralModel.findOne({
@@ -159,7 +161,13 @@ export const submitPuzzle = CatchAsyncError(
             if (referral) {
               referral.successful = true;
               referral.successfulAt = new Date();
+              referral.pointsAwarded = REFERRAL_POINTS;
               await referral.save();
+
+              // Credit points to the referrer
+              await UserModel.findByIdAndUpdate(referral.referrerId, {
+                $inc: { "analytics.lifetime.totalPoints": REFERRAL_POINTS },
+              });
 
               // record referral event
               await ReferralEventModel.create({

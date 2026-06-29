@@ -133,7 +133,9 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 userDoc.puzzlesSolved.push(id);
             }
             yield userDoc.save();
-            // If this is the user's first successful solve, mark any referral as successful
+            // If this is the user's first successful solve, mark any referral as
+            // successful and credit points to the referrer.
+            const REFERRAL_POINTS = 10;
             try {
                 if (firstTime && userId) {
                     const referral = yield referral_model_1.default.findOne({
@@ -143,7 +145,12 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                     if (referral) {
                         referral.successful = true;
                         referral.successfulAt = new Date();
+                        referral.pointsAwarded = REFERRAL_POINTS;
                         yield referral.save();
+                        // Credit points to the referrer
+                        yield user_model_1.default.findByIdAndUpdate(referral.referrerId, {
+                            $inc: { "analytics.lifetime.totalPoints": REFERRAL_POINTS },
+                        });
                         // record referral event
                         yield referralEvent_model_1.default.create({
                             referrerId: referral.referrerId,
