@@ -29,6 +29,13 @@ const user_controller_1 = require("./user.controller");
 const userHelpers_1 = require("../utils/userHelpers");
 const referral_model_1 = __importDefault(require("../models/referral.model"));
 const referralEvent_model_1 = __importDefault(require("../models/referralEvent.model"));
+const mongoose_1 = __importDefault(require("mongoose"));
+function findReferrer(refLookup) {
+    const conditions = [{ username: refLookup }, { email: refLookup }];
+    if (mongoose_1.default.isValidObjectId(refLookup))
+        conditions.unshift({ _id: refLookup });
+    return user_model_1.default.findOne({ $or: conditions });
+}
 // Create password reset token
 const createResetToken = (userId) => {
     const token = jsonwebtoken_1.default.sign({ userId }, process.env.ACTIVATION_SECRET, { expiresIn: "15m" });
@@ -85,13 +92,7 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                 const { referrerId, referrerUsername, referralCode } = req.body;
                 const refLookup = referrerId || referrerUsername || referralCode;
                 if (refLookup) {
-                    const refUser = yield user_model_1.default.findOne({
-                        $or: [
-                            { _id: refLookup },
-                            { username: refLookup },
-                            { email: refLookup },
-                        ],
-                    });
+                    const refUser = yield findReferrer(refLookup);
                     if (refUser && String(refUser._id) !== String(user._id)) {
                         try {
                             yield referral_model_1.default.create({
@@ -179,13 +180,7 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
                 const { referrerId, referrerUsername, referralCode } = req.body;
                 const refLookup = referrerId || referrerUsername || referralCode;
                 if (refLookup) {
-                    const refUser = yield user_model_1.default.findOne({
-                        $or: [
-                            { _id: refLookup },
-                            { username: refLookup },
-                            { email: refLookup },
-                        ],
-                    });
+                    const refUser = yield findReferrer(refLookup);
                     if (refUser && String(refUser._id) !== String(user._id)) {
                         try {
                             yield referral_model_1.default.create({
@@ -285,13 +280,7 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 const { referrerId, referrerUsername, referralCode } = decoded.user;
                 const refLookup = referrerId || referrerUsername || referralCode;
                 if (refLookup) {
-                    const refUser = yield user_model_1.default.findOne({
-                        $or: [
-                            { _id: refLookup },
-                            { username: refLookup },
-                            { email: refLookup },
-                        ],
-                    });
+                    const refUser = yield findReferrer(refLookup);
                     if (refUser && String(refUser._id) !== String(user._id)) {
                         try {
                             yield referral_model_1.default.create({
