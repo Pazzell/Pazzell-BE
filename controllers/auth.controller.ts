@@ -16,6 +16,13 @@ import { createActivationToken } from "./user.controller";
 import { generateUsername, generateAvatar } from "../utils/userHelpers";
 import ReferralModel from "../models/referral.model";
 import ReferralEventModel from "../models/referralEvent.model";
+import mongoose from "mongoose";
+
+function findReferrer(refLookup: string) {
+  const conditions: any[] = [{ username: refLookup }, { email: refLookup }];
+  if (mongoose.isValidObjectId(refLookup)) conditions.unshift({ _id: refLookup });
+  return UserModel.findOne({ $or: conditions });
+}
 
 // Interface for password reset token payload
 interface IResetTokenPayload {
@@ -96,13 +103,7 @@ export const googleAuth = CatchAsyncError(
           const { referrerId, referrerUsername, referralCode } = req.body;
           const refLookup = referrerId || referrerUsername || referralCode;
           if (refLookup) {
-            const refUser = await UserModel.findOne({
-              $or: [
-                { _id: refLookup },
-                { username: refLookup },
-                { email: refLookup },
-              ],
-            });
+            const refUser = await findReferrer(refLookup);
             if (refUser && String(refUser._id) !== String(user._id)) {
               try {
                 await ReferralModel.create({
@@ -214,13 +215,7 @@ export const registerGamer = CatchAsyncError(
           const { referrerId, referrerUsername, referralCode } = req.body;
           const refLookup = referrerId || referrerUsername || referralCode;
           if (refLookup) {
-            const refUser = await UserModel.findOne({
-              $or: [
-                { _id: refLookup },
-                { username: refLookup },
-                { email: refLookup },
-              ],
-            });
+            const refUser = await findReferrer(refLookup);
             if (refUser && String(refUser._id) !== String(user._id)) {
               try {
                 await ReferralModel.create({
@@ -345,13 +340,7 @@ export const activateUser = CatchAsyncError(
             decoded.user as any;
           const refLookup = referrerId || referrerUsername || referralCode;
           if (refLookup) {
-            const refUser = await UserModel.findOne({
-              $or: [
-                { _id: refLookup },
-                { username: refLookup },
-                { email: refLookup },
-              ],
-            });
+            const refUser = await findReferrer(refLookup);
             if (refUser && String(refUser._id) !== String(user._id)) {
               try {
                 await ReferralModel.create({
