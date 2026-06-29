@@ -546,7 +546,7 @@ function callGemini(prompt) {
 }
 // Generate 5 quiz questions from a brand passage using the configured AI provider
 exports.generateCampaignQuestions = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
     try {
         const user = req.user;
         if (!user || user.role !== "brand") {
@@ -581,7 +581,7 @@ exports.generateCampaignQuestions = (0, catchAsyncError_1.CatchAsyncError)((req,
         try {
             questions = JSON.parse(jsonMatch[0]);
         }
-        catch (_c) {
+        catch (_l) {
             return next(new ErrorHandler_1.default("AI returned malformed JSON. Please try again.", 500));
         }
         if (!Array.isArray(questions) || questions.length === 0) {
@@ -604,13 +604,18 @@ exports.generateCampaignQuestions = (0, catchAsyncError_1.CatchAsyncError)((req,
         res.status(200).json({ success: true, questions: validated, provider });
     }
     catch (error) {
+        const provider = (process.env.AI_PROVIDER || "openai").toLowerCase();
         if (((_a = error.response) === null || _a === void 0 ? void 0 : _a.status) === 401) {
-            return next(new ErrorHandler_1.default("AI service authentication failed", 500));
+            return next(new ErrorHandler_1.default(`AI service (${provider}) authentication failed — check your API key`, 500));
         }
         if (((_b = error.response) === null || _b === void 0 ? void 0 : _b.status) === 429) {
-            return next(new ErrorHandler_1.default("AI service rate limit reached. Please try again in a moment.", 429));
+            const providerMsg = ((_e = (_d = (_c = error.response) === null || _c === void 0 ? void 0 : _c.data) === null || _d === void 0 ? void 0 : _d.error) === null || _e === void 0 ? void 0 : _e.message) ||
+                ((_h = (_g = (_f = error.response) === null || _f === void 0 ? void 0 : _f.data) === null || _g === void 0 ? void 0 : _g.error) === null || _h === void 0 ? void 0 : _h.code) ||
+                ((_k = (_j = error.response) === null || _j === void 0 ? void 0 : _j.data) === null || _k === void 0 ? void 0 : _k.message) ||
+                "rate limit exceeded";
+            return next(new ErrorHandler_1.default(`AI service (${provider}) rate limited: ${providerMsg}`, 429));
         }
-        return next(new ErrorHandler_1.default(`Failed to generate questions: ${error.message}`, 500));
+        return next(new ErrorHandler_1.default(`Failed to generate questions (${provider}): ${error.message}`, 500));
     }
 }));
 // Update a campaign (brands can edit their own campaigns)

@@ -750,19 +750,25 @@ export const generateCampaignQuestions = CatchAsyncError(
 
       res.status(200).json({ success: true, questions: validated, provider });
     } catch (error: any) {
+      const provider = (process.env.AI_PROVIDER || "openai").toLowerCase();
       if (error.response?.status === 401) {
-        return next(new ErrorHandler("AI service authentication failed", 500));
+        return next(new ErrorHandler(`AI service (${provider}) authentication failed — check your API key`, 500));
       }
       if (error.response?.status === 429) {
+        const providerMsg =
+          error.response?.data?.error?.message ||
+          error.response?.data?.error?.code ||
+          error.response?.data?.message ||
+          "rate limit exceeded";
         return next(
           new ErrorHandler(
-            "AI service rate limit reached. Please try again in a moment.",
+            `AI service (${provider}) rate limited: ${providerMsg}`,
             429
           )
         );
       }
       return next(
-        new ErrorHandler(`Failed to generate questions: ${error.message}`, 500)
+        new ErrorHandler(`Failed to generate questions (${provider}): ${error.message}`, 500)
       );
     }
   }
