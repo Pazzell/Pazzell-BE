@@ -87,7 +87,7 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                 role: "gamer",
                 isVerified: true,
             });
-            // capture referral if provided in request body
+            // capture referral if provided in request body — 1-point bonus for new user
             try {
                 const { referrerId, referrerUsername, referralCode } = req.body;
                 const refLookup = referrerId || referrerUsername || referralCode;
@@ -103,6 +103,9 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                                 referrerId: String(refUser._id),
                                 referredUserId: String(user._id),
                                 eventType: "signup",
+                            });
+                            yield user_model_1.default.findByIdAndUpdate(user._id, {
+                                $inc: { "analytics.lifetime.totalPoints": 1 },
                             });
                         }
                         catch (e) {
@@ -175,7 +178,7 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
                 role: "gamer",
                 isVerified: false,
             });
-            // capture referral at signup
+            // capture referral at signup — give referred user 1 signup bonus point
             try {
                 const { referrerId, referrerUsername, referralCode } = req.body;
                 const refLookup = referrerId || referrerUsername || referralCode;
@@ -191,6 +194,10 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
                                 referrerId: String(refUser._id),
                                 referredUserId: String(user._id),
                                 eventType: "signup",
+                            });
+                            // 1-point signup bonus for the referred user
+                            yield user_model_1.default.findByIdAndUpdate(user._id, {
+                                $inc: { "analytics.lifetime.totalPoints": 1 },
                             });
                         }
                         catch (e) {
@@ -275,7 +282,7 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 role: "gamer",
                 isVerified: true,
             });
-            // capture referral if activation token included referrer info
+            // capture referral if activation token included referrer info — 1-point bonus
             try {
                 const { referrerId, referrerUsername, referralCode } = decoded.user;
                 const refLookup = referrerId || referrerUsername || referralCode;
@@ -291,6 +298,9 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                                 referrerId: String(refUser._id),
                                 referredUserId: String(user._id),
                                 eventType: "signup",
+                            });
+                            yield user_model_1.default.findByIdAndUpdate(user._id, {
+                                $inc: { "analytics.lifetime.totalPoints": 1 },
                             });
                         }
                         catch (e) {

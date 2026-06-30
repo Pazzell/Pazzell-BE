@@ -13,7 +13,7 @@ import axios from "axios";
 
 // Points awarded to the referrer once their referred user's referral is
 // marked successful (first solved puzzle)
-const REFERRAL_POINTS = 1;
+const REFERRAL_POINTS = 3;
 
 // Helper function to check and update expired campaigns
 const updateExpiredCampaigns = async () => {
@@ -470,9 +470,9 @@ export const submitCampaign = CatchAsyncError(
 
       if (canEarnPointsNow) {
         const FIXED_POINTS: { [key: string]: number } = {
-          spot_the_difference: 2,
-          card_matching: 3,
-          sliding_puzzle: 4,
+          spot_the_difference: 1,
+          card_matching: 1,
+          sliding_puzzle: 2,
           word_hunt: 1,
         };
 
@@ -545,6 +545,11 @@ export const submitCampaign = CatchAsyncError(
               referral.successfulAt = new Date();
               referral.pointsAwarded = REFERRAL_POINTS;
               await referral.save();
+
+              // Credit bonus points to the referrer's lifetime analytics
+              await UserModel.findByIdAndUpdate(referral.referrerId, {
+                $inc: { "analytics.lifetime.totalPoints": REFERRAL_POINTS },
+              });
 
               await ReferralEventModel.create({
                 referrerId: referral.referrerId,

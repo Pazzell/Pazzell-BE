@@ -5,6 +5,7 @@ import {
   paystackWebhook,
   getCampaignBudget,
   getTransactionHistory,
+  calculateProration,
 } from "../controllers/payment.controller";
 import {
   fetchDailyPrizePool,
@@ -21,6 +22,9 @@ import {
 import { isAuthenticated, authorizeRoles } from "../utils/auth";
 
 const router = express.Router();
+
+// Proration calculator (public — brands check price before creating a campaign)
+router.get("/payments/calculate-proration", calculateProration);
 
 // Payment endpoints
 router.post("/payments/initialize", isAuthenticated, authorizeRoles("brand"), initializePayment);

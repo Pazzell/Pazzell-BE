@@ -19,11 +19,165 @@ if (process.env.PAYSTACK_SECRET_KEY) {
   console.warn("⚠️  Paystack is not configured - PAYSTACK_SECRET_KEY missing");
 }
 
-// Package pricing
+// Package pricing (monthly)
 const PACKAGE_PRICES = {
-  basic: 7000, // ₦7,000
-  premium: 10000, // ₦10,000
+  basic: 7000, // ₦7,000/month
+  premium: 10000, // ₦10,000/month
 };
+
+// Shared proration calculation helper
+export function computeProration(
+  packageType: "basic" | "premium",
+  endMonth: string // YYYY-MM
+) {
+  const basePrice = PACKAGE_PRICES[packageType];
+  const today = new Date();
+  const todayYear = today.getFullYear();
+  const todayMonthIdx = today.getMonth(); // 0-indexed
+  const todayDay = today.getDate();
+
+  const [endYear, endMonthNum] = endMonth.split("-").map(Number);
+  const endMonthIdx = endMonthNum - 1; // 0-indexed
+
+  // Validate: endMonth must be current month or in the future
+  if (
+    endYear < todayYear ||
+    (endYear === todayYear && endMonthIdx < todayMonthIdx)
+  ) {
+    throw new Error("endMonth cannot be in the past");
+  }
+
+  // Days in current month
+  const daysInCurrentMonth = new Date(
+    todayYear,
+    todayMonthIdx + 1,
+    0
+  ).getDate();
+  // Days remaining from tomorrow to end of current month
+  const daysRemaining = daysInCurrentMonth - todayDay;
+
+  const breakdown: {
+    month: string;
+    days: number;
+    amount: number;
+    type: "prorated" | "full";
+  }[] = [];
+
+  const currentMonthLabel = `${todayYear}-${String(todayMonthIdx + 1).padStart(2, "0")}`;
+  const proratedCurrentMonth =
+    daysRemaining > 0
+      ? Math.round((basePrice / daysInCurrentMonth) * daysRemaining)
+      : 0;
+
+  if (daysRemaining > 0) {
+    breakdown.push({
+      month: currentMonthLabel,
+      days: daysRemaining,
+      amount: proratedCurrentMonth,
+      type: "prorated",
+    });
+  }
+
+  // Same month — prorated only
+  if (endYear === todayYear && endMonthIdx === todayMonthIdx) {
+    return {
+      packageType,
+      baseMonthlyPrice: basePrice,
+      proratedCurrentMonth,
+      futureMonthsAmount: 0,
+      totalAmount: proratedCurrentMonth,
+      breakdown,
+      timeLimitHours: Math.round((daysRemaining * 24)),
+    };
+  }
+
+  // Add full months from next month to endMonth inclusive
+  let futureMonthsAmount = 0;
+  let curYear = todayYear;
+  let curMonthIdx = todayMonthIdx + 1;
+  if (curMonthIdx > 11) {
+    curMonthIdx = 0;
+    curYear++;
+  }
+
+  while (
+    curYear < endYear ||
+    (curYear === endYear && curMonthIdx <= endMonthIdx)
+  ) {
+    const daysInMonth = new Date(curYear, curMonthIdx + 1, 0).getDate();
+    const monthLabel = `${curYear}-${String(curMonthIdx + 1).padStart(2, "0")}`;
+    breakdown.push({
+      month: monthLabel,
+      days: daysInMonth,
+      amount: basePrice,
+      type: "full",
+    });
+    futureMonthsAmount += basePrice;
+
+    curMonthIdx++;
+    if (curMonthIdx > 11) {
+      curMonthIdx = 0;
+      curYear++;
+    }
+  }
+
+  // Total campaign hours from now to end of endMonth
+  const endOfEndMonth = new Date(endYear, endMonthNum, 0, 23, 59, 59, 999);
+  const timeLimitMs = endOfEndMonth.getTime() - today.getTime();
+  const timeLimitHours = Math.max(1, Math.round(timeLimitMs / (1000 * 60 * 60)));
+
+  return {
+    packageType,
+    baseMonthlyPrice: basePrice,
+    proratedCurrentMonth,
+    futureMonthsAmount,
+    totalAmount: proratedCurrentMonth + futureMonthsAmount,
+    breakdown,
+    timeLimitHours,
+  };
+}
+
+// GET /payments/calculate-proration?packageType=basic&endMonth=2026-07
+export const calculateProration = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { packageType, endMonth } = req.query as {
+        packageType?: string;
+        endMonth?: string;
+      };
+
+      if (!packageType || !["basic", "premium"].includes(packageType)) {
+        return next(
+          new ErrorHandler("packageType must be 'basic' or 'premium'", 400)
+        );
+      }
+      if (!endMonth || !/^\d{4}-\d{2}$/.test(endMonth)) {
+        return next(
+          new ErrorHandler("endMonth must be in YYYY-MM format", 400)
+        );
+      }
+
+      let result;
+      try {
+        result = computeProration(
+          packageType as "basic" | "premium",
+          endMonth
+        );
+      } catch (e: any) {
+        return next(new ErrorHandler(e.message, 400));
+      }
+
+      res.status(200).json({ success: true, proration: result });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(
+          `Failed to calculate proration: ${error.message}`,
+          500
+        )
+      );
+    }
+  }
+);
 
 // Initialize payment for campaign
 export const initializePayment = CatchAsyncError(

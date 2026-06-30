@@ -100,9 +100,9 @@ export const submitPuzzle = CatchAsyncError(
       }
 
       const FIXED_POINTS: { [key: string]: number } = {
-        spot_the_difference: 2,
-        card_matching: 3,
-        sliding_puzzle: 4,
+        spot_the_difference: 1,
+        card_matching: 1,
+        sliding_puzzle: 2,
         word_hunt: 1,
       };
 
@@ -151,7 +151,7 @@ export const submitPuzzle = CatchAsyncError(
 
         // If this is the user's first successful solve, mark any referral as
         // successful and credit points to the referrer.
-        const REFERRAL_POINTS = 10;
+        const REFERRAL_POINTS = 3;
         try {
           if (firstTime && userId) {
             const referral = await ReferralModel.findOne({

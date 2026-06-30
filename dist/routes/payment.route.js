@@ -8,6 +8,8 @@ const payment_controller_1 = require("../controllers/payment.controller");
 const payout_controller_1 = require("../controllers/payout.controller");
 const auth_1 = require("../utils/auth");
 const router = express_1.default.Router();
+// Proration calculator (public — brands check price before creating a campaign)
+router.get("/payments/calculate-proration", payment_controller_1.calculateProration);
 // Payment endpoints
 router.post("/payments/initialize", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("brand"), payment_controller_1.initializePayment);
 router.get("/payments/verify/:reference", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("brand"), payment_controller_1.verifyPayment);

@@ -21,28 +21,7 @@ const storageFactory_1 = require("../services/storage/storageFactory");
 const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
 const package_model_1 = __importDefault(require("../models/package.model"));
-// Package pricing
-const PACKAGE_PRICES = {
-    basic: 7000, // ₦7,000
-    premium: 10000, // ₦10,000
-};
-// Convert hours to number of weeks (rounded up to cover partial weeks)
-const getWeeksFromHours = (timeLimitHours) => {
-    const hoursPerWeek = 24 * 7; // 168
-    if (!timeLimitHours || timeLimitHours <= 0)
-        return 1;
-    return Math.max(1, Math.ceil(timeLimitHours / hoursPerWeek));
-};
-// Multiplier formula provided: Multiplier = 0.9 * n + 10^{-n}
-// Return the multiplier rounded DOWN to one decimal place to normalize to 10% discount
-const calculateDurationFactor = (timeLimitHours) => {
-    const weeks = getWeeksFromHours(timeLimitHours);
-    if (weeks === 1)
-        return 1.0;
-    const multiplierRaw = 0.9 * weeks + Math.pow(10, -weeks);
-    const multiplierRoundedDown = Math.floor(multiplierRaw * 10) / 10; // e.g. 1.81 -> 1.8
-    return multiplierRoundedDown;
-};
+const payment_controller_1 = require("./payment.controller");
 // Create a puzzle campaign (brands only). Expects multipart upload with one file: "image" (used for both scrambled and original)
 exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d;
@@ -50,7 +29,8 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         const brandUser = req.user;
         if (brandUser.role !== "brand")
             return next(new ErrorHandler_1.default("Only brands can create campaigns", 403));
-        const { questions, title, description, gameType, words, packageId, brandUrl, campaignUrl, videoUrl, timeLimit, weeksToRun, passage, } = req.body;
+        const { questions, title, description, gameType, words, packageId, brandUrl, campaignUrl, videoUrl, timeLimit, weeksToRun, endMonth, // YYYY-MM: prorated end month (preferred over timeLimit/weeksToRun)
+        passage, } = req.body;
         // Validate packageId
         if (!packageId || typeof packageId !== "string") {
             return next(new ErrorHandler_1.default("packageId is required and must be a valid string", 400));
@@ -113,6 +93,7 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         if (!brand) {
             return next(new ErrorHandler_1.default("Brand profile not found", 404));
         }
+        const packageType = ((_a = packageData.name) === null || _a === void 0 ? void 0 : _a.toLowerCase()) === "premium" ? "premium" : "basic";
         // multer stores single-file upload in req.file
         const uploadedFile = req.file;
         if (!uploadedFile) {
@@ -131,7 +112,7 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         const puzzleUrl = result.url;
         // parse questions (expected as JSON string or array)
         let parsedQuestions = [];
-        const rawQuestions = (_b = questions !== null && questions !== void 0 ? questions : (_a = req.body) === null || _a === void 0 ? void 0 : _a.questions) !== null && _b !== void 0 ? _b : (_c = req.body) === null || _c === void 0 ? void 0 : _c.question;
+        const rawQuestions = (_c = questions !== null && questions !== void 0 ? questions : (_b = req.body) === null || _b === void 0 ? void 0 : _b.questions) !== null && _c !== void 0 ? _c : (_d = req.body) === null || _d === void 0 ? void 0 : _d.question;
         const tryParse = (val) => {
             try {
                 return JSON.parse(val);
@@ -201,28 +182,41 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             const n = Number(v);
             return Number.isFinite(n) ? n : null;
         };
-        // Validate timeLimit — accept either timeLimit (hours) or weeksToRun (weeks)
-        const rawTimeLimit = timeLimit !== null && timeLimit !== void 0 ? timeLimit : (weeksToRun ? Number(weeksToRun) * 7 * 24 : undefined);
-        const parsedTimeLimit = Number(rawTimeLimit);
-        if (!rawTimeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
-            return next(new ErrorHandler_1.default("timeLimit (hours) or weeksToRun (weeks) is required and must be a positive number", 400));
+        // Determine timeLimit and charge amount
+        // Priority: endMonth (prorated) > timeLimit (hours) > weeksToRun (weeks)
+        let parsedTimeLimit;
+        let chargedAmount;
+        if (endMonth && /^\d{4}-\d{2}$/.test(String(endMonth))) {
+            // Prorated monthly pricing
+            let proration;
+            try {
+                proration = (0, payment_controller_1.computeProration)(packageType, String(endMonth));
+            }
+            catch (e) {
+                return next(new ErrorHandler_1.default(e.message, 400));
+            }
+            parsedTimeLimit = proration.timeLimitHours;
+            chargedAmount = proration.totalAmount;
         }
-        // Get package type and calculate totalBudget
-        const packageType = ((_d = packageData.name) === null || _d === void 0 ? void 0 : _d.toLowerCase()) === "premium" ? "premium" : "basic";
-        const basePrice = PACKAGE_PRICES[packageType];
-        // Weeks selected by brand (rounded up)
-        const weeks = getWeeksFromHours(parsedTimeLimit);
-        // Full allocated budget that the brand should receive (no discount)
-        const allocatedBudget = basePrice * weeks; // e.g., 2 weeks => 7000 * 2 = 14000
-        // Compute charged multiplier (rounded DOWN to 1 decimal as requested)
-        const chargedMultiplier = calculateDurationFactor(parsedTimeLimit); // e.g., 1.8 for 2 weeks
-        const chargedAmount = Math.round(basePrice * chargedMultiplier); // amount brand will pay
-        // Compute daily allocation spread across the selected duration (days) using allocated budget
-        const days = Math.max(1, Math.ceil(parsedTimeLimit / 24));
-        const dailyAllocation = Number((allocatedBudget / days).toFixed(2));
-        // Set placeholder dates - actual dates will be set when payment is made
+        else {
+            // Legacy: timeLimit in hours or weeksToRun
+            const rawTimeLimit = timeLimit !== null && timeLimit !== void 0 ? timeLimit : (weeksToRun ? Number(weeksToRun) * 7 * 24 : undefined);
+            parsedTimeLimit = Number(rawTimeLimit);
+            if (!rawTimeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
+                return next(new ErrorHandler_1.default("endMonth (YYYY-MM), timeLimit (hours), or weeksToRun (weeks) is required", 400));
+            }
+            // Fallback flat pricing: one full month rate
+            const PACKAGE_PRICES = {
+                basic: 7000,
+                premium: 10000,
+            };
+            chargedAmount = PACKAGE_PRICES[packageType] || 7000;
+        }
+        // Set placeholder dates — actual dates are set when payment is verified
         const currentDate = new Date();
         const placeholderEndDate = new Date(currentDate.getTime() + parsedTimeLimit * 60 * 60 * 1000);
+        const days = Math.max(1, Math.ceil(parsedTimeLimit / 24));
+        const dailyAllocation = Number((chargedAmount / days).toFixed(2));
         // Validate passage if provided
         if (passage !== undefined && passage !== null && passage !== "") {
             const passageTrimmed = String(passage).trim();
@@ -246,17 +240,15 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             passage: passage ? String(passage).trim() : undefined,
             questions: parsedQuestions,
             timeLimit: parsedTimeLimit,
-            status: "draft", // Always start as draft
-            paymentStatus: "unpaid", // All new campaigns start as unpaid
-            // Payment not yet completed: store expected charged amount; actual
-            // `totalBudget` (allocated) will be set after payment (to the paid amount).
+            status: "draft",
+            paymentStatus: "unpaid",
             totalBudget: 0,
             expectedChargeAmount: chargedAmount,
             dailyAllocation: 0,
             budgetRemaining: 0,
             budgetUsed: 0,
-            startDate: currentDate, // Placeholder - will be updated on payment
-            endDate: placeholderEndDate, // Placeholder - will be updated on payment
+            startDate: currentDate,
+            endDate: placeholderEndDate,
         };
         // For word_hunt games, add words array
         if (campaignGameType === "word_hunt" && parsedWords.length > 0) {

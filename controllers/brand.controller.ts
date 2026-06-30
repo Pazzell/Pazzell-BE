@@ -7,29 +7,7 @@ import { getStorageService } from "../services/storage/storageFactory";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
 import PackageModel from "../models/package.model";
-
-// Package pricing
-const PACKAGE_PRICES = {
-  basic: 7000, // ₦7,000
-  premium: 10000, // ₦10,000
-};
-
-// Convert hours to number of weeks (rounded up to cover partial weeks)
-const getWeeksFromHours = (timeLimitHours: number): number => {
-  const hoursPerWeek = 24 * 7; // 168
-  if (!timeLimitHours || timeLimitHours <= 0) return 1;
-  return Math.max(1, Math.ceil(timeLimitHours / hoursPerWeek));
-};
-
-// Multiplier formula provided: Multiplier = 0.9 * n + 10^{-n}
-// Return the multiplier rounded DOWN to one decimal place to normalize to 10% discount
-const calculateDurationFactor = (timeLimitHours: number): number => {
-  const weeks = getWeeksFromHours(timeLimitHours);
-  if (weeks === 1) return 1.0;
-  const multiplierRaw = 0.9 * weeks + Math.pow(10, -weeks);
-  const multiplierRoundedDown = Math.floor(multiplierRaw * 10) / 10; // e.g. 1.81 -> 1.8
-  return multiplierRoundedDown;
-};
+import { computeProration } from "./payment.controller";
 
 // Create a puzzle campaign (brands only). Expects multipart upload with one file: "image" (used for both scrambled and original)
 export const createCampaign = CatchAsyncError(
@@ -51,6 +29,7 @@ export const createCampaign = CatchAsyncError(
         videoUrl,
         timeLimit,
         weeksToRun,
+        endMonth, // YYYY-MM: prorated end month (preferred over timeLimit/weeksToRun)
         passage,
       } = req.body;
 
@@ -150,6 +129,9 @@ export const createCampaign = CatchAsyncError(
       if (!brand) {
         return next(new ErrorHandler("Brand profile not found", 404));
       }
+
+      const packageType =
+        packageData.name?.toLowerCase() === "premium" ? "premium" : "basic";
 
       // multer stores single-file upload in req.file
       const uploadedFile: any = (req as any).file;
@@ -258,42 +240,50 @@ export const createCampaign = CatchAsyncError(
         return Number.isFinite(n) ? n : null;
       };
 
-      // Validate timeLimit — accept either timeLimit (hours) or weeksToRun (weeks)
-      const rawTimeLimit = timeLimit ?? (weeksToRun ? Number(weeksToRun) * 7 * 24 : undefined);
-      const parsedTimeLimit = Number(rawTimeLimit);
-      if (!rawTimeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
-        return next(
-          new ErrorHandler(
-            "timeLimit (hours) or weeksToRun (weeks) is required and must be a positive number",
-            400
-          )
-        );
+      // Determine timeLimit and charge amount
+      // Priority: endMonth (prorated) > timeLimit (hours) > weeksToRun (weeks)
+      let parsedTimeLimit: number;
+      let chargedAmount: number;
+
+      if (endMonth && /^\d{4}-\d{2}$/.test(String(endMonth))) {
+        // Prorated monthly pricing
+        let proration;
+        try {
+          proration = computeProration(packageType, String(endMonth));
+        } catch (e: any) {
+          return next(new ErrorHandler(e.message, 400));
+        }
+        parsedTimeLimit = proration.timeLimitHours;
+        chargedAmount = proration.totalAmount;
+      } else {
+        // Legacy: timeLimit in hours or weeksToRun
+        const rawTimeLimit =
+          timeLimit ?? (weeksToRun ? Number(weeksToRun) * 7 * 24 : undefined);
+        parsedTimeLimit = Number(rawTimeLimit);
+        if (!rawTimeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
+          return next(
+            new ErrorHandler(
+              "endMonth (YYYY-MM), timeLimit (hours), or weeksToRun (weeks) is required",
+              400
+            )
+          );
+        }
+        // Fallback flat pricing: one full month rate
+        const PACKAGE_PRICES: Record<string, number> = {
+          basic: 7000,
+          premium: 10000,
+        };
+        chargedAmount = PACKAGE_PRICES[packageType] || 7000;
       }
 
-      // Get package type and calculate totalBudget
-      const packageType =
-        packageData.name?.toLowerCase() === "premium" ? "premium" : "basic";
-      const basePrice = PACKAGE_PRICES[packageType];
-
-      // Weeks selected by brand (rounded up)
-      const weeks = getWeeksFromHours(parsedTimeLimit);
-
-      // Full allocated budget that the brand should receive (no discount)
-      const allocatedBudget = basePrice * weeks; // e.g., 2 weeks => 7000 * 2 = 14000
-
-      // Compute charged multiplier (rounded DOWN to 1 decimal as requested)
-      const chargedMultiplier = calculateDurationFactor(parsedTimeLimit); // e.g., 1.8 for 2 weeks
-      const chargedAmount = Math.round(basePrice * chargedMultiplier); // amount brand will pay
-
-      // Compute daily allocation spread across the selected duration (days) using allocated budget
-      const days = Math.max(1, Math.ceil(parsedTimeLimit / 24));
-      const dailyAllocation = Number((allocatedBudget / days).toFixed(2));
-
-      // Set placeholder dates - actual dates will be set when payment is made
+      // Set placeholder dates — actual dates are set when payment is verified
       const currentDate = new Date();
       const placeholderEndDate = new Date(
         currentDate.getTime() + parsedTimeLimit * 60 * 60 * 1000
       );
+
+      const days = Math.max(1, Math.ceil(parsedTimeLimit / 24));
+      const dailyAllocation = Number((chargedAmount / days).toFixed(2));
 
       // Validate passage if provided
       if (passage !== undefined && passage !== null && passage !== "") {
@@ -321,17 +311,15 @@ export const createCampaign = CatchAsyncError(
         passage: passage ? String(passage).trim() : undefined,
         questions: parsedQuestions,
         timeLimit: parsedTimeLimit,
-        status: "draft", // Always start as draft
-        paymentStatus: "unpaid", // All new campaigns start as unpaid
-        // Payment not yet completed: store expected charged amount; actual
-        // `totalBudget` (allocated) will be set after payment (to the paid amount).
+        status: "draft",
+        paymentStatus: "unpaid",
         totalBudget: 0,
         expectedChargeAmount: chargedAmount,
         dailyAllocation: 0,
         budgetRemaining: 0,
         budgetUsed: 0,
-        startDate: currentDate, // Placeholder - will be updated on payment
-        endDate: placeholderEndDate, // Placeholder - will be updated on payment
+        startDate: currentDate,
+        endDate: placeholderEndDate,
       };
 
       // For word_hunt games, add words array
