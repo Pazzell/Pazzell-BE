@@ -6,6 +6,15 @@ import LeaderboardModel from "../models/leaderboard.model";
 import UserModel from "../models/user.model";
 import ReferralModel from "../models/referral.model";
 
+// Returns the set of user IDs who have opted out of the leaderboard
+async function getHiddenUserIds(): Promise<Set<string>> {
+  const hiddenUsers = await UserModel.find(
+    { "privacy.showOnLeaderboard": false },
+    { _id: 1 }
+  ).lean();
+  return new Set(hiddenUsers.map((u: any) => String(u._id)));
+}
+
 // Get current week's leaderboard (puzzle points only — no referral breakdown for weekly)
 export const getWeeklyLeaderboard = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -45,12 +54,16 @@ export const getWeeklyLeaderboard = CatchAsyncError(
         { $limit: 100 },
       ]);
 
-      const entries = agg.map((a: any) => ({
-        userId: a._id,
-        puzzlesSolved: a.puzzlesSolved,
-        points: a.points,
-        avgTime: a.avgTime || null,
-      }));
+      const hiddenIds = await getHiddenUserIds();
+
+      const entries = agg
+        .filter((a: any) => !hiddenIds.has(String(a._id)))
+        .map((a: any) => ({
+          userId: a._id,
+          puzzlesSolved: a.puzzlesSolved,
+          points: a.points,
+          avgTime: a.avgTime || null,
+        }));
 
       const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd
         .toISOString()
@@ -103,7 +116,8 @@ export const getWeeklyLeaderboard = CatchAsyncError(
 );
 
 // Build monthly leaderboard entries for a given month range (live computation)
-async function buildMonthlyEntries(monthStart: Date, monthEnd: Date) {
+async function buildMonthlyEntries(monthStart: Date, monthEnd: Date, hiddenIds?: Set<string>) {
+  if (!hiddenIds) hiddenIds = await getHiddenUserIds();
   // Puzzle points earned this month
   const puzzleAgg = await PuzzleAttemptModel.aggregate([
     {
@@ -171,8 +185,9 @@ async function buildMonthlyEntries(monthStart: Date, monthEnd: Date) {
     userMap.set(uid, existing);
   }
 
-  // Sort by totalPoints desc, then puzzlePoints desc
+  // Sort by totalPoints desc, then puzzlePoints desc; exclude hidden users
   return Array.from(userMap.entries())
+    .filter(([userId]) => !hiddenIds!.has(userId))
     .map(([userId, data]) => ({
       userId,
       puzzlePoints: data.puzzlePoints,
@@ -390,12 +405,16 @@ export const getAllTimeLeaderboard = CatchAsyncError(
         { $limit: 100 },
       ]);
 
-      const entries = agg.map((a: any) => ({
-        userId: a._id,
-        puzzlesSolved: a.puzzlesSolved,
-        points: a.points,
-        avgTime: a.avgTime || null,
-      }));
+      const hiddenIds = await getHiddenUserIds();
+
+      const entries = agg
+        .filter((a: any) => !hiddenIds.has(String(a._id)))
+        .map((a: any) => ({
+          userId: a._id,
+          puzzlesSolved: a.puzzlesSolved,
+          points: a.points,
+          avgTime: a.avgTime || null,
+        }));
 
       const entriesWithUserDetails = await Promise.all(
         entries.map(async (entry: any, index: number) => {

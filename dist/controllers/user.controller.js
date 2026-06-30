@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.clearAllGamerData = exports.getAllGamers = exports.updateBrandProfile = exports.updateGamerProfile = exports.getBrandProfile = exports.getGamerProfile = exports.getUserInfo = exports.updateAccessToken = exports.logoutUser = exports.loginUser = exports.activateUser = exports.createActivationToken = exports.registerUser = void 0;
+exports.clearAllGamerData = exports.deleteAccount = exports.updatePrivacy = exports.updateNotifications = exports.changePassword = exports.getAllGamers = exports.updateBrandProfile = exports.updateGamerProfile = exports.getBrandProfile = exports.getGamerProfile = exports.getUserInfo = exports.updateAccessToken = exports.logoutUser = exports.loginUser = exports.activateUser = exports.createActivationToken = exports.registerUser = void 0;
 const user_model_1 = __importDefault(require("../models/user.model"));
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
@@ -202,7 +202,7 @@ exports.getUserInfo = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =>
 }));
 // Get gamer profile with full analytics
 exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
     try {
         const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id;
         if (!req.user || req.user.role !== "gamer") {
@@ -302,12 +302,37 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
         const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
         const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        // Current-month puzzle points (computed live — same source as leaderboard)
+        const monthlyPuzzleAgg = yield puzzleAttempt_model_1.default.aggregate([
+            {
+                $match: {
+                    userId: String(userId),
+                    pointsEarned: { $gt: 0 },
+                    timestamp: { $gte: monthStart, $lte: monthEnd },
+                },
+            },
+            { $group: { _id: null, puzzlePoints: { $sum: "$pointsEarned" } } },
+        ]);
+        const monthlyPuzzlePoints = ((_b = monthlyPuzzleAgg[0]) === null || _b === void 0 ? void 0 : _b.puzzlePoints) || 0;
+        // Current-month referral bonus points
+        const monthlyReferralAgg = yield referral_model_1.default.aggregate([
+            {
+                $match: {
+                    referrerId: String(userId),
+                    successful: true,
+                    successfulAt: { $gte: monthStart, $lte: monthEnd },
+                },
+            },
+            { $group: { _id: null, referralPoints: { $sum: "$pointsAwarded" }, referralCount: { $sum: 1 } } },
+        ]);
+        const monthlyReferralPoints = ((_c = monthlyReferralAgg[0]) === null || _c === void 0 ? void 0 : _c.referralPoints) || 0;
+        const monthlyReferralCount = ((_d = monthlyReferralAgg[0]) === null || _d === void 0 ? void 0 : _d.referralCount) || 0;
+        const monthlyTotalPoints = monthlyPuzzlePoints + monthlyReferralPoints;
         // All referrals this user has ever made (pending + successful)
         const allMyReferrals = yield referral_model_1.default.find({
             referrerId: String(userId),
         }).lean();
         const successfulReferrals = allMyReferrals.filter((r) => r.successful);
-        const totalReferralPoints = successfulReferrals.reduce((sum, r) => sum + (r.pointsAwarded || 0), 0);
         // Monthly referral leaderboard position (competitive ranking)
         const referralAgg = yield referral_model_1.default.aggregate([
             {
@@ -337,15 +362,20 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 avatar: user.avatar,
                 role: user.role,
                 isVerified: user.isVerified,
+                // Points shown on the dashboard — current month only, resets at month end
+                points: {
+                    monthKey,
+                    puzzlePoints: monthlyPuzzlePoints,
+                    referralPoints: monthlyReferralPoints,
+                    totalPoints: monthlyTotalPoints,
+                },
                 analytics: {
                     lifetime: {
-                        puzzlesSolved: ((_c = (_b = user.analytics) === null || _b === void 0 ? void 0 : _b.lifetime) === null || _c === void 0 ? void 0 : _c.puzzlesSolved) || 0,
-                        totalPoints: ((_e = (_d = user.analytics) === null || _d === void 0 ? void 0 : _d.lifetime) === null || _e === void 0 ? void 0 : _e.totalPoints) || 0,
-                        totalEarnings: ((_g = (_f = user.analytics) === null || _f === void 0 ? void 0 : _f.lifetime) === null || _g === void 0 ? void 0 : _g.totalEarnings) || 0,
-                        totalTime: ((_j = (_h = user.analytics) === null || _h === void 0 ? void 0 : _h.lifetime) === null || _j === void 0 ? void 0 : _j.totalTime) || 0,
-                        totalMoves: ((_l = (_k = user.analytics) === null || _k === void 0 ? void 0 : _k.lifetime) === null || _l === void 0 ? void 0 : _l.totalMoves) || 0,
-                        attempts: ((_o = (_m = user.analytics) === null || _m === void 0 ? void 0 : _m.lifetime) === null || _o === void 0 ? void 0 : _o.attempts) || 0,
-                        successRate: ((_q = (_p = user.analytics) === null || _p === void 0 ? void 0 : _p.lifetime) === null || _q === void 0 ? void 0 : _q.successRate) || 0,
+                        puzzlesSolved: ((_f = (_e = user.analytics) === null || _e === void 0 ? void 0 : _e.lifetime) === null || _f === void 0 ? void 0 : _f.puzzlesSolved) || 0,
+                        totalTime: ((_h = (_g = user.analytics) === null || _g === void 0 ? void 0 : _g.lifetime) === null || _h === void 0 ? void 0 : _h.totalTime) || 0,
+                        totalMoves: ((_k = (_j = user.analytics) === null || _j === void 0 ? void 0 : _j.lifetime) === null || _k === void 0 ? void 0 : _k.totalMoves) || 0,
+                        attempts: ((_m = (_l = user.analytics) === null || _l === void 0 ? void 0 : _l.lifetime) === null || _m === void 0 ? void 0 : _m.attempts) || 0,
+                        successRate: ((_p = (_o = user.analytics) === null || _o === void 0 ? void 0 : _o.lifetime) === null || _p === void 0 ? void 0 : _p.successRate) || 0,
                         leaderboardPosition: allTimeLeaderboardPosition,
                     },
                     weekly: {
@@ -353,7 +383,6 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                         weekEnd: weekEnd.toISOString().slice(0, 10),
                         puzzlesSolved: weeklyStats.puzzlesSolved,
                         totalPoints: weeklyStats.totalPoints,
-                        totalEarnings: weeklyStats.totalEarnings,
                         totalTime: weeklyStats.totalTime,
                         totalMoves: weeklyStats.totalMoves,
                         attempts: weeklyStats.attempts,
@@ -365,11 +394,22 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                         totalReferrals: allMyReferrals.length,
                         successfulReferrals: successfulReferrals.length,
                         pendingReferrals: allMyReferrals.length - successfulReferrals.length,
-                        totalPointsEarned: totalReferralPoints,
+                        pointsThisMonth: monthlyReferralPoints,
+                        referralCountThisMonth: monthlyReferralCount,
                         leaderboardPosition: referralIndex !== -1 ? referralIndex + 1 : null,
                     },
                 },
                 puzzlesSolved: user.puzzlesSolved,
+                notifications: user.notifications || {
+                    emailNotifications: true,
+                    referralBonusAlerts: true,
+                    leaderboardUpdates: true,
+                    newCampaignAlerts: true,
+                    weeklyDigest: true,
+                },
+                privacy: user.privacy || {
+                    showOnLeaderboard: true,
+                },
                 createdAt: user.createdAt,
                 updatedAt: user.updatedAt,
             },
@@ -616,6 +656,132 @@ exports.getAllGamers = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
     }
     catch (error) {
         return next(new ErrorHandler_1.default(error.message, 400));
+    }
+}));
+// PATCH /profile/change-password
+exports.changePassword = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id;
+        const { currentPassword, newPassword } = req.body;
+        if (!currentPassword || !newPassword) {
+            return next(new ErrorHandler_1.default("currentPassword and newPassword are required", 400));
+        }
+        if (newPassword.length < 6) {
+            return next(new ErrorHandler_1.default("New password must be at least 6 characters", 400));
+        }
+        const user = yield user_model_1.default.findById(userId).select("+password");
+        if (!user)
+            return next(new ErrorHandler_1.default("User not found", 404));
+        if (!user.password) {
+            return next(new ErrorHandler_1.default("This account uses Google Sign-In and has no password set", 400));
+        }
+        const isMatch = yield user.comparePassword(currentPassword);
+        if (!isMatch) {
+            return next(new ErrorHandler_1.default("Current password is incorrect", 401));
+        }
+        user.password = newPassword;
+        yield user.save();
+        res
+            .status(200)
+            .json({ success: true, message: "Password changed successfully" });
+    }
+    catch (error) {
+        return next(new ErrorHandler_1.default(error.message, 500));
+    }
+}));
+// PATCH /profile/notifications
+exports.updateNotifications = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id;
+        const { emailNotifications, referralBonusAlerts, leaderboardUpdates, newCampaignAlerts, weeklyDigest, } = req.body;
+        const update = {};
+        if (typeof emailNotifications === "boolean")
+            update["notifications.emailNotifications"] = emailNotifications;
+        if (typeof referralBonusAlerts === "boolean")
+            update["notifications.referralBonusAlerts"] = referralBonusAlerts;
+        if (typeof leaderboardUpdates === "boolean")
+            update["notifications.leaderboardUpdates"] = leaderboardUpdates;
+        if (typeof newCampaignAlerts === "boolean")
+            update["notifications.newCampaignAlerts"] = newCampaignAlerts;
+        if (typeof weeklyDigest === "boolean")
+            update["notifications.weeklyDigest"] = weeklyDigest;
+        if (Object.keys(update).length === 0) {
+            return next(new ErrorHandler_1.default("No valid notification fields provided", 400));
+        }
+        const updated = yield user_model_1.default
+            .findByIdAndUpdate(userId, { $set: update }, { new: true })
+            .select("notifications");
+        if (!updated)
+            return next(new ErrorHandler_1.default("User not found", 404));
+        res.status(200).json({
+            success: true,
+            message: "Notification preferences saved",
+            notifications: updated.notifications,
+        });
+    }
+    catch (error) {
+        return next(new ErrorHandler_1.default(error.message, 500));
+    }
+}));
+// PATCH /profile/privacy
+exports.updatePrivacy = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id;
+        const { showOnLeaderboard } = req.body;
+        if (typeof showOnLeaderboard !== "boolean") {
+            return next(new ErrorHandler_1.default("showOnLeaderboard must be a boolean", 400));
+        }
+        const updated = yield user_model_1.default
+            .findByIdAndUpdate(userId, { $set: { "privacy.showOnLeaderboard": showOnLeaderboard } }, { new: true })
+            .select("privacy");
+        if (!updated)
+            return next(new ErrorHandler_1.default("User not found", 404));
+        res.status(200).json({
+            success: true,
+            message: "Privacy settings saved",
+            privacy: updated.privacy,
+        });
+    }
+    catch (error) {
+        return next(new ErrorHandler_1.default(error.message, 500));
+    }
+}));
+// DELETE /profile/account — requires password confirmation
+exports.deleteAccount = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id;
+        const { password } = req.body;
+        if (!password) {
+            return next(new ErrorHandler_1.default("Password is required to delete your account", 400));
+        }
+        const user = yield user_model_1.default.findById(userId).select("+password");
+        if (!user)
+            return next(new ErrorHandler_1.default("User not found", 404));
+        if (!user.password) {
+            return next(new ErrorHandler_1.default("This account uses Google Sign-In. Contact support to delete your account.", 400));
+        }
+        const isMatch = yield user.comparePassword(password);
+        if (!isMatch) {
+            return next(new ErrorHandler_1.default("Incorrect password", 401));
+        }
+        yield user_model_1.default.findByIdAndDelete(userId);
+        // Clear session cookies and redis
+        res.cookie("access_token", "", { maxAge: 1 });
+        res.cookie("refresh_token", "", { maxAge: 1 });
+        try {
+            yield redis_1.redis.del(userId);
+        }
+        catch (_) { }
+        res
+            .status(200)
+            .json({ success: true, message: "Account deleted successfully" });
+    }
+    catch (error) {
+        return next(new ErrorHandler_1.default(error.message, 500));
     }
 }));
 // Clear all gamer data (Admin only)

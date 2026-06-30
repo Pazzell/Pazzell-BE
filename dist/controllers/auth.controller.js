@@ -195,10 +195,6 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
                                 referredUserId: String(user._id),
                                 eventType: "signup",
                             });
-                            // 1-point signup bonus for the referred user
-                            yield user_model_1.default.findByIdAndUpdate(user._id, {
-                                $inc: { "analytics.lifetime.totalPoints": 1 },
-                            });
                         }
                         catch (e) {
                             // ignore duplicate or other errors

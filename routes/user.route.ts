@@ -12,7 +12,11 @@ import {
   updateGamerProfile,
   updateBrandProfile,
   getAllGamers,
-  clearAllGamerData
+  clearAllGamerData,
+  changePassword,
+  updateNotifications,
+  updatePrivacy,
+  deleteAccount,
 } from "../controllers/user.controller";
 import { isAuthenticated, authorizeRoles } from "../utils/auth";
 
@@ -47,6 +51,12 @@ userRouter.put("/profile/gamer", isAuthenticated, upload.single("avatar"), updat
 
 // Update brand profile (with optional avatar upload)
 userRouter.put("/profile/brand", isAuthenticated, upload.single("avatar"), updateBrandProfile);
+
+// Settings endpoints
+userRouter.patch("/profile/change-password", isAuthenticated, changePassword);
+userRouter.patch("/profile/notifications", isAuthenticated, updateNotifications);
+userRouter.patch("/profile/privacy", isAuthenticated, updatePrivacy);
+userRouter.delete("/profile/account", isAuthenticated, deleteAccount);
 
 // Clear all gamer data (Admin only)
 userRouter.post("/admin/clear-all-data", isAuthenticated, authorizeRoles("admin"), clearAllGamerData);
