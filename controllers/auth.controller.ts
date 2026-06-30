@@ -230,10 +230,6 @@ export const registerGamer = CatchAsyncError(
                   referredUserId: String(user._id),
                   eventType: "signup",
                 });
-                // 1-point signup bonus for the referred user
-                await UserModel.findByIdAndUpdate(user._id, {
-                  $inc: { "analytics.lifetime.totalPoints": 1 },
-                });
               } catch (e) {
                 // ignore duplicate or other errors
               }

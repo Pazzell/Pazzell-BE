@@ -408,8 +408,6 @@ exports.submitCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
                 userDoc.analytics.lifetime.puzzlesSolved =
                     (userDoc.analytics.lifetime.puzzlesSolved || 0) +
                         (firstTime ? 1 : 0);
-                userDoc.analytics.lifetime.totalPoints =
-                    (userDoc.analytics.lifetime.totalPoints || 0) + pointsEarned;
             }
             // successRate = puzzlesSolved / attempts
             if (userDoc.analytics.lifetime.attempts > 0) {
@@ -442,10 +440,6 @@ exports.submitCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
                         referral.successfulAt = new Date();
                         referral.pointsAwarded = REFERRAL_POINTS;
                         yield referral.save();
-                        // Credit bonus points to the referrer's lifetime analytics
-                        yield user_model_1.default.findByIdAndUpdate(referral.referrerId, {
-                            $inc: { "analytics.lifetime.totalPoints": REFERRAL_POINTS },
-                        });
                         yield referralEvent_model_1.default.create({
                             referrerId: referral.referrerId,
                             referredUserId: referral.referredUserId,

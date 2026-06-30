@@ -19,6 +19,13 @@ const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.m
 const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
 const referral_model_1 = __importDefault(require("../models/referral.model"));
+// Returns the set of user IDs who have opted out of the leaderboard
+function getHiddenUserIds() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const hiddenUsers = yield user_model_1.default.find({ "privacy.showOnLeaderboard": false }, { _id: 1 }).lean();
+        return new Set(hiddenUsers.map((u) => String(u._id)));
+    });
+}
 // Get current week's leaderboard (puzzle points only — no referral breakdown for weekly)
 exports.getWeeklyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -48,7 +55,10 @@ exports.getWeeklyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res,
             { $sort: { points: -1, avgTime: 1, puzzlesSolved: -1 } },
             { $limit: 100 },
         ]);
-        const entries = agg.map((a) => ({
+        const hiddenIds = yield getHiddenUserIds();
+        const entries = agg
+            .filter((a) => !hiddenIds.has(String(a._id)))
+            .map((a) => ({
             userId: a._id,
             puzzlesSolved: a.puzzlesSolved,
             points: a.points,
@@ -94,8 +104,10 @@ exports.getWeeklyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res,
     }
 }));
 // Build monthly leaderboard entries for a given month range (live computation)
-function buildMonthlyEntries(monthStart, monthEnd) {
+function buildMonthlyEntries(monthStart, monthEnd, hiddenIds) {
     return __awaiter(this, void 0, void 0, function* () {
+        if (!hiddenIds)
+            hiddenIds = yield getHiddenUserIds();
         // Puzzle points earned this month
         const puzzleAgg = yield puzzleAttempt_model_1.default.aggregate([
             {
@@ -150,8 +162,9 @@ function buildMonthlyEntries(monthStart, monthEnd) {
             existing.referralCount = r.referralCount;
             userMap.set(uid, existing);
         }
-        // Sort by totalPoints desc, then puzzlePoints desc
+        // Sort by totalPoints desc, then puzzlePoints desc; exclude hidden users
         return Array.from(userMap.entries())
+            .filter(([userId]) => !hiddenIds.has(userId))
             .map(([userId, data]) => ({
             userId,
             puzzlePoints: data.puzzlePoints,
@@ -326,7 +339,10 @@ exports.getAllTimeLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res
             { $sort: { points: -1, avgTime: 1, puzzlesSolved: -1 } },
             { $limit: 100 },
         ]);
-        const entries = agg.map((a) => ({
+        const hiddenIds = yield getHiddenUserIds();
+        const entries = agg
+            .filter((a) => !hiddenIds.has(String(a._id)))
+            .map((a) => ({
             userId: a._id,
             puzzlesSolved: a.puzzlesSolved,
             points: a.points,

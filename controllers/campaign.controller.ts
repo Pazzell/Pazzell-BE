@@ -510,8 +510,6 @@ export const submitCampaign = CatchAsyncError(
           userDoc.analytics.lifetime.puzzlesSolved =
             (userDoc.analytics.lifetime.puzzlesSolved || 0) +
             (firstTime ? 1 : 0);
-          userDoc.analytics.lifetime.totalPoints =
-            (userDoc.analytics.lifetime.totalPoints || 0) + pointsEarned;
         }
         // successRate = puzzlesSolved / attempts
         if (userDoc.analytics.lifetime.attempts > 0) {
@@ -545,11 +543,6 @@ export const submitCampaign = CatchAsyncError(
               referral.successfulAt = new Date();
               referral.pointsAwarded = REFERRAL_POINTS;
               await referral.save();
-
-              // Credit bonus points to the referrer's lifetime analytics
-              await UserModel.findByIdAndUpdate(referral.referrerId, {
-                $inc: { "analytics.lifetime.totalPoints": REFERRAL_POINTS },
-              });
 
               await ReferralEventModel.create({
                 referrerId: referral.referrerId,

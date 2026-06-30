@@ -425,15 +425,39 @@ export const getGamerProfile = CatchAsyncError(
         999
       );
 
+      // Current-month puzzle points (computed live — same source as leaderboard)
+      const monthlyPuzzleAgg = await PuzzleAttemptModel.aggregate([
+        {
+          $match: {
+            userId: String(userId),
+            pointsEarned: { $gt: 0 },
+            timestamp: { $gte: monthStart, $lte: monthEnd },
+          },
+        },
+        { $group: { _id: null, puzzlePoints: { $sum: "$pointsEarned" } } },
+      ]);
+      const monthlyPuzzlePoints = monthlyPuzzleAgg[0]?.puzzlePoints || 0;
+
+      // Current-month referral bonus points
+      const monthlyReferralAgg = await ReferralModel.aggregate([
+        {
+          $match: {
+            referrerId: String(userId),
+            successful: true,
+            successfulAt: { $gte: monthStart, $lte: monthEnd },
+          },
+        },
+        { $group: { _id: null, referralPoints: { $sum: "$pointsAwarded" }, referralCount: { $sum: 1 } } },
+      ]);
+      const monthlyReferralPoints = monthlyReferralAgg[0]?.referralPoints || 0;
+      const monthlyReferralCount = monthlyReferralAgg[0]?.referralCount || 0;
+      const monthlyTotalPoints = monthlyPuzzlePoints + monthlyReferralPoints;
+
       // All referrals this user has ever made (pending + successful)
       const allMyReferrals = await ReferralModel.find({
         referrerId: String(userId),
       }).lean();
       const successfulReferrals = allMyReferrals.filter((r: any) => r.successful);
-      const totalReferralPoints = successfulReferrals.reduce(
-        (sum: number, r: any) => sum + (r.pointsAwarded || 0),
-        0
-      );
 
       // Monthly referral leaderboard position (competitive ranking)
       const referralAgg = await ReferralModel.aggregate([
@@ -468,11 +492,16 @@ export const getGamerProfile = CatchAsyncError(
           avatar: user.avatar,
           role: user.role,
           isVerified: user.isVerified,
+          // Points shown on the dashboard — current month only, resets at month end
+          points: {
+            monthKey,
+            puzzlePoints: monthlyPuzzlePoints,
+            referralPoints: monthlyReferralPoints,
+            totalPoints: monthlyTotalPoints,
+          },
           analytics: {
             lifetime: {
               puzzlesSolved: user.analytics?.lifetime?.puzzlesSolved || 0,
-              totalPoints: user.analytics?.lifetime?.totalPoints || 0,
-              totalEarnings: user.analytics?.lifetime?.totalEarnings || 0,
               totalTime: user.analytics?.lifetime?.totalTime || 0,
               totalMoves: user.analytics?.lifetime?.totalMoves || 0,
               attempts: user.analytics?.lifetime?.attempts || 0,
@@ -484,7 +513,6 @@ export const getGamerProfile = CatchAsyncError(
               weekEnd: weekEnd.toISOString().slice(0, 10),
               puzzlesSolved: weeklyStats.puzzlesSolved,
               totalPoints: weeklyStats.totalPoints,
-              totalEarnings: weeklyStats.totalEarnings,
               totalTime: weeklyStats.totalTime,
               totalMoves: weeklyStats.totalMoves,
               attempts: weeklyStats.attempts,
@@ -496,11 +524,22 @@ export const getGamerProfile = CatchAsyncError(
               totalReferrals: allMyReferrals.length,
               successfulReferrals: successfulReferrals.length,
               pendingReferrals: allMyReferrals.length - successfulReferrals.length,
-              totalPointsEarned: totalReferralPoints,
+              pointsThisMonth: monthlyReferralPoints,
+              referralCountThisMonth: monthlyReferralCount,
               leaderboardPosition: referralIndex !== -1 ? referralIndex + 1 : null,
             },
           },
           puzzlesSolved: user.puzzlesSolved,
+          notifications: (user as any).notifications || {
+            emailNotifications: true,
+            referralBonusAlerts: true,
+            leaderboardUpdates: true,
+            newCampaignAlerts: true,
+            weeklyDigest: true,
+          },
+          privacy: (user as any).privacy || {
+            showOnLeaderboard: true,
+          },
           createdAt: (user as any).createdAt,
           updatedAt: (user as any).updatedAt,
         },
@@ -780,6 +819,183 @@ export const getAllGamers = CatchAsyncError(
       res.status(200).json({ success: true, gamers });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
+    }
+  }
+);
+
+// PATCH /profile/change-password
+export const changePassword = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id as string;
+      const { currentPassword, newPassword } = req.body;
+
+      if (!currentPassword || !newPassword) {
+        return next(
+          new ErrorHandler("currentPassword and newPassword are required", 400)
+        );
+      }
+      if (newPassword.length < 6) {
+        return next(
+          new ErrorHandler("New password must be at least 6 characters", 400)
+        );
+      }
+
+      const user = await userModel.findById(userId).select("+password");
+      if (!user) return next(new ErrorHandler("User not found", 404));
+
+      if (!user.password) {
+        return next(
+          new ErrorHandler(
+            "This account uses Google Sign-In and has no password set",
+            400
+          )
+        );
+      }
+
+      const isMatch = await user.comparePassword!(currentPassword);
+      if (!isMatch) {
+        return next(new ErrorHandler("Current password is incorrect", 401));
+      }
+
+      user.password = newPassword;
+      await user.save();
+
+      res
+        .status(200)
+        .json({ success: true, message: "Password changed successfully" });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+// PATCH /profile/notifications
+export const updateNotifications = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id as string;
+      const {
+        emailNotifications,
+        referralBonusAlerts,
+        leaderboardUpdates,
+        newCampaignAlerts,
+        weeklyDigest,
+      } = req.body;
+
+      const update: Record<string, boolean> = {};
+      if (typeof emailNotifications === "boolean")
+        update["notifications.emailNotifications"] = emailNotifications;
+      if (typeof referralBonusAlerts === "boolean")
+        update["notifications.referralBonusAlerts"] = referralBonusAlerts;
+      if (typeof leaderboardUpdates === "boolean")
+        update["notifications.leaderboardUpdates"] = leaderboardUpdates;
+      if (typeof newCampaignAlerts === "boolean")
+        update["notifications.newCampaignAlerts"] = newCampaignAlerts;
+      if (typeof weeklyDigest === "boolean")
+        update["notifications.weeklyDigest"] = weeklyDigest;
+
+      if (Object.keys(update).length === 0) {
+        return next(
+          new ErrorHandler("No valid notification fields provided", 400)
+        );
+      }
+
+      const updated = await userModel
+        .findByIdAndUpdate(userId, { $set: update }, { new: true })
+        .select("notifications");
+
+      if (!updated) return next(new ErrorHandler("User not found", 404));
+
+      res.status(200).json({
+        success: true,
+        message: "Notification preferences saved",
+        notifications: updated.notifications,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+// PATCH /profile/privacy
+export const updatePrivacy = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id as string;
+      const { showOnLeaderboard } = req.body;
+
+      if (typeof showOnLeaderboard !== "boolean") {
+        return next(
+          new ErrorHandler("showOnLeaderboard must be a boolean", 400)
+        );
+      }
+
+      const updated = await userModel
+        .findByIdAndUpdate(
+          userId,
+          { $set: { "privacy.showOnLeaderboard": showOnLeaderboard } },
+          { new: true }
+        )
+        .select("privacy");
+
+      if (!updated) return next(new ErrorHandler("User not found", 404));
+
+      res.status(200).json({
+        success: true,
+        message: "Privacy settings saved",
+        privacy: updated.privacy,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+// DELETE /profile/account — requires password confirmation
+export const deleteAccount = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id as string;
+      const { password } = req.body;
+
+      if (!password) {
+        return next(
+          new ErrorHandler("Password is required to delete your account", 400)
+        );
+      }
+
+      const user = await userModel.findById(userId).select("+password");
+      if (!user) return next(new ErrorHandler("User not found", 404));
+
+      if (!user.password) {
+        return next(
+          new ErrorHandler(
+            "This account uses Google Sign-In. Contact support to delete your account.",
+            400
+          )
+        );
+      }
+
+      const isMatch = await user.comparePassword!(password);
+      if (!isMatch) {
+        return next(new ErrorHandler("Incorrect password", 401));
+      }
+
+      await userModel.findByIdAndDelete(userId);
+
+      // Clear session cookies and redis
+      res.cookie("access_token", "", { maxAge: 1 });
+      res.cookie("refresh_token", "", { maxAge: 1 });
+      try {
+        await redis.del(userId);
+      } catch (_) {}
+
+      res
+        .status(200)
+        .json({ success: true, message: "Account deleted successfully" });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
     }
   }
 );
