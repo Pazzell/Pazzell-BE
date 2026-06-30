@@ -26,7 +26,7 @@ const storageFactory_1 = require("../services/storage/storageFactory");
 const axios_1 = __importDefault(require("axios"));
 // Points awarded to the referrer once their referred user's referral is
 // marked successful (first solved puzzle)
-const REFERRAL_POINTS = 1;
+const REFERRAL_POINTS = 3;
 // Helper function to check and update expired campaigns
 const updateExpiredCampaigns = () => __awaiter(void 0, void 0, void 0, function* () {
     const now = new Date();
@@ -374,9 +374,9 @@ exports.submitCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         let pointsEarned = 0;
         if (canEarnPointsNow) {
             const FIXED_POINTS = {
-                spot_the_difference: 2,
-                card_matching: 3,
-                sliding_puzzle: 4,
+                spot_the_difference: 1,
+                card_matching: 1,
+                sliding_puzzle: 2,
                 word_hunt: 1,
             };
             pointsEarned = FIXED_POINTS[campaign.gameType] || 0;
@@ -442,6 +442,10 @@ exports.submitCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
                         referral.successfulAt = new Date();
                         referral.pointsAwarded = REFERRAL_POINTS;
                         yield referral.save();
+                        // Credit bonus points to the referrer's lifetime analytics
+                        yield user_model_1.default.findByIdAndUpdate(referral.referrerId, {
+                            $inc: { "analytics.lifetime.totalPoints": REFERRAL_POINTS },
+                        });
                         yield referralEvent_model_1.default.create({
                             referrerId: referral.referrerId,
                             referredUserId: referral.referredUserId,
