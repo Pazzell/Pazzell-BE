@@ -6,6 +6,7 @@ import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import { paystackService } from "../services/payment";
 import { getPaymentQueue } from "../services/queue/queueFactory";
 import { getNotificationService } from "../services/notification/notificationFactory";
+import { getWeeklyPrice } from "../services/config/config.service";
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
@@ -172,6 +173,69 @@ export const calculateProration = CatchAsyncError(
       return next(
         new ErrorHandler(
           `Failed to calculate proration: ${error.message}`,
+          500
+        )
+      );
+    }
+  }
+);
+
+// Weekly pricing for v2 campaigns: amount = weeks × tier weekly price (config-driven,
+// currently ₦7,000/week basic, ₦10,000/week premium — see services/config/config.service.ts).
+// Replaces computeProration()/endMonth for all new (schemaVersion:2) campaign creation;
+// computeProration() above is left in place, unused by the new flow, for any still-draft
+// legacy campaigns relying on it.
+export async function computeWeeklyPricing(
+  packageType: "basic" | "premium",
+  durationWeeks: number
+) {
+  if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+    throw new Error("durationWeeks must be a positive number");
+  }
+  const weeklyPrice = await getWeeklyPrice(packageType);
+  const totalAmount = Math.round(weeklyPrice * durationWeeks);
+  const timeLimitHours = durationWeeks * 7 * 24;
+
+  return {
+    packageType,
+    weeklyPrice,
+    durationWeeks,
+    totalAmount,
+    timeLimitHours,
+  };
+}
+
+// GET /payments/calculate-weekly-price?packageType=basic&weeks=2
+export const calculateWeeklyPrice = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { packageType, weeks } = req.query as {
+        packageType?: string;
+        weeks?: string;
+      };
+
+      if (!packageType || !["basic", "premium"].includes(packageType)) {
+        return next(
+          new ErrorHandler("packageType must be 'basic' or 'premium'", 400)
+        );
+      }
+      const durationWeeks = Number(weeks);
+      if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+        return next(
+          new ErrorHandler("weeks must be a positive number", 400)
+        );
+      }
+
+      const result = await computeWeeklyPricing(
+        packageType as "basic" | "premium",
+        durationWeeks
+      );
+
+      res.status(200).json({ success: true, pricing: result });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(
+          `Failed to calculate weekly price: ${error.message}`,
           500
         )
       );

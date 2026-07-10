@@ -7,6 +7,11 @@ import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import LeaderboardModel from "../models/leaderboard.model";
 import ReferralModel from "../models/referral.model";
 import { getStorageService } from "../services/storage/storageFactory";
+import { getWeekBounds } from "../utils/weekBoundary";
+import {
+  getUnifiedWeeklyEntries,
+  getUserWeeklyRank,
+} from "../services/leaderboard.service";
 
 import ejs from "ejs";
 import path from "path";
@@ -303,48 +308,16 @@ export const getGamerProfile = CatchAsyncError(
         return next(new ErrorHandler("User not found", 404));
       }
 
-      // Calculate current week's leaderboard position
+      // Calculate current week's leaderboard position (unified weekly source —
+      // see services/leaderboard.service.ts)
       const now = new Date();
-      const dayOfWeek = now.getDay();
-      const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-
-      const weekStart = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate() - daysFromMonday
+      const { weekStart, weekEnd, weekKey } = getWeekBounds(now);
+      const weeklyLeaderboardPosition = await getUserWeeklyRank(
+        String(userId),
+        weekStart,
+        weekEnd,
+        weekKey
       );
-      weekStart.setHours(0, 0, 0, 0);
-
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 6);
-      weekEnd.setHours(23, 59, 59, 999);
-
-      // Get current week's leaderboard for position
-      const weeklyLeaderboard = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            firstTimeSolved: true,
-            timestamp: { $gte: weekStart, $lte: weekEnd },
-          },
-        },
-        {
-          $group: {
-            _id: "$userId",
-            puzzlesSolved: { $sum: 1 },
-            points: { $sum: "$pointsEarned" },
-          },
-        },
-        { $sort: { puzzlesSolved: -1, points: -1 } },
-      ]);
-
-      // Find user's weekly leaderboard position
-      let weeklyLeaderboardPosition = null;
-      const weeklyUserIndex = weeklyLeaderboard.findIndex(
-        (entry: any) => entry._id.toString() === userId.toString()
-      );
-      if (weeklyUserIndex !== -1) {
-        weeklyLeaderboardPosition = weeklyUserIndex + 1;
-      }
 
       // Get all-time leaderboard for position
       const allTimeLeaderboard = await PuzzleAttemptModel.aggregate([
@@ -411,75 +384,41 @@ export const getGamerProfile = CatchAsyncError(
           : 0;
       weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
 
-      const monthKey = `${now.getFullYear()}-${String(
-        now.getMonth() + 1
-      ).padStart(2, "0")}`;
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthEnd = new Date(
-        now.getFullYear(),
-        now.getMonth() + 1,
-        0,
-        23,
-        59,
-        59,
-        999
+      // Authoritative weekly total — same unified source as the public weekly
+      // leaderboard (legacy attempt points + all PointsLedger sources,
+      // including new-mechanism referral/winner-share bonuses).
+      const unifiedWeeklyEntries = await getUnifiedWeeklyEntries(
+        weekStart,
+        weekEnd,
+        weekKey
       );
+      const myUnifiedEntry = unifiedWeeklyEntries.find(
+        (e) => String(e.userId) === String(userId)
+      );
+      const weeklyTotalPoints = myUnifiedEntry?.points || 0;
 
-      // Current-month puzzle points (computed live — same source as leaderboard)
-      const monthlyPuzzleAgg = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            userId: String(userId),
-            pointsEarned: { $gt: 0 },
-            timestamp: { $gte: monthStart, $lte: monthEnd },
-          },
-        },
-        { $group: { _id: null, puzzlePoints: { $sum: "$pointsEarned" } } },
-      ]);
-      const monthlyPuzzlePoints = monthlyPuzzleAgg[0]?.puzzlePoints || 0;
-
-      // Current-month referral bonus points
-      const monthlyReferralAgg = await ReferralModel.aggregate([
+      // Referral stats shown separately (informational — legacy-mechanism
+      // referral crediting on frozen v1 campaigns bypasses the points ledger,
+      // so this is not summed into weeklyTotalPoints to avoid double-counting
+      // new-mechanism referral bonuses already folded into it above).
+      const weeklyReferralAgg = await ReferralModel.aggregate([
         {
           $match: {
             referrerId: String(userId),
             successful: true,
-            successfulAt: { $gte: monthStart, $lte: monthEnd },
+            successfulAt: { $gte: weekStart, $lte: weekEnd },
           },
         },
         { $group: { _id: null, referralPoints: { $sum: "$pointsAwarded" }, referralCount: { $sum: 1 } } },
       ]);
-      const monthlyReferralPoints = monthlyReferralAgg[0]?.referralPoints || 0;
-      const monthlyReferralCount = monthlyReferralAgg[0]?.referralCount || 0;
-      const monthlyTotalPoints = monthlyPuzzlePoints + monthlyReferralPoints;
+      const weeklyReferralPoints = weeklyReferralAgg[0]?.referralPoints || 0;
+      const weeklyReferralCount = weeklyReferralAgg[0]?.referralCount || 0;
 
       // All referrals this user has ever made (pending + successful)
       const allMyReferrals = await ReferralModel.find({
         referrerId: String(userId),
       }).lean();
       const successfulReferrals = allMyReferrals.filter((r: any) => r.successful);
-
-      // Monthly referral leaderboard position (competitive ranking)
-      const referralAgg = await ReferralModel.aggregate([
-        {
-          $match: {
-            successful: true,
-            successfulAt: { $gte: monthStart, $lte: monthEnd },
-          },
-        },
-        {
-          $group: {
-            _id: "$referrerId",
-            successfulCount: { $sum: 1 },
-            pointsEarned: { $sum: "$pointsAwarded" },
-          },
-        },
-        { $sort: { pointsEarned: -1, successfulCount: -1 } },
-      ]);
-
-      const referralIndex = referralAgg.findIndex(
-        (entry: any) => String(entry._id) === String(userId)
-      );
 
       res.status(200).json({
         success: true,
@@ -492,12 +431,11 @@ export const getGamerProfile = CatchAsyncError(
           avatar: user.avatar,
           role: user.role,
           isVerified: user.isVerified,
-          // Points shown on the dashboard — current month only, resets at month end
+          // Points shown on the dashboard — current week only, resets at week end.
+          // totalPoints is the same unified source as the public weekly leaderboard.
           points: {
-            monthKey,
-            puzzlePoints: monthlyPuzzlePoints,
-            referralPoints: monthlyReferralPoints,
-            totalPoints: monthlyTotalPoints,
+            weekKey,
+            totalPoints: weeklyTotalPoints,
           },
           analytics: {
             lifetime: {
@@ -520,13 +458,12 @@ export const getGamerProfile = CatchAsyncError(
               leaderboardPosition: weeklyLeaderboardPosition,
             },
             referral: {
-              monthKey,
+              weekKey,
               totalReferrals: allMyReferrals.length,
               successfulReferrals: successfulReferrals.length,
               pendingReferrals: allMyReferrals.length - successfulReferrals.length,
-              pointsThisMonth: monthlyReferralPoints,
-              referralCountThisMonth: monthlyReferralCount,
-              leaderboardPosition: referralIndex !== -1 ? referralIndex + 1 : null,
+              pointsThisWeek: weeklyReferralPoints,
+              referralCountThisWeek: weeklyReferralCount,
             },
           },
           puzzlesSolved: user.puzzlesSolved,

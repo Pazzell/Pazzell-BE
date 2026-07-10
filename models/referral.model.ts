@@ -4,9 +4,13 @@ export interface IReferral extends Document {
   referrerId: string;
   referredUserId: string;
   referredAt: Date;
-  successful: boolean; // becomes true after referred user completes first puzzle
+  // becomes true once the referred user's lifetime points cross the
+  // configured threshold (referral.pointsThreshold, default 21 — i.e. ~3
+  // session completions at 7pts each). See referral.service.ts
+  // checkReferralQualification, called after every points-ledger award.
+  successful: boolean;
   successfulAt?: Date;
-  pointsAwarded: number; // points credited to the referrer once successful
+  pointsAwarded: number; // points credited to the referrer once successful (config-driven, default 5)
 }
 
 const referralSchema: Schema<IReferral> = new mongoose.Schema(

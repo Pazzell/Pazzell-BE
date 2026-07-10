@@ -11,6 +11,15 @@ export const connectTestDB = async () => {
   mongo = await MongoMemoryServer.create();
   const uri = mongo.getUri();
   await mongoose.connect(uri);
+
+  // Mongoose builds indexes in the background after a model is first
+  // registered — without waiting for them, tests that exercise a unique
+  // index (e.g. race-condition/duplicate guards) can flake because the
+  // index isn't ready yet when the first writes land. Wait for every
+  // currently-registered model's indexes to finish building.
+  await Promise.all(
+    Object.values(mongoose.connection.models).map((model) => model.init())
+  );
 };
 
 export const clearTestDB = async () => {

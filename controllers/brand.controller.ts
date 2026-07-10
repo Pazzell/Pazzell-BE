@@ -7,9 +7,25 @@ import { getStorageService } from "../services/storage/storageFactory";
 import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
 import PackageModel from "../models/package.model";
-import { computeProration } from "./payment.controller";
+import { computeWeeklyPricing } from "./payment.controller";
+import { getQuizQuestionCount } from "../services/config/config.service";
+import {
+  validateVideoUpload,
+  VideoValidationError,
+} from "../services/video/videoValidation.service";
 
-// Create a puzzle campaign (brands only). Expects multipart upload with one file: "image" (used for both scrambled and original)
+const ALL_GAME_TYPES = [
+  "sliding_puzzle",
+  "card_matching",
+  "spot_the_difference",
+  "word_hunt",
+] as const;
+
+// Create a multi-game puzzle campaign (brands only). All new campaigns span
+// all four game types in a single submission. Expects multipart upload with
+// two files: "image" (feeds sliding tiles + spot-the-difference) and "video"
+// (~2 minutes, feeds the end-of-session quiz stage — quiz questions are
+// authored manually by the brand, not AI-generated).
 export const createCampaign = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -21,16 +37,13 @@ export const createCampaign = CatchAsyncError(
         questions,
         title,
         description,
-        gameType,
         words,
         packageId,
         brandUrl,
         campaignUrl,
-        videoUrl,
-        timeLimit,
-        weeksToRun,
-        endMonth, // YYYY-MM: prorated end month (preferred over timeLimit/weeksToRun)
-        passage,
+        prizeDescription,
+        prizeUnitsAvailable,
+        durationWeeks,
       } = req.body;
 
       // Validate packageId
@@ -43,19 +56,19 @@ export const createCampaign = CatchAsyncError(
         );
       }
 
-      // Verify package exists
       const packageData = await PackageModel.findById(packageId);
       if (!packageData) {
         return next(
           new ErrorHandler("Invalid package. Package not found.", 404)
         );
       }
-
       if (!packageData.isActive) {
         return next(new ErrorHandler("Selected package is not available", 400));
       }
+      const packageType =
+        packageData.name?.toLowerCase() === "premium" ? "premium" : "basic";
 
-      // validate required fields
+      // validate required text fields
       if (!title || typeof title !== "string" || title.trim() === "") {
         return next(
           new ErrorHandler(
@@ -76,32 +89,51 @@ export const createCampaign = CatchAsyncError(
           )
         );
       }
-
-      // Validate gameType field
-      const validGameTypes = [
-        "sliding_puzzle",
-        "card_matching",
-        "spot_the_difference",
-        "word_hunt",
-      ];
-      const campaignGameType = gameType || "sliding_puzzle";
-      if (!validGameTypes.includes(campaignGameType)) {
+      if (
+        !prizeDescription ||
+        typeof prizeDescription !== "string" ||
+        prizeDescription.trim() === ""
+      ) {
         return next(
           new ErrorHandler(
-            "gameType must be one of: sliding_puzzle, card_matching, spot_the_difference, word_hunt",
+            "prizeDescription is required and must be a non-empty string",
             400
           )
         );
       }
 
-      // Parse words array if it's a string (from form-data)
+      let parsedPrizeUnits = 1;
+      if (prizeUnitsAvailable !== undefined && prizeUnitsAvailable !== null && prizeUnitsAvailable !== "") {
+        parsedPrizeUnits = Number(prizeUnitsAvailable);
+        if (!Number.isFinite(parsedPrizeUnits) || parsedPrizeUnits < 1) {
+          return next(
+            new ErrorHandler(
+              "prizeUnitsAvailable must be a positive number",
+              400
+            )
+          );
+        }
+      }
+
+      // Duration: weeks only (weekly billing revert — replaces endMonth/timeLimit/weeksToRun)
+      const parsedDurationWeeks = Number(durationWeeks);
+      if (!Number.isFinite(parsedDurationWeeks) || parsedDurationWeeks <= 0) {
+        return next(
+          new ErrorHandler(
+            "durationWeeks is required and must be a positive number",
+            400
+          )
+        );
+      }
+
+      // Bag of words for word_hunt — now always required since every campaign
+      // includes all four game types.
       let parsedWords: string[] = [];
       if (words) {
         if (typeof words === "string") {
           try {
             parsedWords = JSON.parse(words);
           } catch {
-            // If parsing fails, try splitting by comma
             parsedWords = words
               .split(",")
               .map((w) => w.trim())
@@ -111,17 +143,13 @@ export const createCampaign = CatchAsyncError(
           parsedWords = words;
         }
       }
-
-      // For word_hunt games, validate words array
-      if (campaignGameType === "word_hunt") {
-        if (!parsedWords || parsedWords.length === 0) {
-          return next(
-            new ErrorHandler(
-              "words array is required for word_hunt games and must contain at least one word",
-              400
-            )
-          );
-        }
+      if (!parsedWords || parsedWords.length === 0) {
+        return next(
+          new ErrorHandler(
+            "words array is required (bag of words for the word hunt game) and must contain at least one word",
+            400
+          )
+        );
       }
 
       // Get brand profile (no restriction on number of campaigns)
@@ -130,53 +158,60 @@ export const createCampaign = CatchAsyncError(
         return next(new ErrorHandler("Brand profile not found", 404));
       }
 
-      const packageType =
-        packageData.name?.toLowerCase() === "premium" ? "premium" : "basic";
+      // multer .fields() stores uploads keyed by field name
+      const files = (req as any).files as
+        | Record<string, Express.Multer.File[]>
+        | undefined;
+      const imageFile = files?.image?.[0];
+      const videoFile = files?.video?.[0];
 
-      // multer stores single-file upload in req.file
-      const uploadedFile: any = (req as any).file;
-
-      if (!uploadedFile) {
+      if (!imageFile) {
         return next(
           new ErrorHandler(
-            'Missing image file. Please upload using field name "image"',
+            'Missing brand image file. Please upload using field name "image"',
+            400
+          )
+        );
+      }
+      if (!videoFile) {
+        return next(
+          new ErrorHandler(
+            'Missing video file. Please upload using field name "video"',
             400
           )
         );
       }
 
-      const now = Date.now();
-      const puzzleName = `puzzles/${now}-${uploadedFile.originalname}`;
+      // Validate video duration/size before uploading anything
+      let videoMeta;
+      try {
+        videoMeta = await validateVideoUpload({
+          buffer: videoFile.buffer,
+          mimetype: videoFile.mimetype,
+          originalname: videoFile.originalname,
+        });
+      } catch (e: any) {
+        if (e instanceof VideoValidationError) {
+          return next(new ErrorHandler(e.message, 400));
+        }
+        throw e;
+      }
 
-      const storage = getStorageService();
-      const result = await storage.uploadFile({
-        buffer: uploadedFile.buffer,
-        mimetype: uploadedFile.mimetype,
-        originalname: puzzleName.substring(puzzleName.indexOf("/") + 1),
-        folder: "puzzles",
-        fileName: puzzleName.substring(puzzleName.indexOf("/") + 1),
-      });
-      const puzzleUrl = result.url;
-
-      // parse questions (expected as JSON string or array)
+      // Quiz questions: brand-authored (no AI generation), exactly N questions
+      // (config-driven, default 3).
       let parsedQuestions: any[] = [];
-      const rawQuestions =
-        questions ?? req.body?.questions ?? req.body?.question;
-
+      const rawQuestions = questions ?? req.body?.question;
       const tryParse = (val: string) => {
         try {
           return JSON.parse(val);
         } catch {
-          // try a simple fix: replace single quotes with double quotes
           try {
-            const fixed = val.replace(/'/g, '"');
-            return JSON.parse(fixed);
+            return JSON.parse(val.replace(/'/g, '"'));
           } catch {
             return null;
           }
         }
       };
-
       if (typeof rawQuestions === "string" && rawQuestions.trim() !== "") {
         const parsed = tryParse(rawQuestions);
         if (parsed === null) {
@@ -191,19 +226,23 @@ export const createCampaign = CatchAsyncError(
       } else if (Array.isArray(rawQuestions)) {
         parsedQuestions = rawQuestions;
       } else if (rawQuestions && typeof rawQuestions === "object") {
-        // handle cases where form-data produced an object with numeric keys
         const vals = Object.values(rawQuestions);
-        if (vals.length && vals.every((v) => typeof v === "object"))
-          parsedQuestions = vals as any[];
-        else parsedQuestions = [];
-      } else {
-        parsedQuestions = [];
+        parsedQuestions =
+          vals.length && vals.every((v) => typeof v === "object")
+            ? (vals as any[])
+            : [];
       }
 
-      // validate parsedQuestions
-      if (!Array.isArray(parsedQuestions) || parsedQuestions.length === 0) {
+      const requiredQuestionCount = await getQuizQuestionCount();
+      if (
+        !Array.isArray(parsedQuestions) ||
+        parsedQuestions.length !== requiredQuestionCount
+      ) {
         return next(
-          new ErrorHandler("Missing or invalid questions array", 400)
+          new ErrorHandler(
+            `questions must be an array of exactly ${requiredQuestionCount} brand-authored quiz questions`,
+            400
+          )
         );
       }
       for (const q of parsedQuestions) {
@@ -222,99 +261,69 @@ export const createCampaign = CatchAsyncError(
         }
       }
 
-      // helper to robustly parse numeric fields from multipart/form-data
-      const getNumericFromBody = (fieldName: string) => {
-        let v: any = req.body?.[fieldName];
-        if (Array.isArray(v)) v = v[0];
-        if (v && typeof v === "object") {
-          const vals = Object.values(v);
-          if (vals.length) v = vals[0];
-        }
-        if (typeof v === "string") {
-          const cleaned = v.replace(/[^0-9.-]/g, "").trim();
-          if (cleaned === "") return null;
-          const n = Number(cleaned);
-          return Number.isFinite(n) ? n : null;
-        }
-        const n = Number(v);
-        return Number.isFinite(n) ? n : null;
-      };
-
-      // Determine timeLimit and charge amount
-      // Priority: endMonth (prorated) > timeLimit (hours) > weeksToRun (weeks)
-      let parsedTimeLimit: number;
-      let chargedAmount: number;
-
-      if (endMonth && /^\d{4}-\d{2}$/.test(String(endMonth))) {
-        // Prorated monthly pricing
-        let proration;
-        try {
-          proration = computeProration(packageType, String(endMonth));
-        } catch (e: any) {
-          return next(new ErrorHandler(e.message, 400));
-        }
-        parsedTimeLimit = proration.timeLimitHours;
-        chargedAmount = proration.totalAmount;
-      } else {
-        // Legacy: timeLimit in hours or weeksToRun
-        const rawTimeLimit =
-          timeLimit ?? (weeksToRun ? Number(weeksToRun) * 7 * 24 : undefined);
-        parsedTimeLimit = Number(rawTimeLimit);
-        if (!rawTimeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
-          return next(
-            new ErrorHandler(
-              "endMonth (YYYY-MM), timeLimit (hours), or weeksToRun (weeks) is required",
-              400
-            )
-          );
-        }
-        // Fallback flat pricing: one full month rate
-        const PACKAGE_PRICES: Record<string, number> = {
-          basic: 7000,
-          premium: 10000,
-        };
-        chargedAmount = PACKAGE_PRICES[packageType] || 7000;
+      // Weekly pricing: amount = weeks × tier weekly price
+      let pricing;
+      try {
+        pricing = await computeWeeklyPricing(packageType, parsedDurationWeeks);
+      } catch (e: any) {
+        return next(new ErrorHandler(e.message, 400));
       }
 
-      // Set placeholder dates — actual dates are set when payment is verified
+      // Upload brand image and video
+      const storage = getStorageService();
+      const ts = Date.now();
+
+      const imageUploadName = `${ts}-${imageFile.originalname}`;
+      const imageResult = await storage.uploadFile({
+        buffer: imageFile.buffer,
+        mimetype: imageFile.mimetype,
+        originalname: imageUploadName,
+        folder: "puzzles",
+        fileName: imageUploadName,
+      });
+
+      const videoUploadName = `${ts}-${videoFile.originalname}`;
+      const videoResult = await storage.uploadFile({
+        buffer: videoFile.buffer,
+        mimetype: videoFile.mimetype,
+        originalname: videoUploadName,
+        folder: "campaign-videos",
+        fileName: videoUploadName,
+      });
+
+      // Placeholder dates — actual dates are set when payment is verified (draft -> active)
       const currentDate = new Date();
       const placeholderEndDate = new Date(
-        currentDate.getTime() + parsedTimeLimit * 60 * 60 * 1000
+        currentDate.getTime() + pricing.timeLimitHours * 60 * 60 * 1000
       );
 
-      const days = Math.max(1, Math.ceil(parsedTimeLimit / 24));
-      const dailyAllocation = Number((chargedAmount / days).toFixed(2));
-
-      // Validate passage if provided
-      if (passage !== undefined && passage !== null && passage !== "") {
-        const passageTrimmed = String(passage).trim();
-        if (passageTrimmed.length > 1000) {
-          return next(
-            new ErrorHandler("passage must be 1000 characters or less", 400)
-          );
-        }
-      }
-
-      // Prepare campaign data
-      // All new campaigns start as draft until payment is verified
       const campaignData: any = {
         brandId: brandUser._id,
-        packageId: packageId,
-        packageType: packageType,
-        gameType: campaignGameType,
+        packageId,
+        packageType,
+        schemaVersion: 2,
+        gameType: "sliding_puzzle", // legacy required field — v2 campaigns use gameTypes[] instead
+        gameTypes: ALL_GAME_TYPES,
         title: title.trim(),
         description: description.trim(),
         brandUrl: brandUrl?.trim() || null,
         campaignUrl: campaignUrl?.trim() || null,
-        videoUrl: videoUrl?.trim() || null,
-        puzzleImageUrl: puzzleUrl,
-        passage: passage ? String(passage).trim() : undefined,
+        videoUrl: videoResult.url,
+        videoDurationSeconds: videoMeta.durationSeconds,
+        videoSizeBytes: videoMeta.sizeBytes,
+        videoMimeType: videoMeta.mimeType,
+        puzzleImageUrl: imageResult.url,
         questions: parsedQuestions,
-        timeLimit: parsedTimeLimit,
+        words: parsedWords,
+        prizeDescription: prizeDescription.trim(),
+        prizeUnitsAvailable: parsedPrizeUnits,
+        durationWeeks: parsedDurationWeeks,
+        weeklyPrice: pricing.weeklyPrice,
+        timeLimit: pricing.timeLimitHours,
         status: "draft",
         paymentStatus: "unpaid",
         totalBudget: 0,
-        expectedChargeAmount: chargedAmount,
+        expectedChargeAmount: pricing.totalAmount,
         dailyAllocation: 0,
         budgetRemaining: 0,
         budgetUsed: 0,
@@ -322,40 +331,18 @@ export const createCampaign = CatchAsyncError(
         endDate: placeholderEndDate,
       };
 
-      // For word_hunt games, add words array
-      if (campaignGameType === "word_hunt" && parsedWords.length > 0) {
-        campaignData.words = parsedWords;
-      }
-
       const campaign = await PuzzleCampaignModel.create(campaignData);
 
-      // Update brand campaigns list (no restrictions on number of campaigns)
       await BrandModel.findOneAndUpdate(
         { userId: brandUser._id },
         { $push: { campaigns: campaign._id } }
       );
 
-      // Convert to plain object to ensure all fields are included
       const campaignResponse = campaign.toObject();
-
-      // Add package name to response
       const responseWithPackageName = {
         ...campaignResponse,
         packageName: packageData.name,
       };
-
-      console.log(
-        "Campaign created. Has campaignUrl?",
-        "campaignUrl" in responseWithPackageName
-      );
-      console.log(
-        "campaignUrl value in response:",
-        responseWithPackageName.campaignUrl
-      );
-      console.log(
-        "brandUrl value in response:",
-        responseWithPackageName.brandUrl
-      );
 
       res
         .status(201)

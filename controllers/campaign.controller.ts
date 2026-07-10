@@ -9,6 +9,7 @@ import BrandModel from "../models/brand.model";
 import ReferralModel from "../models/referral.model";
 import ReferralEventModel from "../models/referralEvent.model";
 import { getStorageService } from "../services/storage/storageFactory";
+import { hasFirstCompletion } from "../services/session/gameSession.service";
 import axios from "axios";
 
 // Points awarded to the referrer once their referred user's referral is
@@ -347,7 +348,10 @@ export const getCampaignById = CatchAsyncError(
   }
 );
 
-// Check if current user has completed a campaign
+// Check if current user has completed a campaign. Also drives the "replay is
+// just for fun" client-side warning: v2 (multi-game) campaigns check the
+// GameSession first-completion guard; legacy v1 campaigns keep checking
+// PuzzleAttemptModel as before.
 export const checkCampaignCompletion = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -359,14 +363,21 @@ export const checkCampaignCompletion = CatchAsyncError(
         return next(new ErrorHandler("User not authenticated", 401));
       }
 
-      // Check if user has already solved this campaign
-      const previousAttempt = await PuzzleAttemptModel.findOne({
-        userId: userId,
-        campaignId: campaignId,
-        solved: true,
-      }).lean();
+      const campaign = await PuzzleCampaignModel.findById(campaignId)
+        .select("schemaVersion")
+        .lean();
 
-      const hasCompletedByCurrentUser = !!previousAttempt;
+      let hasCompletedByCurrentUser = false;
+      if (campaign?.schemaVersion === 2) {
+        hasCompletedByCurrentUser = await hasFirstCompletion(userId, campaignId);
+      } else {
+        const previousAttempt = await PuzzleAttemptModel.findOne({
+          userId: userId,
+          campaignId: campaignId,
+          solved: true,
+        }).lean();
+        hasCompletedByCurrentUser = !!previousAttempt;
+      }
 
       res.status(200).json({
         success: true,
@@ -523,15 +534,13 @@ export const submitCampaign = CatchAsyncError(
         }
         await userDoc.save();
 
-        // If this is the user's first successful solve ever, mark any
-        // pending referral as successful and record the points + event.
-        // Referral points are NOT added to the referrer's lifetime totals:
-        // the referral reward is based on the highest referral points within
-        // a given month, so points must stay scoped to the month the
-        // referral became successful (via `successfulAt`) rather than
-        // accumulate permanently. Monthly rankings are computed on demand
-        // from the Referral collection (see getReferralSummary /
-        // finalizeMonthlyRewards), which resets naturally each month.
+        // LEGACY (schemaVersion:1 campaigns only, frozen): if this is the
+        // user's first successful solve ever, mark any pending referral as
+        // successful with a flat REFERRAL_POINTS reward. This is independent
+        // of the new points-threshold referral system used by v2 campaigns
+        // (see services/referral.service.ts checkReferralQualification) —
+        // a referral row can only be settled by whichever mechanism gets
+        // there first, since `successful` flips once and stays flipped.
         try {
           if (firstTime && userId) {
             const referral = await ReferralModel.findOne({
