@@ -14,15 +14,7 @@ import ejs from "ejs";
 import { getEmailService } from "../services/email/emailFactory";
 import { createActivationToken } from "./user.controller";
 import { generateUsername, generateAvatar } from "../utils/userHelpers";
-import ReferralModel from "../models/referral.model";
-import ReferralEventModel from "../models/referralEvent.model";
-import mongoose from "mongoose";
-
-function findReferrer(refLookup: string) {
-  const conditions: any[] = [{ username: refLookup }, { email: refLookup }];
-  if (mongoose.isValidObjectId(refLookup)) conditions.unshift({ _id: refLookup });
-  return UserModel.findOne({ $or: conditions });
-}
+import { captureReferralAtSignup } from "../services/referral.service";
 
 // Interface for password reset token payload
 interface IResetTokenPayload {
@@ -98,34 +90,14 @@ export const googleAuth = CatchAsyncError(
           role: "gamer",
           isVerified: true,
         });
-        // capture referral if provided in request body — 1-point bonus for new user
-        try {
-          const { referrerId, referrerUsername, referralCode } = req.body;
-          const refLookup = referrerId || referrerUsername || referralCode;
-          if (refLookup) {
-            const refUser = await findReferrer(refLookup);
-            if (refUser && String(refUser._id) !== String(user._id)) {
-              try {
-                await ReferralModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                });
-                await ReferralEventModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                  eventType: "signup",
-                });
-                await UserModel.findByIdAndUpdate(user._id, {
-                  $inc: { "analytics.lifetime.totalPoints": 1 },
-                });
-              } catch (e) {
-                // ignore duplicate or other errors
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Referral capture failed during Google signup", e);
-        }
+        // Capture referral relationship (no signup bonus — the referrer's reward
+        // is credited once the referee crosses the points threshold; see
+        // referral.service.ts checkReferralQualification).
+        const { referrerId, referrerUsername, referralCode } = req.body;
+        await captureReferralAtSignup(
+          referrerId || referrerUsername || referralCode,
+          String(user._id)
+        );
       } else {
         // ensure googleId is stored
         if (!user.googleId && profile.uid) {
@@ -213,31 +185,12 @@ export const registerGamer = CatchAsyncError(
           isVerified: false,
         });
 
-        // capture referral at signup — give referred user 1 signup bonus point
-        try {
-          const { referrerId, referrerUsername, referralCode } = req.body;
-          const refLookup = referrerId || referrerUsername || referralCode;
-          if (refLookup) {
-            const refUser = await findReferrer(refLookup);
-            if (refUser && String(refUser._id) !== String(user._id)) {
-              try {
-                await ReferralModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                });
-                await ReferralEventModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                  eventType: "signup",
-                });
-              } catch (e) {
-                // ignore duplicate or other errors
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Referral capture failed during signup", e);
-        }
+        // Capture referral relationship (no signup bonus — see googleAuth comment above).
+        const { referrerId, referrerUsername, referralCode } = req.body;
+        await captureReferralAtSignup(
+          referrerId || referrerUsername || referralCode,
+          String(user._id)
+        );
 
         res.status(201).json({
           success: true,
@@ -337,35 +290,13 @@ export const activateUser = CatchAsyncError(
           role: "gamer",
           isVerified: true,
         });
-        // capture referral if activation token included referrer info — 1-point bonus
-        try {
-          const { referrerId, referrerUsername, referralCode } =
-            decoded.user as any;
-          const refLookup = referrerId || referrerUsername || referralCode;
-          if (refLookup) {
-            const refUser = await findReferrer(refLookup);
-            if (refUser && String(refUser._id) !== String(user._id)) {
-              try {
-                await ReferralModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                });
-                await ReferralEventModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                  eventType: "signup",
-                });
-                await UserModel.findByIdAndUpdate(user._id, {
-                  $inc: { "analytics.lifetime.totalPoints": 1 },
-                });
-              } catch (e) {
-                // ignore duplicate or other errors
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Referral capture failed during activation signup", e);
-        }
+        // Capture referral relationship (no signup bonus — see googleAuth comment above).
+        const { referrerId, referrerUsername, referralCode } =
+          decoded.user as any;
+        await captureReferralAtSignup(
+          referrerId || referrerUsername || referralCode,
+          String(user._id)
+        );
       } else if (role === "brand") {
         const { name, companyName } = decoded.user;
 

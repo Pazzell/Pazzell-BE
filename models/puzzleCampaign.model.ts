@@ -20,7 +20,7 @@ export interface IPuzzleCampaign extends Document {
   campaignUrl?: string; // specific URL for this campaign
   videoUrl?: string; // optional promotional video URL
   puzzleImageUrl: string;
-  passage?: string; // short brand passage used to generate quiz questions (max 500 chars)
+  passage?: string; // short brand passage used to generate quiz questions (max 500 chars) — legacy AI-quiz flow, unused by v2 campaigns
   questions: IQuestion[];
   words?: string[]; // for word_hunt games only
   timeLimit: number; // campaign duration in hours
@@ -37,6 +37,22 @@ export interface IPuzzleCampaign extends Document {
   budgetRemaining?: number; // Amount left to allocate
   paymentStatus?: "unpaid" | "paid" | "partial";
   transactionId?: string; // Reference to Transaction
+
+  // --- v2 multi-game campaign fields (additive; legacy schemaVersion:1 docs never set these) ---
+  schemaVersion: number; // 1 = legacy single-gameType campaign, 2 = new multi-game campaign
+  gameTypes?: (
+    | "sliding_puzzle"
+    | "card_matching"
+    | "spot_the_difference"
+    | "word_hunt"
+  )[]; // v2 only — always all four
+  videoDurationSeconds?: number;
+  videoSizeBytes?: number;
+  videoMimeType?: string;
+  prizeDescription?: string;
+  prizeUnitsAvailable?: number; // physical prize unit count (future flexibility) — draw winner count stays fixed at 1
+  durationWeeks?: number; // v2 duration, replaces endMonth/timeLimit(hours)/weeksToRun
+  weeklyPrice?: number; // NGN price-per-week snapshot at creation time, for audit
 }
 
 const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
@@ -94,6 +110,27 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
       default: "unpaid",
     },
     transactionId: { type: String },
+
+    // v2 multi-game fields
+    schemaVersion: { type: Number, default: 1, required: true },
+    gameTypes: [
+      {
+        type: String,
+        enum: [
+          "sliding_puzzle",
+          "card_matching",
+          "spot_the_difference",
+          "word_hunt",
+        ],
+      },
+    ],
+    videoDurationSeconds: { type: Number },
+    videoSizeBytes: { type: Number },
+    videoMimeType: { type: String },
+    prizeDescription: { type: String },
+    prizeUnitsAvailable: { type: Number, default: 1 },
+    durationWeeks: { type: Number },
+    weeklyPrice: { type: Number },
   },
   { timestamps: true }
 );
@@ -106,6 +143,8 @@ puzzleCampaignSchema.index({ gameType: 1 });
 puzzleCampaignSchema.index({ status: 1 });
 // index for querying by end date (for auto-ending campaigns)
 puzzleCampaignSchema.index({ endDate: 1, status: 1 });
+// index for filtering legacy vs v2 campaigns
+puzzleCampaignSchema.index({ schemaVersion: 1 });
 
 const PuzzleCampaignModel: Model<IPuzzleCampaign> = mongoose.model(
   "PuzzleCampaign",
