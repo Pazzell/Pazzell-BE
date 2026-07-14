@@ -12,8 +12,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getTransactionHistory = exports.getCampaignBudget = exports.paystackWebhook = exports.verifyPayment = exports.initializePayment = exports.calculateProration = void 0;
-exports.computeProration = computeProration;
+exports.getTransactionHistory = exports.getCampaignBudget = exports.paystackWebhook = exports.verifyPayment = exports.initializePayment = exports.calculateWeeklyPrice = void 0;
+exports.computeWeeklyPricing = computeWeeklyPricing;
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const transaction_model_1 = __importDefault(require("../models/transaction.model"));
@@ -21,6 +21,7 @@ const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign
 const payment_1 = require("../services/payment");
 const queueFactory_1 = require("../services/queue/queueFactory");
 const notificationFactory_1 = require("../services/notification/notificationFactory");
+const config_service_1 = require("../services/config/config.service");
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 // Log payment configuration on startup
 console.log("✅ Payment Gateway: Paystack");
@@ -31,115 +32,47 @@ if (process.env.PAYSTACK_SECRET_KEY) {
 else {
     console.warn("⚠️  Paystack is not configured - PAYSTACK_SECRET_KEY missing");
 }
-// Package pricing (monthly)
+// Fallback base price used only if a campaign somehow has neither
+// expectedChargeAmount nor totalBudget set (see initializePayment below).
 const PACKAGE_PRICES = {
-    basic: 7000, // ₦7,000/month
-    premium: 10000, // ₦10,000/month
+    basic: 7000,
+    premium: 10000,
 };
-// Shared proration calculation helper
-function computeProration(packageType, endMonth // YYYY-MM
-) {
-    const basePrice = PACKAGE_PRICES[packageType];
-    const today = new Date();
-    const todayYear = today.getFullYear();
-    const todayMonthIdx = today.getMonth(); // 0-indexed
-    const todayDay = today.getDate();
-    const [endYear, endMonthNum] = endMonth.split("-").map(Number);
-    const endMonthIdx = endMonthNum - 1; // 0-indexed
-    // Validate: endMonth must be current month or in the future
-    if (endYear < todayYear ||
-        (endYear === todayYear && endMonthIdx < todayMonthIdx)) {
-        throw new Error("endMonth cannot be in the past");
-    }
-    // Days in current month
-    const daysInCurrentMonth = new Date(todayYear, todayMonthIdx + 1, 0).getDate();
-    // Days remaining from tomorrow to end of current month
-    const daysRemaining = daysInCurrentMonth - todayDay;
-    const breakdown = [];
-    const currentMonthLabel = `${todayYear}-${String(todayMonthIdx + 1).padStart(2, "0")}`;
-    const proratedCurrentMonth = daysRemaining > 0
-        ? Math.round((basePrice / daysInCurrentMonth) * daysRemaining)
-        : 0;
-    if (daysRemaining > 0) {
-        breakdown.push({
-            month: currentMonthLabel,
-            days: daysRemaining,
-            amount: proratedCurrentMonth,
-            type: "prorated",
-        });
-    }
-    // Same month — prorated only
-    if (endYear === todayYear && endMonthIdx === todayMonthIdx) {
+// Weekly pricing: amount = weeks × tier weekly price (config-driven,
+// currently ₦7,000/week basic, ₦10,000/week premium — see services/config/config.service.ts).
+function computeWeeklyPricing(packageType, durationWeeks) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+            throw new Error("durationWeeks must be a positive number");
+        }
+        const weeklyPrice = yield (0, config_service_1.getWeeklyPrice)(packageType);
+        const totalAmount = Math.round(weeklyPrice * durationWeeks);
+        const timeLimitHours = durationWeeks * 7 * 24;
         return {
             packageType,
-            baseMonthlyPrice: basePrice,
-            proratedCurrentMonth,
-            futureMonthsAmount: 0,
-            totalAmount: proratedCurrentMonth,
-            breakdown,
-            timeLimitHours: Math.round((daysRemaining * 24)),
+            weeklyPrice,
+            durationWeeks,
+            totalAmount,
+            timeLimitHours,
         };
-    }
-    // Add full months from next month to endMonth inclusive
-    let futureMonthsAmount = 0;
-    let curYear = todayYear;
-    let curMonthIdx = todayMonthIdx + 1;
-    if (curMonthIdx > 11) {
-        curMonthIdx = 0;
-        curYear++;
-    }
-    while (curYear < endYear ||
-        (curYear === endYear && curMonthIdx <= endMonthIdx)) {
-        const daysInMonth = new Date(curYear, curMonthIdx + 1, 0).getDate();
-        const monthLabel = `${curYear}-${String(curMonthIdx + 1).padStart(2, "0")}`;
-        breakdown.push({
-            month: monthLabel,
-            days: daysInMonth,
-            amount: basePrice,
-            type: "full",
-        });
-        futureMonthsAmount += basePrice;
-        curMonthIdx++;
-        if (curMonthIdx > 11) {
-            curMonthIdx = 0;
-            curYear++;
-        }
-    }
-    // Total campaign hours from now to end of endMonth
-    const endOfEndMonth = new Date(endYear, endMonthNum, 0, 23, 59, 59, 999);
-    const timeLimitMs = endOfEndMonth.getTime() - today.getTime();
-    const timeLimitHours = Math.max(1, Math.round(timeLimitMs / (1000 * 60 * 60)));
-    return {
-        packageType,
-        baseMonthlyPrice: basePrice,
-        proratedCurrentMonth,
-        futureMonthsAmount,
-        totalAmount: proratedCurrentMonth + futureMonthsAmount,
-        breakdown,
-        timeLimitHours,
-    };
+    });
 }
-// GET /payments/calculate-proration?packageType=basic&endMonth=2026-07
-exports.calculateProration = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+// GET /payments/calculate-weekly-price?packageType=basic&weeks=2
+exports.calculateWeeklyPrice = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { packageType, endMonth } = req.query;
+        const { packageType, weeks } = req.query;
         if (!packageType || !["basic", "premium"].includes(packageType)) {
             return next(new ErrorHandler_1.default("packageType must be 'basic' or 'premium'", 400));
         }
-        if (!endMonth || !/^\d{4}-\d{2}$/.test(endMonth)) {
-            return next(new ErrorHandler_1.default("endMonth must be in YYYY-MM format", 400));
+        const durationWeeks = Number(weeks);
+        if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+            return next(new ErrorHandler_1.default("weeks must be a positive number", 400));
         }
-        let result;
-        try {
-            result = computeProration(packageType, endMonth);
-        }
-        catch (e) {
-            return next(new ErrorHandler_1.default(e.message, 400));
-        }
-        res.status(200).json({ success: true, proration: result });
+        const result = yield computeWeeklyPricing(packageType, durationWeeks);
+        res.status(200).json({ success: true, pricing: result });
     }
     catch (error) {
-        return next(new ErrorHandler_1.default(`Failed to calculate proration: ${error.message}`, 500));
+        return next(new ErrorHandler_1.default(`Failed to calculate weekly price: ${error.message}`, 500));
     }
 }));
 // Initialize payment for campaign

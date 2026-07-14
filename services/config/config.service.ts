@@ -29,7 +29,7 @@ export const CONFIG_DEFAULTS: Record<string, any> = {
   "forum.winnerShareBonusPoints": 5,
   "campaign.quizQuestionCount": 3,
   "video.maxDurationSeconds": 130, // ~2 minutes + small buffer
-  "video.maxSizeBytes": 100 * 1024 * 1024, // 100MB
+  "video.maxSizeBytes": 10 * 1024 * 1024, // 10MB
   "anticheat.softFloorMs": {
     sliding_puzzle: 3000,
     card_matching: 3000,

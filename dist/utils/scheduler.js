@@ -12,61 +12,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.checkExpiredCampaigns = exports.startScheduler = void 0;
+exports.checkExpiredCampaigns = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
-// Weekly leaderboard scheduler
-const startScheduler = () => {
-    // Run once per day at midnight to check if we need to finalize the weekly leaderboard
-    const dailyCheckInterval = 24 * 60 * 60 * 1000; // 24 hours
-    const hourlyCheckInterval = 60 * 60 * 1000; // 1 hour
-    // Daily scheduler for weekly leaderboard
-    setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            // Skip if database is not connected
-            if (mongoose_1.default.connection.readyState !== 1) {
-                return;
-            }
-            const now = new Date();
-            // Monthly finalization: if today is the last day of the month, finalize the previous month
-            const tomorrow = new Date(now);
-            tomorrow.setDate(now.getDate() + 1);
-            if (tomorrow.getDate() === 1) {
-                // it's the last day of the month
-                // finalize previous month key (current month)
-                const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-                try {
-                    // dynamic import must include .js extension under `module: node16` resolution
-                    // TypeScript will resolve the `.ts` file at compile time and emit a runtime import to `.js`.
-                    const { finalizeMonthlyRewards } = yield import("../services/rewards.service.js");
-                    const result = yield finalizeMonthlyRewards(monthKey);
-                    console.log(`Monthly rewards finalized for ${monthKey}:`, result);
-                }
-                catch (err) {
-                    console.error("Monthly finalization error:", err);
-                }
-            }
-        }
-        catch (err) {
-            // eslint-disable-next-line no-console
-            console.error("Scheduler error:", err);
-        }
-    }), dailyCheckInterval);
-    // Hourly scheduler for checking expired campaigns
-    setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            yield (0, exports.checkExpiredCampaigns)();
-        }
-        catch (err) {
-            // eslint-disable-next-line no-console
-            console.error("Campaign expiry check error:", err);
-        }
-    }), hourlyCheckInterval);
-    // Run expired campaign check immediately on startup
-    (0, exports.checkExpiredCampaigns)();
-};
-exports.startScheduler = startScheduler;
-// Check and mark expired campaigns as ended
+// Check and mark expired campaigns as ended. Scheduled hourly via
+// services/scheduler/index.ts (node-cron) — this file just holds the check
+// itself, reused by both the cron job and campaign.controller.ts's
+// pre-read expiry sweep.
 const checkExpiredCampaigns = () => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // Skip if database is not connected

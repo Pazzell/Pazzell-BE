@@ -4,7 +4,7 @@ import ErrorHandler from "../utils/ErrorHandler";
 import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import BrandModel from "../models/brand.model";
 import { getStorageService } from "../services/storage/storageFactory";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
+import GameSessionModel from "../models/gameSession.model";
 import UserModel from "../models/user.model";
 import PackageModel from "../models/package.model";
 import { computeWeeklyPricing } from "./payment.controller";
@@ -301,8 +301,6 @@ export const createCampaign = CatchAsyncError(
         brandId: brandUser._id,
         packageId,
         packageType,
-        schemaVersion: 2,
-        gameType: "sliding_puzzle", // legacy required field — v2 campaigns use gameTypes[] instead
         gameTypes: ALL_GAME_TYPES,
         title: title.trim(),
         description: description.trim(),
@@ -374,8 +372,8 @@ export const getCampaignAnalytics = CatchAsyncError(
       // prepare campaign ids for bulk queries
       const campaignIds = campaigns.map((c) => String(c._id));
 
-      // Fetch all attempts for brand campaigns in one query
-      const allAttempts = await PuzzleAttemptModel.find({
+      // Fetch all game sessions for brand campaigns in one query
+      const allSessions = await GameSessionModel.find({
         campaignId: { $in: campaignIds },
       }).lean();
 
@@ -390,50 +388,57 @@ export const getCampaignAnalytics = CatchAsyncError(
       );
 
       // total games played across brand
-      const totalGamesPlayed = allAttempts.length;
+      const totalGamesPlayed = allSessions.length;
 
       // unique players across all brand campaigns
       const uniquePlayerIds = Array.from(
-        new Set(allAttempts.map((a) => String(a.userId)))
+        new Set(allSessions.map((s) => String(s.userId)))
       );
       const uniquePlayers = uniquePlayerIds.filter(
         (id) => id && id !== "undefined"
       ).length;
 
-      // average gameplay time (in ms) across all attempts
-      const avgPlayTime = allAttempts.length
+      // average completion time (in ms) across all completed sessions
+      const completedSessions = allSessions.filter(
+        (s) => s.status === "completed"
+      );
+      const avgPlayTime = completedSessions.length
         ? Math.round(
-            allAttempts.reduce((s, a) => s + (a.timeTaken || 0), 0) /
-              allAttempts.length
+            completedSessions.reduce(
+              (s, sess) => s + (sess.totalCompletionTimeMs || 0),
+              0
+            ) / completedSessions.length
           )
         : 0;
 
       // per-campaign analytics
       for (const c of campaigns) {
-        const attempts = allAttempts.filter(
-          (a) => String(a.campaignId) === String(c._id)
+        const sessions = allSessions.filter(
+          (s) => String(s.campaignId) === String(c._id)
         );
-        const plays = attempts.length;
-        const completions = attempts.filter((a) => a.solved).length;
-        const avgCompletionTime = attempts.filter((a) => a.solved).length
+        const plays = sessions.length;
+        const completed = sessions.filter((s) => s.status === "completed");
+        const completions = completed.length;
+        const avgCompletionTime = completed.length
           ? Math.round(
-              attempts
-                .filter((a) => a.solved)
-                .reduce((s, a) => s + (a.timeTaken || 0), 0) /
-                attempts.filter((a) => a.solved).length
+              completed.reduce(
+                (s, sess) => s + (sess.totalCompletionTimeMs || 0),
+                0
+              ) / completed.length
             )
           : 0;
 
-        // question correctness rates
+        // question correctness rates (from each session's first quiz attempt)
         const qCorrectCounts: number[] = (c.questions || []).map(() => 0);
-        for (const a of attempts) {
-          if (Array.isArray(a.answers)) {
+        for (const s of sessions) {
+          const answers = s.quiz?.firstAttempt?.answers;
+          if (Array.isArray(answers)) {
             for (
               let i = 0;
-              i < a.answers.length && i < (c.questions || []).length;
+              i < answers.length && i < (c.questions || []).length;
               i++
             ) {
-              if (a.answers[i] === c.questions[i].correctIndex)
+              if (answers[i] === c.questions[i].correctIndex)
                 qCorrectCounts[i]++;
             }
           }

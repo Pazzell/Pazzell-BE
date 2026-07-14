@@ -41,7 +41,7 @@ export const ErrorMiddleware = (err: any, req: Request, res: Response, next: Nex
     if (err.name === "MulterError") {
         let message = "File upload error";
         if (err.code === "LIMIT_FILE_SIZE") {
-            message = "File size is too large. Maximum file size is 50MB.";
+            message = "File size is too large. Maximum file size is 20MB.";
         } else if (err.code === "LIMIT_UNEXPECTED_FILE") {
             message = "Unexpected file field. Please check the file upload field name.";
         }

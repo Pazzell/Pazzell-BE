@@ -3,7 +3,7 @@ import userModel, { IUser } from "../models/user.model";
 import ErrorHandler from "../utils/ErrorHandler";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import jwt, { Secret, JwtPayload } from "jsonwebtoken";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
+import GameSessionModel from "../models/gameSession.model";
 import LeaderboardModel from "../models/leaderboard.model";
 import ReferralModel from "../models/referral.model";
 import { getStorageService } from "../services/storage/storageFactory";
@@ -12,6 +12,8 @@ import {
   getUnifiedWeeklyEntries,
   getUserWeeklyRank,
 } from "../services/leaderboard.service";
+import { getAllTimePointsAggregate } from "../services/points/pointsLedger.service";
+import PointsLedgerModel from "../models/pointsLedger.model";
 
 import ejs from "ejs";
 import path from "path";
@@ -319,48 +321,41 @@ export const getGamerProfile = CatchAsyncError(
         weekKey
       );
 
-      // Get all-time leaderboard for position
-      const allTimeLeaderboard = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            firstTimeSolved: true,
-          },
-        },
-        {
-          $group: {
-            _id: "$userId",
-            puzzlesSolved: { $sum: 1 },
-            points: { $sum: "$pointsEarned" },
-          },
-        },
-        { $sort: { points: -1, puzzlesSolved: -1 } },
-      ]);
+      // Get all-time leaderboard for position (lifetime PointsLedger totals)
+      const allTimeAgg = await getAllTimePointsAggregate();
+      allTimeAgg.sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        return b.sessionCompletions - a.sessionCompletions;
+      });
 
       // Find user's all-time leaderboard position
       let allTimeLeaderboardPosition = null;
-      const allTimeUserIndex = allTimeLeaderboard.findIndex(
-        (entry: any) => entry._id.toString() === userId.toString()
+      const allTimeUserIndex = allTimeAgg.findIndex(
+        (entry) => String(entry.userId) === String(userId)
       );
       if (allTimeUserIndex !== -1) {
         allTimeLeaderboardPosition = allTimeUserIndex + 1;
       }
 
-      // Calculate weekly analytics from puzzle attempts
-      const weeklyAttempts = await PuzzleAttemptModel.find({
-        userId: userId,
-        timestamp: { $gte: weekStart, $lte: weekEnd },
+      // Calculate weekly analytics from this week's game sessions
+      const weeklySessions = await GameSessionModel.find({
+        userId: String(userId),
+        startedAt: { $gte: weekStart, $lte: weekEnd },
       }).lean();
 
-      const weeklyStats = weeklyAttempts.reduce(
-        (acc, attempt) => {
-          if (attempt.firstTimeSolved) {
+      const weeklyStats = weeklySessions.reduce(
+        (acc, session) => {
+          if (session.status === "completed" && session.isFirstCompletionForUser) {
             acc.puzzlesSolved += 1;
           }
-          acc.totalPoints += attempt.pointsEarned || 0;
-          acc.totalTime += attempt.timeTaken || 0;
-          acc.totalMoves += attempt.movesTaken || 0;
+          acc.totalPoints += session.pointsAwarded || 0;
+          acc.totalTime += session.totalCompletionTimeMs || 0;
+          acc.totalMoves += (session.games || []).reduce(
+            (sum: number, g: any) => sum + (g.clientMovesTaken || 0),
+            0
+          );
           acc.attempts += 1;
-          if (attempt.solved) {
+          if (session.status === "completed") {
             acc.successfulAttempts += 1;
           }
           return acc;
@@ -385,8 +380,8 @@ export const getGamerProfile = CatchAsyncError(
       weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
 
       // Authoritative weekly total — same unified source as the public weekly
-      // leaderboard (legacy attempt points + all PointsLedger sources,
-      // including new-mechanism referral/winner-share bonuses).
+      // leaderboard (all PointsLedger sources: session completions, referral
+      // and winner-share bonuses).
       const unifiedWeeklyEntries = await getUnifiedWeeklyEntries(
         weekStart,
         weekEnd,
@@ -397,10 +392,36 @@ export const getGamerProfile = CatchAsyncError(
       );
       const weeklyTotalPoints = myUnifiedEntry?.points || 0;
 
-      // Referral stats shown separately (informational — legacy-mechanism
-      // referral crediting on frozen v1 campaigns bypasses the points ledger,
-      // so this is not summed into weeklyTotalPoints to avoid double-counting
-      // new-mechanism referral bonuses already folded into it above).
+      // Lifetime stats across all of this user's game sessions.
+      const allSessions = await GameSessionModel.find({
+        userId: String(userId),
+      }).lean();
+      const lifetimeStats = allSessions.reduce(
+        (acc, session) => {
+          if (session.status === "completed" && session.isFirstCompletionForUser) {
+            acc.puzzlesSolved += 1;
+          }
+          acc.totalTime += session.totalCompletionTimeMs || 0;
+          acc.totalMoves += (session.games || []).reduce(
+            (sum: number, g: any) => sum + (g.clientMovesTaken || 0),
+            0
+          );
+          acc.attempts += 1;
+          if (session.status === "completed") {
+            acc.successfulAttempts += 1;
+          }
+          return acc;
+        },
+        { puzzlesSolved: 0, totalTime: 0, totalMoves: 0, attempts: 0, successfulAttempts: 0 }
+      );
+      const lifetimeSuccessRate =
+        lifetimeStats.attempts > 0
+          ? lifetimeStats.successfulAttempts / lifetimeStats.attempts
+          : 0;
+
+      // Referral stats shown separately (informational — not summed into
+      // weeklyTotalPoints to avoid double-counting referral bonuses already
+      // folded into it above via the points ledger).
       const weeklyReferralAgg = await ReferralModel.aggregate([
         {
           $match: {
@@ -439,11 +460,11 @@ export const getGamerProfile = CatchAsyncError(
           },
           analytics: {
             lifetime: {
-              puzzlesSolved: user.analytics?.lifetime?.puzzlesSolved || 0,
-              totalTime: user.analytics?.lifetime?.totalTime || 0,
-              totalMoves: user.analytics?.lifetime?.totalMoves || 0,
-              attempts: user.analytics?.lifetime?.attempts || 0,
-              successRate: user.analytics?.lifetime?.successRate || 0,
+              puzzlesSolved: lifetimeStats.puzzlesSolved,
+              totalTime: lifetimeStats.totalTime,
+              totalMoves: lifetimeStats.totalMoves,
+              attempts: lifetimeStats.attempts,
+              successRate: Math.round(lifetimeSuccessRate * 100) / 100,
               leaderboardPosition: allTimeLeaderboardPosition,
             },
             weekly: {
@@ -952,8 +973,9 @@ export const clearAllGamerData = CatchAsyncError(
         );
       }
 
-      // Delete all puzzle attempts
-      const puzzleAttemptsDeleted = await PuzzleAttemptModel.deleteMany({});
+      // Delete all game sessions and points ledger entries
+      const gameSessionsDeleted = await GameSessionModel.deleteMany({});
+      const pointsLedgerDeleted = await PointsLedgerModel.deleteMany({});
 
       // Reset all gamer analytics to zero
       const usersUpdateResult = await userModel.updateMany(
@@ -983,7 +1005,8 @@ export const clearAllGamerData = CatchAsyncError(
         success: true,
         message: "All gamer data cleared successfully",
         summary: {
-          puzzleAttemptsDeleted: puzzleAttemptsDeleted.deletedCount,
+          gameSessionsDeleted: gameSessionsDeleted.deletedCount,
+          pointsLedgerEntriesDeleted: pointsLedgerDeleted.deletedCount,
           usersReset: usersUpdateResult.modifiedCount,
           leaderboardsCleared: leaderboardsDeleted.deletedCount,
         },

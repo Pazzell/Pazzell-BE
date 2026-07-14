@@ -16,8 +16,6 @@ async function createV2Campaign() {
   return PuzzleCampaignModel.create({
     brandId: "brand-1",
     packageId: "000000000000000000000000",
-    schemaVersion: 2,
-    gameType: "sliding_puzzle",
     gameTypes: ALL_GAME_TYPES,
     title: "Test multi-game campaign",
     description: "A v2 test campaign",

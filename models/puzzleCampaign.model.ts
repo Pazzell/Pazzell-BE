@@ -9,18 +9,12 @@ export interface IQuestion {
 export interface IPuzzleCampaign extends Document {
   brandId: string;
   packageId: string; // reference to package
-  gameType:
-    | "sliding_puzzle"
-    | "card_matching"
-    | "spot_the_difference"
-    | "word_hunt";
   title: string;
   description: string;
   brandUrl?: string; // brand's website or social media URL
   campaignUrl?: string; // specific URL for this campaign
   videoUrl?: string; // optional promotional video URL
   puzzleImageUrl: string;
-  passage?: string; // short brand passage used to generate quiz questions (max 500 chars) — legacy AI-quiz flow, unused by v2 campaigns
   questions: IQuestion[];
   words?: string[]; // for word_hunt games only
   timeLimit: number; // campaign duration in hours
@@ -38,20 +32,19 @@ export interface IPuzzleCampaign extends Document {
   paymentStatus?: "unpaid" | "paid" | "partial";
   transactionId?: string; // Reference to Transaction
 
-  // --- v2 multi-game campaign fields (additive; legacy schemaVersion:1 docs never set these) ---
-  schemaVersion: number; // 1 = legacy single-gameType campaign, 2 = new multi-game campaign
-  gameTypes?: (
+  // Multi-game campaign fields — every campaign spans all four game types.
+  gameTypes: (
     | "sliding_puzzle"
     | "card_matching"
     | "spot_the_difference"
     | "word_hunt"
-  )[]; // v2 only — always all four
+  )[];
   videoDurationSeconds?: number;
   videoSizeBytes?: number;
   videoMimeType?: string;
   prizeDescription?: string;
   prizeUnitsAvailable?: number; // physical prize unit count (future flexibility) — draw winner count stays fixed at 1
-  durationWeeks?: number; // v2 duration, replaces endMonth/timeLimit(hours)/weeksToRun
+  durationWeeks?: number; // duration in weeks
   weeklyPrice?: number; // NGN price-per-week snapshot at creation time, for audit
 }
 
@@ -59,24 +52,12 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
   {
     brandId: { type: String, required: true },
     packageId: { type: String, required: true, index: true },
-    gameType: {
-      type: String,
-      enum: [
-        "sliding_puzzle",
-        "card_matching",
-        "spot_the_difference",
-        "word_hunt",
-      ],
-      required: true,
-      default: "sliding_puzzle",
-    },
     title: { type: String, required: true },
     description: { type: String, required: true },
     brandUrl: { type: String, required: false },
     campaignUrl: { type: String, required: false },
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
-    passage: { type: String, required: false, maxlength: 1000 },
     questions: [
       {
         question: { type: String, required: true },
@@ -111,19 +92,21 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
     },
     transactionId: { type: String },
 
-    // v2 multi-game fields
-    schemaVersion: { type: Number, default: 1, required: true },
-    gameTypes: [
-      {
-        type: String,
-        enum: [
-          "sliding_puzzle",
-          "card_matching",
-          "spot_the_difference",
-          "word_hunt",
-        ],
-      },
-    ],
+    // Multi-game fields — every campaign spans all four game types.
+    gameTypes: {
+      type: [
+        {
+          type: String,
+          enum: [
+            "sliding_puzzle",
+            "card_matching",
+            "spot_the_difference",
+            "word_hunt",
+          ],
+        },
+      ],
+      required: true,
+    },
     videoDurationSeconds: { type: Number },
     videoSizeBytes: { type: Number },
     videoMimeType: { type: String },
@@ -137,14 +120,10 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
 
 // index for quick analytics by brand
 puzzleCampaignSchema.index({ brandId: 1 });
-// index for querying by game type
-puzzleCampaignSchema.index({ gameType: 1 });
 // index for querying by status
 puzzleCampaignSchema.index({ status: 1 });
 // index for querying by end date (for auto-ending campaigns)
 puzzleCampaignSchema.index({ endDate: 1, status: 1 });
-// index for filtering legacy vs v2 campaigns
-puzzleCampaignSchema.index({ schemaVersion: 1 });
 
 const PuzzleCampaignModel: Model<IPuzzleCampaign> = mongoose.model(
   "PuzzleCampaign",

@@ -17,10 +17,14 @@ const user_model_1 = __importDefault(require("../models/user.model"));
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
+const gameSession_model_1 = __importDefault(require("../models/gameSession.model"));
 const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
 const referral_model_1 = __importDefault(require("../models/referral.model"));
 const storageFactory_1 = require("../services/storage/storageFactory");
+const weekBoundary_1 = require("../utils/weekBoundary");
+const leaderboard_service_1 = require("../services/leaderboard.service");
+const pointsLedger_service_1 = require("../services/points/pointsLedger.service");
+const pointsLedger_model_1 = __importDefault(require("../models/pointsLedger.model"));
 const ejs_1 = __importDefault(require("ejs"));
 const path_1 = __importDefault(require("path"));
 const emailFactory_1 = require("../services/email/emailFactory");
@@ -202,7 +206,7 @@ exports.getUserInfo = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =>
 }));
 // Get gamer profile with full analytics
 exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
+    var _a, _b, _c;
     try {
         const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id;
         if (!req.user || req.user.role !== "gamer") {
@@ -212,74 +216,38 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
         if (!user) {
             return next(new ErrorHandler_1.default("User not found", 404));
         }
-        // Calculate current week's leaderboard position
+        // Calculate current week's leaderboard position (unified weekly source —
+        // see services/leaderboard.service.ts)
         const now = new Date();
-        const dayOfWeek = now.getDay();
-        const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysFromMonday);
-        weekStart.setHours(0, 0, 0, 0);
-        const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekEnd.getDate() + 6);
-        weekEnd.setHours(23, 59, 59, 999);
-        // Get current week's leaderboard for position
-        const weeklyLeaderboard = yield puzzleAttempt_model_1.default.aggregate([
-            {
-                $match: {
-                    firstTimeSolved: true,
-                    timestamp: { $gte: weekStart, $lte: weekEnd },
-                },
-            },
-            {
-                $group: {
-                    _id: "$userId",
-                    puzzlesSolved: { $sum: 1 },
-                    points: { $sum: "$pointsEarned" },
-                },
-            },
-            { $sort: { puzzlesSolved: -1, points: -1 } },
-        ]);
-        // Find user's weekly leaderboard position
-        let weeklyLeaderboardPosition = null;
-        const weeklyUserIndex = weeklyLeaderboard.findIndex((entry) => entry._id.toString() === userId.toString());
-        if (weeklyUserIndex !== -1) {
-            weeklyLeaderboardPosition = weeklyUserIndex + 1;
-        }
-        // Get all-time leaderboard for position
-        const allTimeLeaderboard = yield puzzleAttempt_model_1.default.aggregate([
-            {
-                $match: {
-                    firstTimeSolved: true,
-                },
-            },
-            {
-                $group: {
-                    _id: "$userId",
-                    puzzlesSolved: { $sum: 1 },
-                    points: { $sum: "$pointsEarned" },
-                },
-            },
-            { $sort: { points: -1, puzzlesSolved: -1 } },
-        ]);
+        const { weekStart, weekEnd, weekKey } = (0, weekBoundary_1.getWeekBounds)(now);
+        const weeklyLeaderboardPosition = yield (0, leaderboard_service_1.getUserWeeklyRank)(String(userId), weekStart, weekEnd, weekKey);
+        // Get all-time leaderboard for position (lifetime PointsLedger totals)
+        const allTimeAgg = yield (0, pointsLedger_service_1.getAllTimePointsAggregate)();
+        allTimeAgg.sort((a, b) => {
+            if (b.points !== a.points)
+                return b.points - a.points;
+            return b.sessionCompletions - a.sessionCompletions;
+        });
         // Find user's all-time leaderboard position
         let allTimeLeaderboardPosition = null;
-        const allTimeUserIndex = allTimeLeaderboard.findIndex((entry) => entry._id.toString() === userId.toString());
+        const allTimeUserIndex = allTimeAgg.findIndex((entry) => String(entry.userId) === String(userId));
         if (allTimeUserIndex !== -1) {
             allTimeLeaderboardPosition = allTimeUserIndex + 1;
         }
-        // Calculate weekly analytics from puzzle attempts
-        const weeklyAttempts = yield puzzleAttempt_model_1.default.find({
-            userId: userId,
-            timestamp: { $gte: weekStart, $lte: weekEnd },
+        // Calculate weekly analytics from this week's game sessions
+        const weeklySessions = yield gameSession_model_1.default.find({
+            userId: String(userId),
+            startedAt: { $gte: weekStart, $lte: weekEnd },
         }).lean();
-        const weeklyStats = weeklyAttempts.reduce((acc, attempt) => {
-            if (attempt.firstTimeSolved) {
+        const weeklyStats = weeklySessions.reduce((acc, session) => {
+            if (session.status === "completed" && session.isFirstCompletionForUser) {
                 acc.puzzlesSolved += 1;
             }
-            acc.totalPoints += attempt.pointsEarned || 0;
-            acc.totalTime += attempt.timeTaken || 0;
-            acc.totalMoves += attempt.movesTaken || 0;
+            acc.totalPoints += session.pointsAwarded || 0;
+            acc.totalTime += session.totalCompletionTimeMs || 0;
+            acc.totalMoves += (session.games || []).reduce((sum, g) => sum + (g.clientMovesTaken || 0), 0);
             acc.attempts += 1;
-            if (attempt.solved) {
+            if (session.status === "completed") {
                 acc.successfulAttempts += 1;
             }
             return acc;
@@ -299,58 +267,51 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 ? weeklyStats.successfulAttempts / weeklyStats.attempts
                 : 0;
         weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
-        const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-        // Current-month puzzle points (computed live — same source as leaderboard)
-        const monthlyPuzzleAgg = yield puzzleAttempt_model_1.default.aggregate([
-            {
-                $match: {
-                    userId: String(userId),
-                    pointsEarned: { $gt: 0 },
-                    timestamp: { $gte: monthStart, $lte: monthEnd },
-                },
-            },
-            { $group: { _id: null, puzzlePoints: { $sum: "$pointsEarned" } } },
-        ]);
-        const monthlyPuzzlePoints = ((_b = monthlyPuzzleAgg[0]) === null || _b === void 0 ? void 0 : _b.puzzlePoints) || 0;
-        // Current-month referral bonus points
-        const monthlyReferralAgg = yield referral_model_1.default.aggregate([
+        // Authoritative weekly total — same unified source as the public weekly
+        // leaderboard (all PointsLedger sources: session completions, referral
+        // and winner-share bonuses).
+        const unifiedWeeklyEntries = yield (0, leaderboard_service_1.getUnifiedWeeklyEntries)(weekStart, weekEnd, weekKey);
+        const myUnifiedEntry = unifiedWeeklyEntries.find((e) => String(e.userId) === String(userId));
+        const weeklyTotalPoints = (myUnifiedEntry === null || myUnifiedEntry === void 0 ? void 0 : myUnifiedEntry.points) || 0;
+        // Lifetime stats across all of this user's game sessions.
+        const allSessions = yield gameSession_model_1.default.find({
+            userId: String(userId),
+        }).lean();
+        const lifetimeStats = allSessions.reduce((acc, session) => {
+            if (session.status === "completed" && session.isFirstCompletionForUser) {
+                acc.puzzlesSolved += 1;
+            }
+            acc.totalTime += session.totalCompletionTimeMs || 0;
+            acc.totalMoves += (session.games || []).reduce((sum, g) => sum + (g.clientMovesTaken || 0), 0);
+            acc.attempts += 1;
+            if (session.status === "completed") {
+                acc.successfulAttempts += 1;
+            }
+            return acc;
+        }, { puzzlesSolved: 0, totalTime: 0, totalMoves: 0, attempts: 0, successfulAttempts: 0 });
+        const lifetimeSuccessRate = lifetimeStats.attempts > 0
+            ? lifetimeStats.successfulAttempts / lifetimeStats.attempts
+            : 0;
+        // Referral stats shown separately (informational — not summed into
+        // weeklyTotalPoints to avoid double-counting referral bonuses already
+        // folded into it above via the points ledger).
+        const weeklyReferralAgg = yield referral_model_1.default.aggregate([
             {
                 $match: {
                     referrerId: String(userId),
                     successful: true,
-                    successfulAt: { $gte: monthStart, $lte: monthEnd },
+                    successfulAt: { $gte: weekStart, $lte: weekEnd },
                 },
             },
             { $group: { _id: null, referralPoints: { $sum: "$pointsAwarded" }, referralCount: { $sum: 1 } } },
         ]);
-        const monthlyReferralPoints = ((_c = monthlyReferralAgg[0]) === null || _c === void 0 ? void 0 : _c.referralPoints) || 0;
-        const monthlyReferralCount = ((_d = monthlyReferralAgg[0]) === null || _d === void 0 ? void 0 : _d.referralCount) || 0;
-        const monthlyTotalPoints = monthlyPuzzlePoints + monthlyReferralPoints;
+        const weeklyReferralPoints = ((_b = weeklyReferralAgg[0]) === null || _b === void 0 ? void 0 : _b.referralPoints) || 0;
+        const weeklyReferralCount = ((_c = weeklyReferralAgg[0]) === null || _c === void 0 ? void 0 : _c.referralCount) || 0;
         // All referrals this user has ever made (pending + successful)
         const allMyReferrals = yield referral_model_1.default.find({
             referrerId: String(userId),
         }).lean();
         const successfulReferrals = allMyReferrals.filter((r) => r.successful);
-        // Monthly referral leaderboard position (competitive ranking)
-        const referralAgg = yield referral_model_1.default.aggregate([
-            {
-                $match: {
-                    successful: true,
-                    successfulAt: { $gte: monthStart, $lte: monthEnd },
-                },
-            },
-            {
-                $group: {
-                    _id: "$referrerId",
-                    successfulCount: { $sum: 1 },
-                    pointsEarned: { $sum: "$pointsAwarded" },
-                },
-            },
-            { $sort: { pointsEarned: -1, successfulCount: -1 } },
-        ]);
-        const referralIndex = referralAgg.findIndex((entry) => String(entry._id) === String(userId));
         res.status(200).json({
             success: true,
             profile: {
@@ -362,20 +323,19 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 avatar: user.avatar,
                 role: user.role,
                 isVerified: user.isVerified,
-                // Points shown on the dashboard — current month only, resets at month end
+                // Points shown on the dashboard — current week only, resets at week end.
+                // totalPoints is the same unified source as the public weekly leaderboard.
                 points: {
-                    monthKey,
-                    puzzlePoints: monthlyPuzzlePoints,
-                    referralPoints: monthlyReferralPoints,
-                    totalPoints: monthlyTotalPoints,
+                    weekKey,
+                    totalPoints: weeklyTotalPoints,
                 },
                 analytics: {
                     lifetime: {
-                        puzzlesSolved: ((_f = (_e = user.analytics) === null || _e === void 0 ? void 0 : _e.lifetime) === null || _f === void 0 ? void 0 : _f.puzzlesSolved) || 0,
-                        totalTime: ((_h = (_g = user.analytics) === null || _g === void 0 ? void 0 : _g.lifetime) === null || _h === void 0 ? void 0 : _h.totalTime) || 0,
-                        totalMoves: ((_k = (_j = user.analytics) === null || _j === void 0 ? void 0 : _j.lifetime) === null || _k === void 0 ? void 0 : _k.totalMoves) || 0,
-                        attempts: ((_m = (_l = user.analytics) === null || _l === void 0 ? void 0 : _l.lifetime) === null || _m === void 0 ? void 0 : _m.attempts) || 0,
-                        successRate: ((_p = (_o = user.analytics) === null || _o === void 0 ? void 0 : _o.lifetime) === null || _p === void 0 ? void 0 : _p.successRate) || 0,
+                        puzzlesSolved: lifetimeStats.puzzlesSolved,
+                        totalTime: lifetimeStats.totalTime,
+                        totalMoves: lifetimeStats.totalMoves,
+                        attempts: lifetimeStats.attempts,
+                        successRate: Math.round(lifetimeSuccessRate * 100) / 100,
                         leaderboardPosition: allTimeLeaderboardPosition,
                     },
                     weekly: {
@@ -390,13 +350,12 @@ exports.getGamerProfile = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                         leaderboardPosition: weeklyLeaderboardPosition,
                     },
                     referral: {
-                        monthKey,
+                        weekKey,
                         totalReferrals: allMyReferrals.length,
                         successfulReferrals: successfulReferrals.length,
                         pendingReferrals: allMyReferrals.length - successfulReferrals.length,
-                        pointsThisMonth: monthlyReferralPoints,
-                        referralCountThisMonth: monthlyReferralCount,
-                        leaderboardPosition: referralIndex !== -1 ? referralIndex + 1 : null,
+                        pointsThisWeek: weeklyReferralPoints,
+                        referralCountThisWeek: weeklyReferralCount,
                     },
                 },
                 puzzlesSolved: user.puzzlesSolved,
@@ -791,8 +750,9 @@ exports.clearAllGamerData = (0, catchAsyncError_1.CatchAsyncError)((req, res, ne
         if (!confirm || confirm !== true) {
             return next(new ErrorHandler_1.default("Please confirm this action by sending { confirm: true } in the request body", 400));
         }
-        // Delete all puzzle attempts
-        const puzzleAttemptsDeleted = yield puzzleAttempt_model_1.default.deleteMany({});
+        // Delete all game sessions and points ledger entries
+        const gameSessionsDeleted = yield gameSession_model_1.default.deleteMany({});
+        const pointsLedgerDeleted = yield pointsLedger_model_1.default.deleteMany({});
         // Reset all gamer analytics to zero
         const usersUpdateResult = yield user_model_1.default.updateMany({ role: { $nin: ["brand", "admin"] } }, {
             $set: {
@@ -816,7 +776,8 @@ exports.clearAllGamerData = (0, catchAsyncError_1.CatchAsyncError)((req, res, ne
             success: true,
             message: "All gamer data cleared successfully",
             summary: {
-                puzzleAttemptsDeleted: puzzleAttemptsDeleted.deletedCount,
+                gameSessionsDeleted: gameSessionsDeleted.deletedCount,
+                pointsLedgerEntriesDeleted: pointsLedgerDeleted.deletedCount,
                 usersReset: usersUpdateResult.modifiedCount,
                 leaderboardsCleared: leaderboardsDeleted.deletedCount,
             },

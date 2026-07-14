@@ -1,24 +1,24 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
+import GameSessionModel from "../models/gameSession.model";
 import { redis } from "../utils/redis";
 
 // Get global app analytics
 export const getAppAnalytics = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // 1. Total games played (all-time count of puzzle attempts)
-      const totalGamesPlayed = await PuzzleAttemptModel.countDocuments();
+      // 1. Total games played (all-time count of game sessions)
+      const totalGamesPlayed = await GameSessionModel.countDocuments();
 
-      // 2. Total games played today (count of puzzle attempts created today)
+      // 2. Total games played today (count of game sessions started today)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
 
-      const gamesPlayedToday = await PuzzleAttemptModel.countDocuments({
-        timestamp: {
+      const gamesPlayedToday = await GameSessionModel.countDocuments({
+        startedAt: {
           $gte: todayStart,
           $lte: todayEnd,
         },

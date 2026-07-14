@@ -10,6 +10,4 @@ const router = express_1.default.Router();
 router.get("/leaderboards/weekly", leaderboard_controller_1.getWeeklyLeaderboard);
 router.get("/leaderboards/weekly/:weekKey", leaderboard_controller_1.getLeaderboardByWeek);
 router.get("/leaderboards/all-time", leaderboard_controller_1.getAllTimeLeaderboard);
-router.get("/leaderboards/monthly", leaderboard_controller_1.getMonthlyLeaderboard);
-router.get("/leaderboards/monthly/:monthKey", leaderboard_controller_1.getLeaderboardByMonth);
 exports.default = router;

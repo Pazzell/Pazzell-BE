@@ -33,14 +33,13 @@ export async function mintTicketOnFirstCompletion(
 
 /**
  * N = lesser of the configured cap (default 3) or the number of platform-wide
- * active (v2) campaigns. A player becomes eligible for ANY draw that week once
+ * active campaigns. A player becomes eligible for ANY draw that week once
  * they've completed at least N distinct campaigns that week — banked tickets
  * for campaigns beyond that don't require anything further once the floor is met.
  */
 export async function getEligibilityFloor(): Promise<number> {
   const cap = await getRaffleEligibilityFloorCap();
   const activeCampaignCount = await PuzzleCampaignModel.countDocuments({
-    schemaVersion: 2,
     status: "active",
   });
   return Math.min(cap, activeCampaignCount || 0);

@@ -12,21 +12,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteCampaign = exports.updateCampaign = exports.generateCampaignQuestions = exports.submitCampaign = exports.checkCampaignCompletion = exports.getCampaignById = exports.getCampaignsByBrand = exports.getAllCampaigns = exports.getActiveCampaigns = void 0;
+exports.deleteCampaign = exports.updateCampaign = exports.generateCampaignQuestions = exports.checkCampaignCompletion = exports.getCampaignById = exports.getCampaignsByBrand = exports.getAllCampaigns = exports.getActiveCampaigns = void 0;
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
 const package_model_1 = __importDefault(require("../models/package.model"));
 const brand_model_1 = __importDefault(require("../models/brand.model"));
-const referral_model_1 = __importDefault(require("../models/referral.model"));
-const referralEvent_model_1 = __importDefault(require("../models/referralEvent.model"));
 const storageFactory_1 = require("../services/storage/storageFactory");
+const gameSession_service_1 = require("../services/session/gameSession.service");
 const axios_1 = __importDefault(require("axios"));
-// Points awarded to the referrer once their referred user's referral is
-// marked successful (first solved puzzle)
-const REFERRAL_POINTS = 3;
 // Helper function to check and update expired campaigns
 const updateExpiredCampaigns = () => __awaiter(void 0, void 0, void 0, function* () {
     const now = new Date();
@@ -38,6 +33,44 @@ const updateExpiredCampaigns = () => __awaiter(void 0, void 0, void 0, function*
         $set: { status: "ended" },
     });
 });
+const CAMPAIGN_LIST_FIELDS = "_id brandId packageId gameTypes title description brandUrl campaignUrl videoUrl videoDurationSeconds videoSizeBytes videoMimeType puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId prizeDescription prizeUnitsAvailable durationWeeks weeklyPrice startDate endDate createdAt";
+function mapCampaignListItem(campaign, extra) {
+    return {
+        _id: campaign._id,
+        brandId: campaign.brandId,
+        packageId: campaign.packageId,
+        packageName: extra.packageName,
+        brandName: extra.brandName,
+        gameTypes: campaign.gameTypes,
+        title: campaign.title,
+        description: campaign.description,
+        brandUrl: campaign.brandUrl,
+        campaignUrl: campaign.campaignUrl,
+        videoUrl: campaign.videoUrl || null,
+        videoDurationSeconds: campaign.videoDurationSeconds || null,
+        videoSizeBytes: campaign.videoSizeBytes || null,
+        videoMimeType: campaign.videoMimeType || null,
+        puzzleImageUrl: campaign.puzzleImageUrl,
+        timeLimit: campaign.timeLimit,
+        questions: campaign.questions,
+        words: campaign.words,
+        status: campaign.status,
+        paymentStatus: campaign.paymentStatus || "unpaid",
+        packageType: campaign.packageType || null,
+        totalBudget: campaign.totalBudget || 0,
+        dailyAllocation: campaign.dailyAllocation || 0,
+        budgetRemaining: campaign.budgetRemaining || 0,
+        budgetUsed: campaign.budgetUsed || 0,
+        transactionId: campaign.transactionId || null,
+        prizeDescription: campaign.prizeDescription || null,
+        prizeUnitsAvailable: campaign.prizeUnitsAvailable || 1,
+        durationWeeks: campaign.durationWeeks || null,
+        weeklyPrice: campaign.weeklyPrice || null,
+        startDate: campaign.startDate,
+        endDate: campaign.endDate,
+        createdAt: campaign.createdAt,
+    };
+}
 // Get active campaigns only (with brand name included)
 exports.getActiveCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -53,10 +86,10 @@ exports.getActiveCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
             "word_hunt",
         ];
         if (gameType && validGameTypes.includes(gameType)) {
-            filter.gameType = gameType;
+            filter.gameTypes = gameType;
         }
         const campaigns = yield puzzleCampaign_model_1.default.find(filter)
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select(CAMPAIGN_LIST_FIELDS)
             .lean();
         // Fetch brand names and package names for all campaigns
         const campaignsWithBrand = yield Promise.all(campaigns.map((campaign) => __awaiter(void 0, void 0, void 0, function* () {
@@ -66,35 +99,10 @@ exports.getActiveCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, n
             const packageData = yield package_model_1.default.findById(campaign.packageId)
                 .select("name")
                 .lean();
-            return {
-                _id: campaign._id,
-                brandId: campaign.brandId,
-                packageId: campaign.packageId,
+            return mapCampaignListItem(campaign, {
                 packageName: (packageData === null || packageData === void 0 ? void 0 : packageData.name) || null,
                 brandName: (brand === null || brand === void 0 ? void 0 : brand.companyName) || (brand === null || brand === void 0 ? void 0 : brand.name) || "Unknown Brand",
-                gameType: campaign.gameType,
-                title: campaign.title,
-                description: campaign.description,
-                brandUrl: campaign.brandUrl,
-                campaignUrl: campaign.campaignUrl,
-                videoUrl: campaign.videoUrl || null,
-                puzzleImageUrl: campaign.puzzleImageUrl,
-                passage: campaign.passage || null,
-                timeLimit: campaign.timeLimit,
-                questions: campaign.questions,
-                words: campaign.words,
-                status: campaign.status,
-                paymentStatus: campaign.paymentStatus || "unpaid",
-                packageType: campaign.packageType || null,
-                totalBudget: campaign.totalBudget || 0,
-                dailyAllocation: campaign.dailyAllocation || 0,
-                budgetRemaining: campaign.budgetRemaining || 0,
-                budgetUsed: campaign.budgetUsed || 0,
-                transactionId: campaign.transactionId || null,
-                startDate: campaign.startDate,
-                endDate: campaign.endDate,
-                createdAt: campaign.createdAt,
-            };
+            });
         })));
         res.status(200).json({ success: true, campaigns: campaignsWithBrand });
     }
@@ -117,7 +125,7 @@ exports.getAllCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
             "word_hunt",
         ];
         if (gameType && validGameTypes.includes(gameType)) {
-            filter.gameType = gameType;
+            filter.gameTypes = gameType;
         }
         // Filter by status if provided
         const validStatuses = ["active", "ended", "draft"];
@@ -131,7 +139,7 @@ exports.getAllCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
             filter.paymentStatus = paymentStatus;
         }
         const campaigns = yield puzzleCampaign_model_1.default.find(filter)
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select(CAMPAIGN_LIST_FIELDS)
             .lean();
         // Fetch brand names and package names for all campaigns
         const campaignsWithBrand = yield Promise.all(campaigns.map((campaign) => __awaiter(void 0, void 0, void 0, function* () {
@@ -141,35 +149,10 @@ exports.getAllCampaigns = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
             const packageData = yield package_model_1.default.findById(campaign.packageId)
                 .select("name")
                 .lean();
-            return {
-                _id: campaign._id,
-                brandId: campaign.brandId,
-                packageId: campaign.packageId,
+            return mapCampaignListItem(campaign, {
                 packageName: (packageData === null || packageData === void 0 ? void 0 : packageData.name) || null,
                 brandName: (brand === null || brand === void 0 ? void 0 : brand.companyName) || (brand === null || brand === void 0 ? void 0 : brand.name) || "Unknown Brand",
-                gameType: campaign.gameType,
-                title: campaign.title,
-                description: campaign.description,
-                brandUrl: campaign.brandUrl,
-                campaignUrl: campaign.campaignUrl,
-                videoUrl: campaign.videoUrl || null,
-                puzzleImageUrl: campaign.puzzleImageUrl,
-                passage: campaign.passage || null,
-                timeLimit: campaign.timeLimit,
-                questions: campaign.questions,
-                words: campaign.words,
-                status: campaign.status,
-                paymentStatus: campaign.paymentStatus || "unpaid",
-                packageType: campaign.packageType || null,
-                totalBudget: campaign.totalBudget || 0,
-                dailyAllocation: campaign.dailyAllocation || 0,
-                budgetRemaining: campaign.budgetRemaining || 0,
-                budgetUsed: campaign.budgetUsed || 0,
-                transactionId: campaign.transactionId || null,
-                startDate: campaign.startDate,
-                endDate: campaign.endDate,
-                createdAt: campaign.createdAt,
-            };
+            });
         })));
         res.status(200).json({ success: true, campaigns: campaignsWithBrand });
     }
@@ -184,7 +167,7 @@ exports.getCampaignsByBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, 
         yield updateExpiredCampaigns();
         const { brandId } = req.params;
         const campaigns = yield puzzleCampaign_model_1.default.find({ brandId })
-            .select("_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl passage timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt")
+            .select(CAMPAIGN_LIST_FIELDS)
             .lean();
         if (!campaigns || campaigns.length === 0) {
             return res.status(200).json({ success: true, campaigns: [] });
@@ -199,35 +182,10 @@ exports.getCampaignsByBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, 
             const packageData = yield package_model_1.default.findById(campaign.packageId)
                 .select("name")
                 .lean();
-            return {
-                _id: campaign._id,
-                brandId: campaign.brandId,
-                packageId: campaign.packageId,
+            return mapCampaignListItem(campaign, {
                 packageName: (packageData === null || packageData === void 0 ? void 0 : packageData.name) || null,
                 brandName,
-                gameType: campaign.gameType,
-                title: campaign.title,
-                description: campaign.description,
-                brandUrl: campaign.brandUrl,
-                campaignUrl: campaign.campaignUrl,
-                videoUrl: campaign.videoUrl || null,
-                puzzleImageUrl: campaign.puzzleImageUrl,
-                passage: campaign.passage || null,
-                timeLimit: campaign.timeLimit,
-                questions: campaign.questions,
-                words: campaign.words,
-                status: campaign.status,
-                paymentStatus: campaign.paymentStatus || "unpaid",
-                packageType: campaign.packageType || null,
-                totalBudget: campaign.totalBudget || 0,
-                dailyAllocation: campaign.dailyAllocation || 0,
-                budgetRemaining: campaign.budgetRemaining || 0,
-                budgetUsed: campaign.budgetUsed || 0,
-                transactionId: campaign.transactionId || null,
-                startDate: campaign.startDate,
-                endDate: campaign.endDate,
-                createdAt: campaign.createdAt,
-            };
+            });
         })));
         res.status(200).json({ success: true, campaigns: campaignsWithBrand });
     }
@@ -255,46 +213,23 @@ exports.getCampaignById = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
             .lean();
         res.status(200).json({
             success: true,
-            campaign: {
-                _id: campaign._id,
-                brandId: campaign.brandId,
-                packageId: campaign.packageId,
+            campaign: Object.assign(Object.assign({}, mapCampaignListItem(campaign, {
                 packageName: (packageData === null || packageData === void 0 ? void 0 : packageData.name) || null,
                 brandName,
-                gameType: campaign.gameType,
-                title: campaign.title,
-                description: campaign.description,
-                brandUrl: campaign.brandUrl,
-                campaignUrl: campaign.campaignUrl,
-                videoUrl: campaign.videoUrl || null,
-                puzzleImageUrl: campaign.puzzleImageUrl,
-                passage: campaign.passage || null,
-                questions: campaign.questions.map((q) => ({
+            })), { questions: campaign.questions.map((q) => ({
                     question: q.question,
                     choices: q.choices,
                     correctIndex: q.correctIndex,
-                })),
-                words: campaign.words,
-                timeLimit: campaign.timeLimit,
-                status: campaign.status,
-                paymentStatus: campaign.paymentStatus || "unpaid",
-                packageType: campaign.packageType || null,
-                totalBudget: campaign.totalBudget || 0,
-                dailyAllocation: campaign.dailyAllocation || 0,
-                budgetRemaining: campaign.budgetRemaining || 0,
-                budgetUsed: campaign.budgetUsed || 0,
-                transactionId: campaign.transactionId || null,
-                startDate: campaign.startDate,
-                endDate: campaign.endDate,
-                createdAt: campaign.createdAt,
-            },
+                })) }),
         });
     }
     catch (error) {
         return next(new ErrorHandler_1.default(`Failed to fetch campaign details: ${error.message}`, 500));
     }
 }));
-// Check if current user has completed a campaign
+// Check if current user has completed a campaign. Also drives the "replay is
+// just for fun" client-side warning, based on the GameSession
+// first-completion guard.
 exports.checkCampaignCompletion = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { campaignId } = req.params;
@@ -303,13 +238,7 @@ exports.checkCampaignCompletion = (0, catchAsyncError_1.CatchAsyncError)((req, r
         if (!userId) {
             return next(new ErrorHandler_1.default("User not authenticated", 401));
         }
-        // Check if user has already solved this campaign
-        const previousAttempt = yield puzzleAttempt_model_1.default.findOne({
-            userId: userId,
-            campaignId: campaignId,
-            solved: true,
-        }).lean();
-        const hasCompletedByCurrentUser = !!previousAttempt;
+        const hasCompletedByCurrentUser = yield (0, gameSession_service_1.hasFirstCompletion)(userId, campaignId);
         res.status(200).json({
             success: true,
             hasCompletedByCurrentUser,
@@ -317,156 +246,6 @@ exports.checkCampaignCompletion = (0, catchAsyncError_1.CatchAsyncError)((req, r
     }
     catch (error) {
         return next(new ErrorHandler_1.default(`Failed to check campaign completion status: ${error.message}`, 500));
-    }
-}));
-exports.submitCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const { campaignId } = req.params;
-        const user = req.user;
-        const userId = user && user._id ? String(user._id) : undefined;
-        const body = req.body;
-        const campaign = yield puzzleCampaign_model_1.default.findById(campaignId);
-        if (!campaign) {
-            return next(new ErrorHandler_1.default("Campaign not found. Please check the campaign ID and try again.", 404));
-        }
-        // compute quiz score
-        let quizScore = 0;
-        if (Array.isArray(body.answers)) {
-            for (let i = 0; i < Math.min(body.answers.length, campaign.questions.length); i++) {
-                console.log(`Question ${i}: User answered ${body.answers[i]}, Correct answer is ${campaign.questions[i].correctIndex}`);
-                if (body.answers[i] === campaign.questions[i].correctIndex) {
-                    quizScore++;
-                }
-            }
-        }
-        // Check if all questions were answered correctly
-        const totalQuestions = campaign.questions.length;
-        const allQuestionsCorrect = quizScore === totalQuestions;
-        console.log(`Quiz Score: ${quizScore}/${totalQuestions}, All Correct: ${allQuestionsCorrect}`);
-        console.log(`Solved: ${body.solved}`);
-        // determine if first-time ever solved (used for unique puzzle counts)
-        let firstTime = false;
-        if (body.solved && allQuestionsCorrect) {
-            const prevEver = yield puzzleAttempt_model_1.default.findOne({
-                userId: userId,
-                campaignId: campaignId,
-                solved: true,
-            });
-            console.log(`Previous successful attempt ever found: ${!!prevEver}`);
-            if (!prevEver)
-                firstTime = true;
-        }
-        // Allow users to earn points only 1 time per DAY for the same campaign.
-        // Count today's successful attempts for this user+campaign.
-        const now = new Date();
-        const startOfDay = new Date(now);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(now);
-        endOfDay.setHours(23, 59, 59, 999);
-        const todaysSuccessCount = yield puzzleAttempt_model_1.default.countDocuments({
-            userId: userId,
-            campaignId: campaignId,
-            solved: true,
-            timestamp: { $gte: startOfDay, $lte: endOfDay },
-        });
-        const canEarnPointsNow = body.solved && allQuestionsCorrect && todaysSuccessCount < 1;
-        // Simplified fixed-point scoring (time/moves recorded but not used)
-        let pointsEarned = 0;
-        if (canEarnPointsNow) {
-            const FIXED_POINTS = {
-                spot_the_difference: 1,
-                card_matching: 1,
-                sliding_puzzle: 2,
-                word_hunt: 1,
-            };
-            pointsEarned = FIXED_POINTS[campaign.gameType] || 0;
-            console.log(`Points (fixed) for ${campaign.gameType}:`, pointsEarned);
-        }
-        console.log(`First Time: ${firstTime}, Today's successes: ${todaysSuccessCount}, Points Earned: ${pointsEarned}`);
-        const attempt = yield puzzleAttempt_model_1.default.create({
-            userId: userId,
-            puzzleId: campaignId,
-            campaignId: campaignId,
-            timeTaken: body.timeTaken,
-            movesTaken: body.movesTaken,
-            solved: body.solved,
-            firstTimeSolved: firstTime,
-            quizScore,
-            answers: Array.isArray(body.answers) ? body.answers : [],
-            pointsEarned,
-        });
-        // update user analytics
-        const userDoc = userId ? yield user_model_1.default.findById(userId) : null;
-        if (userDoc) {
-            userDoc.analytics.lifetime.attempts =
-                (userDoc.analytics.lifetime.attempts || 0) + 1;
-            userDoc.analytics.lifetime.totalMoves =
-                (userDoc.analytics.lifetime.totalMoves || 0) + body.movesTaken;
-            userDoc.analytics.lifetime.totalTime =
-                (userDoc.analytics.lifetime.totalTime || 0) + body.timeTaken;
-            if (body.solved && allQuestionsCorrect) {
-                userDoc.analytics.lifetime.puzzlesSolved =
-                    (userDoc.analytics.lifetime.puzzlesSolved || 0) +
-                        (firstTime ? 1 : 0);
-            }
-            // successRate = puzzlesSolved / attempts
-            if (userDoc.analytics.lifetime.attempts > 0) {
-                userDoc.analytics.lifetime.successRate =
-                    (userDoc.analytics.lifetime.puzzlesSolved || 0) /
-                        userDoc.analytics.lifetime.attempts;
-            }
-            if (firstTime) {
-                userDoc.puzzlesSolved = userDoc.puzzlesSolved || [];
-                userDoc.puzzlesSolved.push(campaignId);
-            }
-            yield userDoc.save();
-            // If this is the user's first successful solve ever, mark any
-            // pending referral as successful and record the points + event.
-            // Referral points are NOT added to the referrer's lifetime totals:
-            // the referral reward is based on the highest referral points within
-            // a given month, so points must stay scoped to the month the
-            // referral became successful (via `successfulAt`) rather than
-            // accumulate permanently. Monthly rankings are computed on demand
-            // from the Referral collection (see getReferralSummary /
-            // finalizeMonthlyRewards), which resets naturally each month.
-            try {
-                if (firstTime && userId) {
-                    const referral = yield referral_model_1.default.findOne({
-                        referredUserId: String(userId),
-                        successful: false,
-                    });
-                    if (referral) {
-                        referral.successful = true;
-                        referral.successfulAt = new Date();
-                        referral.pointsAwarded = REFERRAL_POINTS;
-                        yield referral.save();
-                        yield referralEvent_model_1.default.create({
-                            referrerId: referral.referrerId,
-                            referredUserId: referral.referredUserId,
-                            eventType: "first_puzzle",
-                        });
-                    }
-                }
-            }
-            catch (err) {
-                // non-fatal: log and continue
-                console.error("Referral marking failed:", err);
-            }
-        }
-        // Remove user from "currently playing" after submitting
-        if (userId) {
-            const redis = require("../utils/redis").redis;
-            yield redis.srem("users:currently_playing", userId);
-            yield redis.del(`user:${userId}:playing`);
-        }
-        res.status(201).json({
-            success: true,
-            attempt,
-            gameType: campaign.gameType,
-        });
-    }
-    catch (error) {
-        return next(new ErrorHandler_1.default(`Failed to submit campaign result: ${error.message}`, 500));
     }
 }));
 // ---------------------------------------------------------------------------
@@ -638,7 +417,7 @@ exports.updateCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         // Multipart fields arrive as strings — coerce before using
         const body = req.body;
         const updates = {};
-        const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl", "passage"];
+        const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl"];
         for (const key of stringFields) {
             if (body[key] !== undefined)
                 updates[key] = body[key];

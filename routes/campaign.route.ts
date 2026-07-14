@@ -6,7 +6,6 @@ import {
   getCampaignsByBrand,
   getCampaignById,
   checkCampaignCompletion,
-  submitCampaign,
   updateCampaign,
   deleteCampaign,
   generateCampaignQuestions,
@@ -41,9 +40,6 @@ router.get(
 
 // Get single campaign by campaign ID
 router.get("/campaigns/:campaignId", getCampaignById);
-
-// Submit campaign result
-router.post("/campaigns/:campaignId/submit", isAuthenticated, submitCampaign);
 
 // Update campaign
 router.patch("/campaigns/:campaignId", isAuthenticated, upload.single("image"), updateCampaign);

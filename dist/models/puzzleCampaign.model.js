@@ -37,24 +37,12 @@ const mongoose_1 = __importStar(require("mongoose"));
 const puzzleCampaignSchema = new mongoose_1.default.Schema({
     brandId: { type: String, required: true },
     packageId: { type: String, required: true, index: true },
-    gameType: {
-        type: String,
-        enum: [
-            "sliding_puzzle",
-            "card_matching",
-            "spot_the_difference",
-            "word_hunt",
-        ],
-        required: true,
-        default: "sliding_puzzle",
-    },
     title: { type: String, required: true },
     description: { type: String, required: true },
     brandUrl: { type: String, required: false },
     campaignUrl: { type: String, required: false },
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
-    passage: { type: String, required: false, maxlength: 1000 },
     questions: [
         {
             question: { type: String, required: true },
@@ -88,11 +76,31 @@ const puzzleCampaignSchema = new mongoose_1.default.Schema({
         default: "unpaid",
     },
     transactionId: { type: String },
+    // Multi-game fields — every campaign spans all four game types.
+    gameTypes: {
+        type: [
+            {
+                type: String,
+                enum: [
+                    "sliding_puzzle",
+                    "card_matching",
+                    "spot_the_difference",
+                    "word_hunt",
+                ],
+            },
+        ],
+        required: true,
+    },
+    videoDurationSeconds: { type: Number },
+    videoSizeBytes: { type: Number },
+    videoMimeType: { type: String },
+    prizeDescription: { type: String },
+    prizeUnitsAvailable: { type: Number, default: 1 },
+    durationWeeks: { type: Number },
+    weeklyPrice: { type: Number },
 }, { timestamps: true });
 // index for quick analytics by brand
 puzzleCampaignSchema.index({ brandId: 1 });
-// index for querying by game type
-puzzleCampaignSchema.index({ gameType: 1 });
 // index for querying by status
 puzzleCampaignSchema.index({ status: 1 });
 // index for querying by end date (for auto-ending campaigns)

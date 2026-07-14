@@ -18,11 +18,9 @@ export interface AwardPointsParams {
 /**
  * Single write path for every point-earning event on the platform (session
  * completions, referral bonuses, forum winner-share bonuses, admin
- * adjustments). Replaces the old dual-collection merge
- * (PuzzleAttemptModel + ReferralModel) that buildMonthlyEntries() used to do —
- * one ledger, one aggregation, and weekKey is stamped at write time so the
- * weekly leaderboard reset is just "query bounded by week" with no explicit
- * reset step required.
+ * adjustments) — one ledger, one aggregation, and weekKey is stamped at
+ * write time so the weekly leaderboard reset is just "query bounded by
+ * week" with no explicit reset step required.
  */
 export async function awardPoints(
   params: AwardPointsParams
@@ -78,6 +76,43 @@ export async function getWeeklyPointsAggregate(
 ): Promise<WeeklyPointsEntry[]> {
   const agg = await PointsLedgerModel.aggregate([
     { $match: { weekKey } },
+    {
+      $group: {
+        _id: "$userId",
+        points: { $sum: "$points" },
+        avgCompletionTimeMs: {
+          $avg: {
+            $cond: [
+              { $eq: ["$source", "session_completion"] },
+              "$completionTimeMs",
+              "$$REMOVE",
+            ],
+          },
+        },
+        sessionCompletions: {
+          $sum: {
+            $cond: [{ $eq: ["$source", "session_completion"] }, 1, 0],
+          },
+        },
+      },
+    },
+  ]);
+
+  return agg.map((a: any) => ({
+    userId: a._id,
+    points: a.points,
+    avgCompletionTimeMs: a.avgCompletionTimeMs ?? null,
+    sessionCompletions: a.sessionCompletions || 0,
+  }));
+}
+
+/**
+ * Per-user point totals across all time, plus average completion time from
+ * session_completion entries only (first completions — replays never write
+ * a ledger entry). Used by the all-time leaderboard.
+ */
+export async function getAllTimePointsAggregate(): Promise<WeeklyPointsEntry[]> {
+  const agg = await PointsLedgerModel.aggregate([
     {
       $group: {
         _id: "$userId",
