@@ -262,13 +262,15 @@ export interface CompleteSessionResult {
   isFirstCompletion: boolean;
   pointsAwarded: number;
   totalCompletionTimeMs: number;
+  totalMoves: number;
   voided: boolean;
   flagged: boolean;
 }
 
 export async function completeSession(
   sessionId: string,
-  userId: string
+  userId: string,
+  clientTotalMoves?: number
 ): Promise<CompleteSessionResult> {
   const session = await loadOwnedSession(sessionId, userId);
 
@@ -280,6 +282,7 @@ export async function completeSession(
       isFirstCompletion: !!session.isFirstCompletionForUser,
       pointsAwarded: session.pointsAwarded,
       totalCompletionTimeMs: session.totalCompletionTimeMs || 0,
+      totalMoves: session.totalMoves || 0,
       voided: session.anticheat.voided,
       flagged: session.anticheat.flagged,
     };
@@ -307,6 +310,7 @@ export async function completeSession(
   const totalCompletionTimeMs = now.getTime() - session.startedAt.getTime();
   session.completedAt = now;
   session.totalCompletionTimeMs = totalCompletionTimeMs;
+  if (clientTotalMoves !== undefined) session.totalMoves = clientTotalMoves;
 
   if (session.anticheat.voided) {
     session.status = "voided";
@@ -316,6 +320,7 @@ export async function completeSession(
       isFirstCompletion: false,
       pointsAwarded: 0,
       totalCompletionTimeMs,
+      totalMoves: session.totalMoves || 0,
       voided: true,
       flagged: session.anticheat.flagged,
     };
@@ -370,6 +375,7 @@ export async function completeSession(
     isFirstCompletion,
     pointsAwarded,
     totalCompletionTimeMs,
+    totalMoves: session.totalMoves || 0,
     voided: false,
     flagged: session.anticheat.flagged,
   };

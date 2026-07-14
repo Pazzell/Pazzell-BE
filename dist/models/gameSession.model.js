@@ -77,6 +77,7 @@ const gameSessionSchema = new mongoose_1.default.Schema({
     },
     completedAt: { type: Date },
     totalCompletionTimeMs: { type: Number },
+    totalMoves: { type: Number },
     isFirstCompletionForUser: { type: Boolean },
     pointsAwarded: { type: Number, default: 0 },
     raffleTicketAwarded: { type: Boolean, default: false },

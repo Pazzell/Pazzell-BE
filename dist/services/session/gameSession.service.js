@@ -224,7 +224,7 @@ function submitQuizAttempt(sessionId, userId, answers) {
         return { session, score, allCorrect };
     });
 }
-function completeSession(sessionId, userId) {
+function completeSession(sessionId, userId, clientTotalMoves) {
     return __awaiter(this, void 0, void 0, function* () {
         const session = yield loadOwnedSession(sessionId, userId);
         // Idempotent: calling /complete again on an already-completed session just
@@ -235,6 +235,7 @@ function completeSession(sessionId, userId) {
                 isFirstCompletion: !!session.isFirstCompletionForUser,
                 pointsAwarded: session.pointsAwarded,
                 totalCompletionTimeMs: session.totalCompletionTimeMs || 0,
+                totalMoves: session.totalMoves || 0,
                 voided: session.anticheat.voided,
                 flagged: session.anticheat.flagged,
             };
@@ -257,6 +258,8 @@ function completeSession(sessionId, userId) {
         const totalCompletionTimeMs = now.getTime() - session.startedAt.getTime();
         session.completedAt = now;
         session.totalCompletionTimeMs = totalCompletionTimeMs;
+        if (clientTotalMoves !== undefined)
+            session.totalMoves = clientTotalMoves;
         if (session.anticheat.voided) {
             session.status = "voided";
             yield session.save();
@@ -265,6 +268,7 @@ function completeSession(sessionId, userId) {
                 isFirstCompletion: false,
                 pointsAwarded: 0,
                 totalCompletionTimeMs,
+                totalMoves: session.totalMoves || 0,
                 voided: true,
                 flagged: session.anticheat.flagged,
             };
@@ -311,6 +315,7 @@ function completeSession(sessionId, userId) {
             isFirstCompletion,
             pointsAwarded,
             totalCompletionTimeMs,
+            totalMoves: session.totalMoves || 0,
             voided: false,
             flagged: session.anticheat.flagged,
         };

@@ -128,18 +128,24 @@ export const postQuizAttempt = CatchAsyncError(
   }
 );
 
-// POST /sessions/:id/complete
+// POST /sessions/:id/complete  { totalMoves? }
 export const postCompleteSession = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = String(req.user!._id);
       const { id } = req.params;
-      const result = await completeSession(id, userId);
+      const { totalMoves } = req.body;
+      const result = await completeSession(
+        id,
+        userId,
+        totalMoves !== undefined ? Number(totalMoves) : undefined
+      );
       res.status(200).json({
         success: true,
         isFirstCompletion: result.isFirstCompletion,
         pointsAwarded: result.pointsAwarded,
         totalCompletionTimeMs: result.totalCompletionTimeMs,
+        totalMoves: result.totalMoves,
         voided: result.voided,
         flagged: result.flagged,
       });
