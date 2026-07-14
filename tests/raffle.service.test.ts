@@ -17,8 +17,6 @@ async function createActiveV2Campaign() {
   return PuzzleCampaignModel.create({
     brandId: "brand-1",
     packageId: "000000000000000000000000",
-    schemaVersion: 2,
-    gameType: "sliding_puzzle",
     gameTypes: ["sliding_puzzle", "card_matching", "spot_the_difference", "word_hunt"],
     title: "Campaign",
     description: "desc",

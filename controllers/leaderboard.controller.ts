@@ -1,13 +1,13 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
 import UserModel from "../models/user.model";
 import { getWeekBounds, parseWeekKey } from "../utils/weekBoundary";
 import {
   getUnifiedWeeklyEntries,
   getHiddenUserIds,
 } from "../services/leaderboard.service";
+import { getAllTimePointsAggregate } from "../services/points/pointsLedger.service";
 
 async function buildWeeklyResponseEntries(
   weekStart: Date,
@@ -100,39 +100,30 @@ export const getLeaderboardByWeek = CatchAsyncError(
   }
 );
 
-// Get all-time leaderboard (legacy puzzle-attempt points only — v2 session
-// points/referral/bonus points are scoped to weekly ledger entries and not
-// yet folded into this endpoint)
+// Get all-time leaderboard (lifetime PointsLedger totals — session
+// completions + referral/winner-share bonuses)
 export const getAllTimeLeaderboard = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const agg = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            pointsEarned: { $gt: 0 },
-          },
-        },
-        {
-          $group: {
-            _id: "$userId",
-            puzzlesSolved: { $sum: 1 },
-            points: { $sum: "$pointsEarned" },
-            avgTime: { $avg: "$timeTaken" },
-          },
-        },
-        { $sort: { points: -1, avgTime: 1, puzzlesSolved: -1 } },
-        { $limit: 100 },
-      ]);
+      const agg = await getAllTimePointsAggregate();
+      agg.sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        const aTime = a.avgCompletionTimeMs ?? Infinity;
+        const bTime = b.avgCompletionTimeMs ?? Infinity;
+        if (aTime !== bTime) return aTime - bTime;
+        return b.sessionCompletions - a.sessionCompletions;
+      });
+      const top100 = agg.slice(0, 100);
 
       const hiddenIds = await getHiddenUserIds();
 
-      const entries = agg
-        .filter((a: any) => !hiddenIds.has(String(a._id)))
-        .map((a: any) => ({
-          userId: a._id,
-          puzzlesSolved: a.puzzlesSolved,
+      const entries = top100
+        .filter((a) => !hiddenIds.has(String(a.userId)))
+        .map((a) => ({
+          userId: a.userId,
+          puzzlesSolved: a.sessionCompletions,
           points: a.points,
-          avgTime: a.avgTime || null,
+          avgTime: a.avgCompletionTimeMs,
         }));
 
       const entriesWithUserDetails = await Promise.all(

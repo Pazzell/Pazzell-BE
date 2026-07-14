@@ -11,9 +11,10 @@ const router = express.Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  // Generous ceiling as a defense-in-depth guard; the real duration/size check
-  // against the configured limit happens in services/video/videoValidation.service.ts
-  limits: { fileSize: 150 * 1024 * 1024 },
+  // Ceiling sits above the configured video.maxSizeBytes (10MB) so the
+  // friendlier size error from services/video/videoValidation.service.ts
+  // fires first; this is just a defense-in-depth backstop.
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
 
 // Get all brands

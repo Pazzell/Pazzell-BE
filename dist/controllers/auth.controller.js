@@ -27,15 +27,7 @@ const ejs_1 = __importDefault(require("ejs"));
 const emailFactory_1 = require("../services/email/emailFactory");
 const user_controller_1 = require("./user.controller");
 const userHelpers_1 = require("../utils/userHelpers");
-const referral_model_1 = __importDefault(require("../models/referral.model"));
-const referralEvent_model_1 = __importDefault(require("../models/referralEvent.model"));
-const mongoose_1 = __importDefault(require("mongoose"));
-function findReferrer(refLookup) {
-    const conditions = [{ username: refLookup }, { email: refLookup }];
-    if (mongoose_1.default.isValidObjectId(refLookup))
-        conditions.unshift({ _id: refLookup });
-    return user_model_1.default.findOne({ $or: conditions });
-}
+const referral_service_1 = require("../services/referral.service");
 // Create password reset token
 const createResetToken = (userId) => {
     const token = jsonwebtoken_1.default.sign({ userId }, process.env.ACTIVATION_SECRET, { expiresIn: "15m" });
@@ -87,36 +79,11 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                 role: "gamer",
                 isVerified: true,
             });
-            // capture referral if provided in request body — 1-point bonus for new user
-            try {
-                const { referrerId, referrerUsername, referralCode } = req.body;
-                const refLookup = referrerId || referrerUsername || referralCode;
-                if (refLookup) {
-                    const refUser = yield findReferrer(refLookup);
-                    if (refUser && String(refUser._id) !== String(user._id)) {
-                        try {
-                            yield referral_model_1.default.create({
-                                referrerId: String(refUser._id),
-                                referredUserId: String(user._id),
-                            });
-                            yield referralEvent_model_1.default.create({
-                                referrerId: String(refUser._id),
-                                referredUserId: String(user._id),
-                                eventType: "signup",
-                            });
-                            yield user_model_1.default.findByIdAndUpdate(user._id, {
-                                $inc: { "analytics.lifetime.totalPoints": 1 },
-                            });
-                        }
-                        catch (e) {
-                            // ignore duplicate or other errors
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                console.error("Referral capture failed during Google signup", e);
-            }
+            // Capture referral relationship (no signup bonus — the referrer's reward
+            // is credited once the referee crosses the points threshold; see
+            // referral.service.ts checkReferralQualification).
+            const { referrerId, referrerUsername, referralCode } = req.body;
+            yield (0, referral_service_1.captureReferralAtSignup)(referrerId || referrerUsername || referralCode, String(user._id));
         }
         else {
             // ensure googleId is stored
@@ -178,33 +145,9 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
                 role: "gamer",
                 isVerified: false,
             });
-            // capture referral at signup — give referred user 1 signup bonus point
-            try {
-                const { referrerId, referrerUsername, referralCode } = req.body;
-                const refLookup = referrerId || referrerUsername || referralCode;
-                if (refLookup) {
-                    const refUser = yield findReferrer(refLookup);
-                    if (refUser && String(refUser._id) !== String(user._id)) {
-                        try {
-                            yield referral_model_1.default.create({
-                                referrerId: String(refUser._id),
-                                referredUserId: String(user._id),
-                            });
-                            yield referralEvent_model_1.default.create({
-                                referrerId: String(refUser._id),
-                                referredUserId: String(user._id),
-                                eventType: "signup",
-                            });
-                        }
-                        catch (e) {
-                            // ignore duplicate or other errors
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                console.error("Referral capture failed during signup", e);
-            }
+            // Capture referral relationship (no signup bonus — see googleAuth comment above).
+            const { referrerId, referrerUsername, referralCode } = req.body;
+            yield (0, referral_service_1.captureReferralAtSignup)(referrerId || referrerUsername || referralCode, String(user._id));
             res.status(201).json({
                 success: true,
                 message: "Registration successful! Please check your email to verify your account.",
@@ -278,36 +221,9 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 role: "gamer",
                 isVerified: true,
             });
-            // capture referral if activation token included referrer info — 1-point bonus
-            try {
-                const { referrerId, referrerUsername, referralCode } = decoded.user;
-                const refLookup = referrerId || referrerUsername || referralCode;
-                if (refLookup) {
-                    const refUser = yield findReferrer(refLookup);
-                    if (refUser && String(refUser._id) !== String(user._id)) {
-                        try {
-                            yield referral_model_1.default.create({
-                                referrerId: String(refUser._id),
-                                referredUserId: String(user._id),
-                            });
-                            yield referralEvent_model_1.default.create({
-                                referrerId: String(refUser._id),
-                                referredUserId: String(user._id),
-                                eventType: "signup",
-                            });
-                            yield user_model_1.default.findByIdAndUpdate(user._id, {
-                                $inc: { "analytics.lifetime.totalPoints": 1 },
-                            });
-                        }
-                        catch (e) {
-                            // ignore duplicate or other errors
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                console.error("Referral capture failed during activation signup", e);
-            }
+            // Capture referral relationship (no signup bonus — see googleAuth comment above).
+            const { referrerId, referrerUsername, referralCode } = decoded.user;
+            yield (0, referral_service_1.captureReferralAtSignup)(referrerId || referrerUsername || referralCode, String(user._id));
         }
         else if (role === "brand") {
             const { name, companyName } = decoded.user;

@@ -65,12 +65,6 @@ export async function startSession(
 ): Promise<IGameSession> {
   const campaign = await PuzzleCampaignModel.findById(campaignId);
   if (!campaign) throw new SessionError("Campaign not found", 404);
-  if (campaign.schemaVersion !== 2) {
-    throw new SessionError(
-      "This campaign uses the legacy single-game flow — submit via /campaigns/:campaignId/submit instead",
-      400
-    );
-  }
   if (campaign.status !== "active") {
     throw new SessionError("Campaign is not active", 400);
   }

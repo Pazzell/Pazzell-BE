@@ -12,220 +12,103 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getWeeklyPrizePoolSummary = exports.getDailyPrizePool = exports.calculateWeeklyPayouts = exports.calculateDailyPrizePool = void 0;
-const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
-const dailyPrizePool_model_1 = __importDefault(require("../models/dailyPrizePool.model"));
+exports.getWeeklyPrizePoolSummary = exports.calculateWeeklyPayouts = void 0;
+exports.getWeeklyRevenue = getWeeklyRevenue;
 const payout_model_1 = __importDefault(require("../models/payout.model"));
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
-// Fixed daily rates
-const DAILY_RATES = {
-    basic: 1000, // ₦1,000/day
-    premium: 1428.57, // ₦1,428.57/day
-};
-// Prize distribution percentages for top 10
-const PRIZE_DISTRIBUTION = [
-    { position: 1, percentage: 0.2 }, // 20%
-    { position: 2, percentage: 0.15 }, // 15%
-    { position: 3, percentage: 0.1 }, // 10%
-    { position: 4, percentage: 0.07875 }, // 7.875%
-    { position: 5, percentage: 0.07875 }, // 7.875%
-    { position: 6, percentage: 0.07875 }, // 7.875%
-    { position: 7, percentage: 0.07875 }, // 7.875%
-    { position: 8, percentage: 0.07875 }, // 7.875%
-    { position: 9, percentage: 0.07875 }, // 7.875%
-    { position: 10, percentage: 0.07875 }, // 7.875%
-];
+const transaction_model_1 = __importDefault(require("../models/transaction.model"));
+const weekBoundary_1 = require("../utils/weekBoundary");
+const leaderboard_service_1 = require("./leaderboard.service");
+const config_service_1 = require("./config/config.service");
 /**
- * Calculate and create daily prize pool for a specific date
+ * Weekly revenue = sum of successful campaign payments (Transaction.amount)
+ * within the week — replaces the old daily-drip DailyPrizePoolModel
+ * mechanism (fed by campaign.dailyAllocation), which was built for the old
+ * hours/month campaign-duration model and no longer reflects "that week's
+ * campaign revenue" in a way that maps cleanly to the weekly billing revert.
  */
-const calculateDailyPrizePool = (date) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const targetDate = new Date(date);
-        targetDate.setHours(0, 0, 0, 0);
-        // Find all active campaigns for this date
-        const activeCampaigns = yield puzzleCampaign_model_1.default.find({
-            status: "active",
-            paymentStatus: "paid",
-            startDate: { $lte: targetDate },
-            endDate: { $gte: targetDate },
-        });
-        const campaignAllocations = [];
-        let totalDailyPool = 0;
-        for (const campaign of activeCampaigns) {
-            if (campaign.budgetRemaining && campaign.budgetRemaining > 0) {
-                const packageType = campaign.packageType;
-                // Prefer campaign-specific dailyAllocation (set at payment), fallback to legacy DAILY_RATES
-                const dailyAllocation = (campaign.dailyAllocation && Number(campaign.dailyAllocation)) ||
-                    DAILY_RATES[packageType];
-                // Add to pool
-                campaignAllocations.push({
-                    campaignId: String(campaign._id),
-                    packageType,
-                    dailyAllocation,
-                });
-                totalDailyPool += dailyAllocation;
-                // Update campaign budget
-                campaign.budgetUsed = (campaign.budgetUsed || 0) + dailyAllocation;
-                campaign.budgetRemaining =
-                    (campaign.budgetRemaining || 0) - dailyAllocation;
-                yield campaign.save();
-            }
-        }
-        // Calculate 70-30 split
-        const gamerShare = totalDailyPool * 0.7;
-        const platformFee = totalDailyPool * 0.3;
-        // Create or update daily prize pool
-        const prizePool = yield dailyPrizePool_model_1.default.findOneAndUpdate({ date }, {
-            date,
-            activeCampaigns: campaignAllocations,
-            totalDailyPool,
-            gamerShare,
-            platformFee,
-            status: "active",
-        }, { upsert: true, new: true });
-        return prizePool;
-    }
-    catch (error) {
-        throw error;
-    }
-});
-exports.calculateDailyPrizePool = calculateDailyPrizePool;
-/**
- * Get current week's start and end dates (Monday to Sunday)
- */
-const getCurrentWeekDates = () => {
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysFromMonday);
-    weekStart.setHours(0, 0, 0, 0);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    weekEnd.setHours(23, 59, 59, 999);
-    return { weekStart, weekEnd };
-};
-/**
- * Calculate weekly payouts for top 10 gamers
- */
-const calculateWeeklyPayouts = (weekKey) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        // Parse week key to get dates
-        const [startStr, endStr] = weekKey.split("_to_");
-        const weekStart = new Date(startStr);
-        const weekEnd = new Date(endStr);
-        // Get top 10 gamers for the week
-        const topGamers = yield puzzleAttempt_model_1.default.aggregate([
+function getWeeklyRevenue(weekStart, weekEnd) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        const agg = yield transaction_model_1.default.aggregate([
             {
                 $match: {
-                    firstTimeSolved: true,
-                    timestamp: { $gte: weekStart, $lte: weekEnd },
+                    status: "success",
+                    createdAt: { $gte: weekStart, $lte: weekEnd },
                 },
             },
-            {
-                $group: {
-                    _id: "$userId",
-                    puzzlesSolved: { $sum: 1 },
-                    points: { $sum: "$pointsEarned" },
-                },
-            },
-            { $sort: { puzzlesSolved: -1, points: -1 } },
-            { $limit: 10 },
+            { $group: { _id: null, total: { $sum: "$amount" } } },
         ]);
-        if (topGamers.length === 0) {
-            return { message: "No gamers found for this week" };
-        }
-        // Get all daily prize pools for the week
-        const dailyPools = yield dailyPrizePool_model_1.default.find({
-            date: {
-                $gte: startStr,
-                $lte: endStr,
-            },
-        });
-        // Calculate total weekly pool
-        const totalWeeklyPool = dailyPools.reduce((sum, pool) => sum + pool.totalDailyPool, 0);
-        const weeklyGamerShare = totalWeeklyPool * 0.7;
-        // Create payouts for each gamer
-        const payouts = [];
-        for (let i = 0; i < topGamers.length; i++) {
-            const gamer = topGamers[i];
-            const position = i + 1;
-            const distribution = PRIZE_DISTRIBUTION[i];
-            const amount = weeklyGamerShare * distribution.percentage;
-            // Create or update payout
-            const payout = yield payout_model_1.default.findOneAndUpdate({ userId: gamer._id, weekKey }, {
-                userId: gamer._id,
-                weekKey,
-                position,
-                points: gamer.points,
-                puzzlesSolved: gamer.puzzlesSolved,
-                totalDailyPool: totalWeeklyPool,
-                gamerShare: weeklyGamerShare,
-                distributionPercentage: distribution.percentage * 100,
-                amount,
-                currency: "NGN",
-                status: "pending",
-            }, { upsert: true, new: true });
-            payouts.push(payout);
-        }
-        return {
+        return ((_a = agg[0]) === null || _a === void 0 ? void 0 : _a.total) || 0;
+    });
+}
+/**
+ * Calculates and upserts weekly cash-reward Payout rows for the top 10
+ * players that week. Player/platform split and rank distribution percentages
+ * are Config-driven (default 50/50 split, may move to 60/40 later — see
+ * services/config/config.service.ts) rather than hardcoded, and both are
+ * snapshotted onto each Payout row for audit even if Config changes later.
+ *
+ * Top-10 selection reuses the exact same unified weekly leaderboard source
+ * (services/leaderboard.service.ts) that the public leaderboard displays —
+ * previously the payout calculation had its own independent aggregation
+ * pipeline (sorted puzzlesSolved desc/points desc, no time tiebreaker) that
+ * could silently disagree with what players saw on the leaderboard.
+ */
+const calculateWeeklyPayouts = (weekKey) => __awaiter(void 0, void 0, void 0, function* () {
+    const { weekStart, weekEnd } = (0, weekBoundary_1.parseWeekKey)(weekKey);
+    const totalRevenue = yield getWeeklyRevenue(weekStart, weekEnd);
+    const { playerSharePercent, platformSharePercent } = yield (0, config_service_1.getPayoutSplit)();
+    const playerPool = Math.round((totalRevenue * playerSharePercent) / 100 * 100) / 100;
+    const platformShare = Math.round((totalRevenue * platformSharePercent) / 100 * 100) / 100;
+    const entries = yield (0, leaderboard_service_1.getUnifiedWeeklyEntries)(weekStart, weekEnd, weekKey);
+    const top10 = entries.slice(0, 10);
+    if (top10.length === 0) {
+        return { weekKey, totalRevenue, playerPool, platformShare, payouts: [] };
+    }
+    const rankDistribution = yield (0, config_service_1.getRankDistribution)();
+    const payouts = [];
+    for (let i = 0; i < top10.length; i++) {
+        const gamer = top10[i];
+        const position = i + 1;
+        const distribution = rankDistribution[i];
+        if (!distribution)
+            break; // fewer configured ranks than players (shouldn't happen with 10 configured)
+        const amount = Math.round(((playerPool * distribution.percentage) / 100) * 100) / 100;
+        const payout = yield payout_model_1.default.findOneAndUpdate({ userId: gamer.userId, weekKey }, {
+            userId: gamer.userId,
             weekKey,
-            totalWeeklyPool,
-            weeklyGamerShare,
-            platformFee: totalWeeklyPool * 0.3,
-            payouts,
-        };
+            position,
+            points: gamer.points,
+            puzzlesSolved: gamer.puzzlesSolved,
+            totalDailyPool: totalRevenue,
+            gamerShare: playerPool,
+            weeklyRevenue: totalRevenue,
+            distributionPercentage: distribution.percentage,
+            amount,
+            currency: "NGN",
+            status: "pending",
+            playerSharePercent,
+            platformSharePercent,
+        }, { upsert: true, new: true });
+        payouts.push(payout);
     }
-    catch (error) {
-        throw error;
-    }
+    return { weekKey, totalRevenue, playerPool, platformShare, payouts };
 });
 exports.calculateWeeklyPayouts = calculateWeeklyPayouts;
-/**
- * Get daily prize pool for a specific date
- */
-const getDailyPrizePool = (date) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const prizePool = yield dailyPrizePool_model_1.default.findOne({ date });
-        if (!prizePool) {
-            // Calculate if not exists
-            return yield (0, exports.calculateDailyPrizePool)(date);
-        }
-        return prizePool;
-    }
-    catch (error) {
-        throw error;
-    }
-});
-exports.getDailyPrizePool = getDailyPrizePool;
-/**
- * Get current week's prize pool summary
- */
+/** Current week's prize pool preview (before Monday's finalization). */
 const getWeeklyPrizePoolSummary = () => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const { weekStart, weekEnd } = getCurrentWeekDates();
-        const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd
-            .toISOString()
-            .slice(0, 10)}`;
-        // Get all daily pools for the week
-        const dailyPools = yield dailyPrizePool_model_1.default.find({
-            date: {
-                $gte: weekKey.split("_to_")[0],
-                $lte: weekKey.split("_to_")[1],
-            },
-        });
-        const totalWeeklyPool = dailyPools.reduce((sum, pool) => sum + pool.totalDailyPool, 0);
-        return {
-            weekKey,
-            weekStart,
-            weekEnd,
-            dailyPools: dailyPools.length,
-            totalWeeklyPool,
-            weeklyGamerShare: totalWeeklyPool * 0.7,
-            weeklyPlatformFee: totalWeeklyPool * 0.3,
-        };
-    }
-    catch (error) {
-        throw error;
-    }
+    const { weekStart, weekEnd, weekKey } = (0, weekBoundary_1.getWeekBounds)();
+    const totalRevenue = yield getWeeklyRevenue(weekStart, weekEnd);
+    const { playerSharePercent, platformSharePercent } = yield (0, config_service_1.getPayoutSplit)();
+    return {
+        weekKey,
+        weekStart,
+        weekEnd,
+        totalRevenue,
+        playerPool: Math.round((totalRevenue * playerSharePercent) / 100 * 100) / 100,
+        platformShare: Math.round((totalRevenue * platformSharePercent) / 100 * 100) / 100,
+        playerSharePercent,
+        platformSharePercent,
+    };
 });
 exports.getWeeklyPrizePoolSummary = getWeeklyPrizePoolSummary;

@@ -5,7 +5,6 @@ import {
   paystackWebhook,
   getCampaignBudget,
   getTransactionHistory,
-  calculateProration,
   calculateWeeklyPrice,
 } from "../controllers/payment.controller";
 import {
@@ -20,9 +19,7 @@ import { isAuthenticated, authorizeRoles } from "../utils/auth";
 
 const router = express.Router();
 
-// Proration calculator (legacy — unused by new campaign creation, kept for old draft campaigns)
-router.get("/payments/calculate-proration", calculateProration);
-// Weekly pricing calculator (public — brands check price before creating a v2 campaign)
+// Weekly pricing calculator (public — brands check price before creating a campaign)
 router.get("/payments/calculate-weekly-price", calculateWeeklyPrice);
 
 // Payment endpoints

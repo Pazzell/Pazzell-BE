@@ -1,0 +1,24 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const forum_controller_1 = require("../controllers/forum.controller");
+const auth_1 = require("../utils/auth");
+const router = express_1.default.Router();
+router.post("/forum/threads", auth_1.isAuthenticated, forum_controller_1.createThread);
+router.get("/forum/threads", forum_controller_1.listThreads);
+router.post("/forum/threads/:id/posts", auth_1.isAuthenticated, forum_controller_1.createPost);
+router.get("/forum/threads/:id/posts", forum_controller_1.listPosts);
+router.post("/forum/posts/:id/like", auth_1.isAuthenticated, forum_controller_1.likeForumPost);
+router.delete("/forum/posts/:id/like", auth_1.isAuthenticated, forum_controller_1.unlikeForumPost);
+router.post("/forum/posts/:id/flag", auth_1.isAuthenticated, forum_controller_1.flagForumPost);
+router.get("/forum/moderation/flags", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("admin"), forum_controller_1.listFlags);
+router.patch("/forum/moderation/flags/:id", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("admin"), forum_controller_1.resolveFlag);
+router.post("/forum/winner-submissions", auth_1.isAuthenticated, forum_controller_1.createWinnerShareSubmission);
+router.get("/forum/winner-submissions/mine", auth_1.isAuthenticated, forum_controller_1.getMyWinnerShareSubmissions);
+router.get("/forum/winner-submissions", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("admin"), forum_controller_1.listWinnerShareSubmissions);
+router.post("/forum/winner-submissions/:id/verify", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("admin"), forum_controller_1.verifySubmission);
+router.post("/forum/winner-submissions/:id/reject", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("admin"), forum_controller_1.rejectSubmission);
+exports.default = router;

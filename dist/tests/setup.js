@@ -23,6 +23,12 @@ const connectTestDB = () => __awaiter(void 0, void 0, void 0, function* () {
     mongo = yield mongodb_memory_server_1.MongoMemoryServer.create();
     const uri = mongo.getUri();
     yield mongoose_1.default.connect(uri);
+    // Mongoose builds indexes in the background after a model is first
+    // registered — without waiting for them, tests that exercise a unique
+    // index (e.g. race-condition/duplicate guards) can flake because the
+    // index isn't ready yet when the first writes land. Wait for every
+    // currently-registered model's indexes to finish building.
+    yield Promise.all(Object.values(mongoose_1.default.connection.models).map((model) => model.init()));
 });
 exports.connectTestDB = connectTestDB;
 const clearTestDB = () => __awaiter(void 0, void 0, void 0, function* () {

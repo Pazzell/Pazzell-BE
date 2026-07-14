@@ -12,12 +12,16 @@ const payoutSchema = new mongoose_1.default.Schema({
     puzzlesSolved: { type: Number, required: true },
     totalDailyPool: { type: Number, required: true },
     gamerShare: { type: Number, required: true },
+    weeklyRevenue: { type: Number },
     distributionPercentage: { type: Number, required: true },
     amount: { type: Number, required: true },
     currency: { type: String, default: "NGN" },
     status: { type: String, enum: ["pending", "processed", "paid", "failed"], default: "pending" },
     paymentReference: { type: String },
     processedAt: { type: Date },
+    playerSharePercent: { type: Number },
+    platformSharePercent: { type: Number },
+    walletTransactionId: { type: String },
 }, { timestamps: true });
 // Compound index for unique user per week
 payoutSchema.index({ userId: 1, weekKey: 1 }, { unique: true });
