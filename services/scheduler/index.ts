@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import mongoose from "mongoose";
 import RaffleTicketModel from "../../models/raffleTicket.model";
-import { checkExpiredCampaigns } from "../../utils/scheduler";
+import { checkExpiredCampaigns, checkAbandonedSessions } from "../../utils/scheduler";
 import { calculateWeeklyPayouts } from "../prizePool.service";
 import { runDraw } from "../raffle.service";
 import { reconcileAllWallets } from "../wallet/wallet.service";
@@ -49,6 +49,7 @@ export async function runWeeklyRollover(): Promise<void> {
 export async function runHourlyCampaignExpiry(): Promise<void> {
   if (mongoose.connection.readyState !== 1) return;
   await checkExpiredCampaigns();
+  await checkAbandonedSessions();
 }
 
 export async function runNightlyWalletReconciliation(): Promise<void> {

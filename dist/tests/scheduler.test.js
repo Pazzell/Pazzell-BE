@@ -17,9 +17,14 @@ const transaction_model_1 = __importDefault(require("../models/transaction.model
 const payout_model_1 = __importDefault(require("../models/payout.model"));
 const raffleTicket_model_1 = __importDefault(require("../models/raffleTicket.model"));
 const raffleDraw_model_1 = __importDefault(require("../models/raffleDraw.model"));
+const gameSession_model_1 = __importDefault(require("../models/gameSession.model"));
 const pointsLedger_service_1 = require("../services/points/pointsLedger.service");
 const weekBoundary_1 = require("../utils/weekBoundary");
 const scheduler_1 = require("../services/scheduler");
+const scheduler_2 = require("../utils/scheduler");
+function makeSession(overrides = {}) {
+    return gameSession_model_1.default.create(Object.assign({ userId: "user-1", campaignId: "campaign-1", status: "in_progress", startedAt: new Date(), games: [], video: {}, quiz: { firstAttempt: null, attempts: [] }, pointsAwarded: 0, raffleTicketAwarded: false, anticheat: { flagged: false, flaggedReasons: [], voided: false } }, overrides));
+}
 describe("services/scheduler runWeeklyRollover", () => {
     beforeAll(() => __awaiter(void 0, void 0, void 0, function* () {
         yield (0, setup_1.connectTestDB)();
@@ -72,5 +77,40 @@ describe("services/scheduler runWeeklyRollover", () => {
         yield expect((0, scheduler_1.runWeeklyRollover)()).resolves.toBeUndefined();
         const payoutCount = yield payout_model_1.default.countDocuments({});
         expect(payoutCount).toBe(0);
+    }));
+});
+describe("utils/scheduler checkAbandonedSessions", () => {
+    beforeAll(() => __awaiter(void 0, void 0, void 0, function* () {
+        yield (0, setup_1.connectTestDB)();
+    }));
+    afterEach(() => __awaiter(void 0, void 0, void 0, function* () {
+        yield (0, setup_1.clearTestDB)();
+    }));
+    afterAll(() => __awaiter(void 0, void 0, void 0, function* () {
+        yield (0, setup_1.closeTestDB)();
+    }));
+    it("marks a session started well past the TTL as abandoned", () => __awaiter(void 0, void 0, void 0, function* () {
+        const staleStart = new Date(Date.now() - 7 * 60 * 60 * 1000); // 7h ago
+        const session = yield makeSession({ status: "in_progress", startedAt: staleStart });
+        yield (0, scheduler_2.checkAbandonedSessions)();
+        const updated = yield gameSession_model_1.default.findById(session._id);
+        expect(updated.status).toBe("abandoned");
+    }));
+    it("leaves a recently-started in_progress session alone", () => __awaiter(void 0, void 0, void 0, function* () {
+        const session = yield makeSession({ status: "in_progress", startedAt: new Date() });
+        yield (0, scheduler_2.checkAbandonedSessions)();
+        const updated = yield gameSession_model_1.default.findById(session._id);
+        expect(updated.status).toBe("in_progress");
+    }));
+    it("does not touch already-completed sessions even if old", () => __awaiter(void 0, void 0, void 0, function* () {
+        const staleStart = new Date(Date.now() - 7 * 60 * 60 * 1000);
+        const session = yield makeSession({
+            status: "completed",
+            startedAt: staleStart,
+            completedAt: staleStart,
+        });
+        yield (0, scheduler_2.checkAbandonedSessions)();
+        const updated = yield gameSession_model_1.default.findById(session._id);
+        expect(updated.status).toBe("completed");
     }));
 });
