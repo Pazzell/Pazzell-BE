@@ -4,6 +4,9 @@ import ErrorHandler from "../utils/ErrorHandler";
 import TransactionModel from "../models/transaction.model";
 import PuzzleCampaignModel from "../models/puzzleCampaign.model";
 import { paystackService } from "../services/payment";
+import { getPaymentQueue } from "../services/queue/queueFactory";
+import { getNotificationService } from "../services/notification/notificationFactory";
+import { getWeeklyPrice } from "../services/config/config.service";
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
@@ -17,11 +20,72 @@ if (process.env.PAYSTACK_SECRET_KEY) {
   console.warn("⚠️  Paystack is not configured - PAYSTACK_SECRET_KEY missing");
 }
 
-// Package pricing
+// Fallback base price used only if a campaign somehow has neither
+// expectedChargeAmount nor totalBudget set (see initializePayment below).
 const PACKAGE_PRICES = {
-  basic: 7000, // ₦7,000
-  premium: 10000, // ₦10,000
+  basic: 7000,
+  premium: 10000,
 };
+
+// Weekly pricing: amount = weeks × tier weekly price (config-driven,
+// currently ₦7,000/week basic, ₦10,000/week premium — see services/config/config.service.ts).
+export async function computeWeeklyPricing(
+  packageType: "basic" | "premium",
+  durationWeeks: number
+) {
+  if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+    throw new Error("durationWeeks must be a positive number");
+  }
+  const weeklyPrice = await getWeeklyPrice(packageType);
+  const totalAmount = Math.round(weeklyPrice * durationWeeks);
+  const timeLimitHours = durationWeeks * 7 * 24;
+
+  return {
+    packageType,
+    weeklyPrice,
+    durationWeeks,
+    totalAmount,
+    timeLimitHours,
+  };
+}
+
+// GET /payments/calculate-weekly-price?packageType=basic&weeks=2
+export const calculateWeeklyPrice = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { packageType, weeks } = req.query as {
+        packageType?: string;
+        weeks?: string;
+      };
+
+      if (!packageType || !["basic", "premium"].includes(packageType)) {
+        return next(
+          new ErrorHandler("packageType must be 'basic' or 'premium'", 400)
+        );
+      }
+      const durationWeeks = Number(weeks);
+      if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+        return next(
+          new ErrorHandler("weeks must be a positive number", 400)
+        );
+      }
+
+      const result = await computeWeeklyPricing(
+        packageType as "basic" | "premium",
+        durationWeeks
+      );
+
+      res.status(200).json({ success: true, pricing: result });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(
+          `Failed to calculate weekly price: ${error.message}`,
+          500
+        )
+      );
+    }
+  }
+);
 
 // Initialize payment for campaign
 export const initializePayment = CatchAsyncError(
@@ -205,6 +269,29 @@ export const verifyPayment = CatchAsyncError(
         campaign.endDate = endDate;
         await campaign.save();
 
+        // Enqueue payment event (no-op when PAYMENT_QUEUE_PROVIDER=none)
+        getPaymentQueue().enqueue({
+          reference: transaction.reference,
+          transactionId: String(transaction._id),
+          campaignId: String(transaction.campaignId),
+          brandId: String(transaction.brandId),
+          amount: transaction.amount,
+          currency: transaction.currency || "NGN",
+          event: "payment.verified",
+          timestamp: new Date().toISOString(),
+        }).catch((e) => console.error("Queue enqueue error:", e));
+
+        // Publish notification (no-op when NOTIFICATION_PROVIDER=none)
+        getNotificationService().publish({
+          subject: "Payment Verified",
+          message: `Payment ${transaction.reference} verified for campaign ${transaction.campaignId}`,
+          topicKey: "payment",
+          metadata: {
+            reference: transaction.reference,
+            campaignId: String(transaction.campaignId),
+          },
+        }).catch((e) => console.error("SNS publish error:", e));
+
         res.status(200).json({
           success: true,
           message: "Payment verified successfully",
@@ -295,6 +382,27 @@ export const paystackWebhook = CatchAsyncError(
 
           // Activate campaign
           await activateCampaignAfterPayment(transaction, event.data);
+
+          // Enqueue webhook payment event (no-op when PAYMENT_QUEUE_PROVIDER=none)
+          getPaymentQueue().enqueue({
+            reference,
+            transactionId: String(transaction._id),
+            campaignId: String(transaction.campaignId),
+            brandId: String(transaction.brandId),
+            amount: transaction.amount,
+            currency: transaction.currency || "NGN",
+            event: "webhook.received",
+            rawPaystackData: event.data,
+            timestamp: new Date().toISOString(),
+          }).catch((e) => console.error("Queue enqueue error:", e));
+
+          // Publish notification (no-op when NOTIFICATION_PROVIDER=none)
+          getNotificationService().publish({
+            subject: "Webhook Payment Success",
+            message: `Webhook charge.success for reference ${reference}`,
+            topicKey: "payment",
+            metadata: { reference, campaignId: String(transaction.campaignId) },
+          }).catch((e) => console.error("SNS publish error:", e));
         }
       }
 

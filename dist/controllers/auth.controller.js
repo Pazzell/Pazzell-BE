@@ -24,9 +24,10 @@ require("../firebaseConfig");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const path_1 = __importDefault(require("path"));
 const ejs_1 = __importDefault(require("ejs"));
-const sendEmail_1 = __importDefault(require("../utils/sendEmail"));
+const emailFactory_1 = require("../services/email/emailFactory");
 const user_controller_1 = require("./user.controller");
 const userHelpers_1 = require("../utils/userHelpers");
+const referral_service_1 = require("../services/referral.service");
 // Create password reset token
 const createResetToken = (userId) => {
     const token = jsonwebtoken_1.default.sign({ userId }, process.env.ACTIVATION_SECRET, { expiresIn: "15m" });
@@ -66,7 +67,8 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                 lastName = nameParts.slice(1).join(" ") || "";
             }
             const username = yield (0, userHelpers_1.generateUsername)(profile.email);
-            const avatar = profile.picture || (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName}`.trim() || profile.email);
+            const avatar = profile.picture ||
+                (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName}`.trim() || profile.email);
             user = yield user_model_1.default.create({
                 firstName,
                 lastName,
@@ -77,6 +79,11 @@ exports.googleAuth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => 
                 role: "gamer",
                 isVerified: true,
             });
+            // Capture referral relationship (no signup bonus — the referrer's reward
+            // is credited once the referee crosses the points threshold; see
+            // referral.service.ts checkReferralQualification).
+            const { referrerId, referrerUsername, referralCode } = req.body;
+            yield (0, referral_service_1.captureReferralAtSignup)(referrerId || referrerUsername || referralCode, String(user._id));
         }
         else {
             // ensure googleId is stored
@@ -107,7 +114,7 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
         if (existing)
             return next(new ErrorHandler_1.default("This email is already registered. Please use a different email or try logging in.", 409));
         const username = yield (0, userHelpers_1.generateUsername)(email);
-        const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ''}`.trim() || email);
+        const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ""}`.trim() || email);
         // Create activation token BEFORE creating user
         const activationToken = (0, user_controller_1.createActivationToken)({
             firstName,
@@ -121,7 +128,7 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
         // Try to send email first
         try {
             yield ejs_1.default.renderFile(path_1.default.join(__dirname, "../mails/activation-mail.ejs"), data);
-            yield (0, sendEmail_1.default)({
+            yield (0, emailFactory_1.getEmailService)().sendMail({
                 email,
                 subject: "Verify your gamer account",
                 template: "activation-mail.ejs",
@@ -138,6 +145,9 @@ exports.registerGamer = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
                 role: "gamer",
                 isVerified: false,
             });
+            // Capture referral relationship (no signup bonus — see googleAuth comment above).
+            const { referrerId, referrerUsername, referralCode } = req.body;
+            yield (0, referral_service_1.captureReferralAtSignup)(referrerId || referrerUsername || referralCode, String(user._id));
             res.status(201).json({
                 success: true,
                 message: "Registration successful! Please check your email to verify your account.",
@@ -180,7 +190,9 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
             // For brands, ensure brand profile exists
             if (role === "brand") {
                 const { companyName } = decoded.user;
-                const brandProfile = yield brand_model_1.default.findOne({ userId: existingUser._id });
+                const brandProfile = yield brand_model_1.default.findOne({
+                    userId: existingUser._id,
+                });
                 if (!brandProfile) {
                     yield brand_model_1.default.create({
                         userId: existingUser._id,
@@ -198,7 +210,7 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
         if (role === "gamer") {
             const { firstName, lastName } = decoded.user;
             const username = yield (0, userHelpers_1.generateUsername)(email);
-            const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ''}`.trim() || email);
+            const avatar = (0, userHelpers_1.generateAvatar)(`${firstName} ${lastName || ""}`.trim() || email);
             user = yield user_model_1.default.create({
                 firstName,
                 lastName: lastName || "",
@@ -209,6 +221,9 @@ exports.activateUser = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 role: "gamer",
                 isVerified: true,
             });
+            // Capture referral relationship (no signup bonus — see googleAuth comment above).
+            const { referrerId, referrerUsername, referralCode } = decoded.user;
+            yield (0, referral_service_1.captureReferralAtSignup)(referrerId || referrerUsername || referralCode, String(user._id));
         }
         else if (role === "brand") {
             const { name, companyName } = decoded.user;
@@ -283,7 +298,7 @@ exports.registerBrand = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
         // Try to send email first
         try {
             yield ejs_1.default.renderFile(path_1.default.join(__dirname, "../mails/activation-mail.ejs"), data);
-            yield (0, sendEmail_1.default)({
+            yield (0, emailFactory_1.getEmailService)().sendMail({
                 email,
                 subject: "Activate your brand account",
                 template: "activation-mail.ejs",
@@ -380,7 +395,7 @@ exports.resendActivation = (0, catchAsyncError_1.CatchAsyncError)((req, res, nex
         const activationCode = activationToken.activationCode;
         const data = { user: { name: displayName }, activationCode };
         // Send activation email
-        yield (0, sendEmail_1.default)({
+        yield (0, emailFactory_1.getEmailService)().sendMail({
             email: user.email,
             subject: "Verify your account",
             template: "activation-mail.ejs",
@@ -427,7 +442,7 @@ exports.forgotPassword = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         // Send reset email with link
         const data = { user: { name: userName }, resetLink };
         try {
-            yield (0, sendEmail_1.default)({
+            yield (0, emailFactory_1.getEmailService)().sendMail({
                 email: user.email,
                 subject: "Reset Your Password - Tex Resolve",
                 template: "reset-password.ejs",

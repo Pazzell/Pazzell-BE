@@ -15,20 +15,27 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.markUserOffline = exports.markUserOnline = exports.stopPlayingGame = exports.startPlayingGame = exports.getAppAnalytics = void 0;
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
+const gameSession_model_1 = __importDefault(require("../models/gameSession.model"));
 const redis_1 = require("../utils/redis");
 // Get global app analytics
 exports.getAppAnalytics = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // 1. Total games played (all-time count of puzzle attempts)
-        const totalGamesPlayed = yield puzzleAttempt_model_1.default.countDocuments();
-        // 2. Total games played today (count of puzzle attempts created today)
+        // 1. Total games played (all-time count of fully completed & submitted
+        // campaign sessions — a session that's only started, or was abandoned/
+        // voided, never counts as a "game played").
+        const totalGamesPlayed = yield gameSession_model_1.default.countDocuments({
+            status: "completed",
+        });
+        // 2. Total games played today (count of sessions completed today,
+        // keyed off completedAt — not startedAt, which would count sessions
+        // the instant "Start Playing" is clicked, before anything is submitted).
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
         const todayEnd = new Date();
         todayEnd.setHours(23, 59, 59, 999);
-        const gamesPlayedToday = yield puzzleAttempt_model_1.default.countDocuments({
-            timestamp: {
+        const gamesPlayedToday = yield gameSession_model_1.default.countDocuments({
+            status: "completed",
+            completedAt: {
                 $gte: todayStart,
                 $lte: todayEnd,
             },

@@ -17,45 +17,35 @@ const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const brand_model_1 = __importDefault(require("../models/brand.model"));
-const firebaseConfig_1 = require("../firebaseConfig");
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
+const storageFactory_1 = require("../services/storage/storageFactory");
+const gameSession_model_1 = __importDefault(require("../models/gameSession.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
 const package_model_1 = __importDefault(require("../models/package.model"));
-// Package pricing
-const PACKAGE_PRICES = {
-    basic: 7000, // ₦7,000
-    premium: 10000, // ₦10,000
-};
-// Convert hours to number of weeks (rounded up to cover partial weeks)
-const getWeeksFromHours = (timeLimitHours) => {
-    const hoursPerWeek = 24 * 7; // 168
-    if (!timeLimitHours || timeLimitHours <= 0)
-        return 1;
-    return Math.max(1, Math.ceil(timeLimitHours / hoursPerWeek));
-};
-// Multiplier formula provided: Multiplier = 0.9 * n + 10^{-n}
-// Return the multiplier rounded DOWN to one decimal place to normalize to 10% discount
-const calculateDurationFactor = (timeLimitHours) => {
-    const weeks = getWeeksFromHours(timeLimitHours);
-    if (weeks === 1)
-        return 1.0;
-    const multiplierRaw = 0.9 * weeks + Math.pow(10, -weeks);
-    const multiplierRoundedDown = Math.floor(multiplierRaw * 10) / 10; // e.g. 1.81 -> 1.8
-    return multiplierRoundedDown;
-};
-// Create a puzzle campaign (brands only). Expects multipart upload with one file: "image" (used for both scrambled and original)
+const payment_controller_1 = require("./payment.controller");
+const config_service_1 = require("../services/config/config.service");
+const videoValidation_service_1 = require("../services/video/videoValidation.service");
+const ALL_GAME_TYPES = [
+    "sliding_puzzle",
+    "card_matching",
+    "spot_the_difference",
+    "word_hunt",
+];
+// Create a multi-game puzzle campaign (brands only). All new campaigns span
+// all four game types in a single submission. Expects multipart upload with
+// two files: "image" (feeds sliding tiles + spot-the-difference) and "video"
+// (~2 minutes, feeds the end-of-session quiz stage — quiz questions are
+// authored manually by the brand, not AI-generated).
 exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d;
     try {
         const brandUser = req.user;
         if (brandUser.role !== "brand")
             return next(new ErrorHandler_1.default("Only brands can create campaigns", 403));
-        const { questions, title, description, gameType, words, packageId, brandUrl, campaignUrl, videoUrl, timeLimit, } = req.body;
+        const { questions, title, description, words, packageId, brandUrl, campaignUrl, prizeDescription, prizeUnitsAvailable, durationWeeks, } = req.body;
         // Validate packageId
         if (!packageId || typeof packageId !== "string") {
             return next(new ErrorHandler_1.default("packageId is required and must be a valid string", 400));
         }
-        // Verify package exists
         const packageData = yield package_model_1.default.findById(packageId);
         if (!packageData) {
             return next(new ErrorHandler_1.default("Invalid package. Package not found.", 404));
@@ -63,7 +53,8 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         if (!packageData.isActive) {
             return next(new ErrorHandler_1.default("Selected package is not available", 400));
         }
-        // validate required fields
+        const packageType = ((_a = packageData.name) === null || _a === void 0 ? void 0 : _a.toLowerCase()) === "premium" ? "premium" : "basic";
+        // validate required text fields
         if (!title || typeof title !== "string" || title.trim() === "") {
             return next(new ErrorHandler_1.default("title is required and must be a non-empty string", 400));
         }
@@ -72,18 +63,25 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             description.trim() === "") {
             return next(new ErrorHandler_1.default("description is required and must be a non-empty string", 400));
         }
-        // Validate gameType field
-        const validGameTypes = [
-            "sliding_puzzle",
-            "card_matching",
-            "whack_a_mole",
-            "word_hunt",
-        ];
-        const campaignGameType = gameType || "sliding_puzzle";
-        if (!validGameTypes.includes(campaignGameType)) {
-            return next(new ErrorHandler_1.default("gameType must be one of: sliding_puzzle, card_matching, whack_a_mole, word_hunt", 400));
+        if (!prizeDescription ||
+            typeof prizeDescription !== "string" ||
+            prizeDescription.trim() === "") {
+            return next(new ErrorHandler_1.default("prizeDescription is required and must be a non-empty string", 400));
         }
-        // Parse words array if it's a string (from form-data)
+        let parsedPrizeUnits = 1;
+        if (prizeUnitsAvailable !== undefined && prizeUnitsAvailable !== null && prizeUnitsAvailable !== "") {
+            parsedPrizeUnits = Number(prizeUnitsAvailable);
+            if (!Number.isFinite(parsedPrizeUnits) || parsedPrizeUnits < 1) {
+                return next(new ErrorHandler_1.default("prizeUnitsAvailable must be a positive number", 400));
+            }
+        }
+        // Duration: weeks only (weekly billing revert — replaces endMonth/timeLimit/weeksToRun)
+        const parsedDurationWeeks = Number(durationWeeks);
+        if (!Number.isFinite(parsedDurationWeeks) || parsedDurationWeeks <= 0) {
+            return next(new ErrorHandler_1.default("durationWeeks is required and must be a positive number", 400));
+        }
+        // Bag of words for word_hunt — now always required since every campaign
+        // includes all four game types.
         let parsedWords = [];
         if (words) {
             if (typeof words === "string") {
@@ -91,7 +89,6 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
                     parsedWords = JSON.parse(words);
                 }
                 catch (_e) {
-                    // If parsing fails, try splitting by comma
                     parsedWords = words
                         .split(",")
                         .map((w) => w.trim())
@@ -102,49 +99,50 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
                 parsedWords = words;
             }
         }
-        // For word_hunt games, validate words array
-        if (campaignGameType === "word_hunt") {
-            if (!parsedWords || parsedWords.length === 0) {
-                return next(new ErrorHandler_1.default("words array is required for word_hunt games and must contain at least one word", 400));
-            }
+        if (!parsedWords || parsedWords.length === 0) {
+            return next(new ErrorHandler_1.default("words array is required (bag of words for the word hunt game) and must contain at least one word", 400));
         }
         // Get brand profile (no restriction on number of campaigns)
         const brand = yield brand_model_1.default.findOne({ userId: brandUser._id });
         if (!brand) {
             return next(new ErrorHandler_1.default("Brand profile not found", 404));
         }
-        // multer stores single-file upload in req.file
-        const uploadedFile = req.file;
-        if (!uploadedFile) {
-            return next(new ErrorHandler_1.default('Missing image file. Please upload using field name "image"', 400));
+        // multer .fields() stores uploads keyed by field name
+        const files = req.files;
+        const imageFile = (_b = files === null || files === void 0 ? void 0 : files.image) === null || _b === void 0 ? void 0 : _b[0];
+        const videoFile = (_c = files === null || files === void 0 ? void 0 : files.video) === null || _c === void 0 ? void 0 : _c[0];
+        if (!imageFile) {
+            return next(new ErrorHandler_1.default('Missing brand image file. Please upload using field name "image"', 400));
         }
-        // use a single timestamp so both stored names are related
-        const now = Date.now();
-        const puzzleName = `puzzles/${now}-puzzle-${uploadedFile.originalname}`;
-        const originalName = `puzzles/${now}-original-${uploadedFile.originalname}`;
-        const uploadBuffer = (file, name) => __awaiter(void 0, void 0, void 0, function* () {
-            const fileRef = firebaseConfig_1.bucket.file(name);
-            yield fileRef.save(file.buffer, {
-                resumable: false,
-                contentType: file.mimetype,
+        if (!videoFile) {
+            return next(new ErrorHandler_1.default('Missing video file. Please upload using field name "video"', 400));
+        }
+        // Validate video duration/size before uploading anything
+        let videoMeta;
+        try {
+            videoMeta = yield (0, videoValidation_service_1.validateVideoUpload)({
+                buffer: videoFile.buffer,
+                mimetype: videoFile.mimetype,
+                originalname: videoFile.originalname,
             });
-            yield fileRef.makePublic();
-            return `https://storage.googleapis.com/${firebaseConfig_1.bucket.name}/${name}`;
-        });
-        const puzzleUrl = yield uploadBuffer(uploadedFile, puzzleName);
-        const originalUrl = yield uploadBuffer(uploadedFile, originalName);
-        // parse questions (expected as JSON string or array)
+        }
+        catch (e) {
+            if (e instanceof videoValidation_service_1.VideoValidationError) {
+                return next(new ErrorHandler_1.default(e.message, 400));
+            }
+            throw e;
+        }
+        // Quiz questions: brand-authored (no AI generation), exactly N questions
+        // (config-driven, default 3).
         let parsedQuestions = [];
-        const rawQuestions = (_b = questions !== null && questions !== void 0 ? questions : (_a = req.body) === null || _a === void 0 ? void 0 : _a.questions) !== null && _b !== void 0 ? _b : (_c = req.body) === null || _c === void 0 ? void 0 : _c.question;
+        const rawQuestions = questions !== null && questions !== void 0 ? questions : (_d = req.body) === null || _d === void 0 ? void 0 : _d.question;
         const tryParse = (val) => {
             try {
                 return JSON.parse(val);
             }
             catch (_a) {
-                // try a simple fix: replace single quotes with double quotes
                 try {
-                    const fixed = val.replace(/'/g, '"');
-                    return JSON.parse(fixed);
+                    return JSON.parse(val.replace(/'/g, '"'));
                 }
                 catch (_b) {
                     return null;
@@ -162,19 +160,16 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
             parsedQuestions = rawQuestions;
         }
         else if (rawQuestions && typeof rawQuestions === "object") {
-            // handle cases where form-data produced an object with numeric keys
             const vals = Object.values(rawQuestions);
-            if (vals.length && vals.every((v) => typeof v === "object"))
-                parsedQuestions = vals;
-            else
-                parsedQuestions = [];
+            parsedQuestions =
+                vals.length && vals.every((v) => typeof v === "object")
+                    ? vals
+                    : [];
         }
-        else {
-            parsedQuestions = [];
-        }
-        // validate parsedQuestions
-        if (!Array.isArray(parsedQuestions) || parsedQuestions.length === 0) {
-            return next(new ErrorHandler_1.default("Missing or invalid questions array", 400));
+        const requiredQuestionCount = yield (0, config_service_1.getQuizQuestionCount)();
+        if (!Array.isArray(parsedQuestions) ||
+            parsedQuestions.length !== requiredQuestionCount) {
+            return next(new ErrorHandler_1.default(`questions must be an array of exactly ${requiredQuestionCount} brand-authored quiz questions`, 400));
         }
         for (const q of parsedQuestions) {
             if (!q ||
@@ -184,90 +179,71 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
                 return next(new ErrorHandler_1.default("Each question must have 'question', 'choices' array and numeric 'correctIndex'", 400));
             }
         }
-        // helper to robustly parse numeric fields from multipart/form-data
-        const getNumericFromBody = (fieldName) => {
-            var _a;
-            let v = (_a = req.body) === null || _a === void 0 ? void 0 : _a[fieldName];
-            if (Array.isArray(v))
-                v = v[0];
-            if (v && typeof v === "object") {
-                const vals = Object.values(v);
-                if (vals.length)
-                    v = vals[0];
-            }
-            if (typeof v === "string") {
-                const cleaned = v.replace(/[^0-9.-]/g, "").trim();
-                if (cleaned === "")
-                    return null;
-                const n = Number(cleaned);
-                return Number.isFinite(n) ? n : null;
-            }
-            const n = Number(v);
-            return Number.isFinite(n) ? n : null;
-        };
-        // Validate timeLimit
-        const parsedTimeLimit = Number(timeLimit);
-        if (!timeLimit || isNaN(parsedTimeLimit) || parsedTimeLimit <= 0) {
-            return next(new ErrorHandler_1.default("timeLimit is required and must be a positive number (in hours)", 400));
+        // Weekly pricing: amount = weeks × tier weekly price
+        let pricing;
+        try {
+            pricing = yield (0, payment_controller_1.computeWeeklyPricing)(packageType, parsedDurationWeeks);
         }
-        // Get package type and calculate totalBudget
-        const packageType = ((_d = packageData.name) === null || _d === void 0 ? void 0 : _d.toLowerCase()) === "premium" ? "premium" : "basic";
-        const basePrice = PACKAGE_PRICES[packageType];
-        // Weeks selected by brand (rounded up)
-        const weeks = getWeeksFromHours(parsedTimeLimit);
-        // Full allocated budget that the brand should receive (no discount)
-        const allocatedBudget = basePrice * weeks; // e.g., 2 weeks => 7000 * 2 = 14000
-        // Compute charged multiplier (rounded DOWN to 1 decimal as requested)
-        const chargedMultiplier = calculateDurationFactor(parsedTimeLimit); // e.g., 1.8 for 2 weeks
-        const chargedAmount = Math.round(basePrice * chargedMultiplier); // amount brand will pay
-        // Compute daily allocation spread across the selected duration (days) using allocated budget
-        const days = Math.max(1, Math.ceil(parsedTimeLimit / 24));
-        const dailyAllocation = Number((allocatedBudget / days).toFixed(2));
-        // Set placeholder dates - actual dates will be set when payment is made
+        catch (e) {
+            return next(new ErrorHandler_1.default(e.message, 400));
+        }
+        // Upload brand image and video
+        const storage = (0, storageFactory_1.getStorageService)();
+        const ts = Date.now();
+        const imageUploadName = `${ts}-${imageFile.originalname}`;
+        const imageResult = yield storage.uploadFile({
+            buffer: imageFile.buffer,
+            mimetype: imageFile.mimetype,
+            originalname: imageUploadName,
+            folder: "puzzles",
+            fileName: imageUploadName,
+        });
+        const videoUploadName = `${ts}-${videoFile.originalname}`;
+        const videoResult = yield storage.uploadFile({
+            buffer: videoFile.buffer,
+            mimetype: videoFile.mimetype,
+            originalname: videoUploadName,
+            folder: "campaign-videos",
+            fileName: videoUploadName,
+        });
+        // Placeholder dates — actual dates are set when payment is verified (draft -> active)
         const currentDate = new Date();
-        const placeholderEndDate = new Date(currentDate.getTime() + parsedTimeLimit * 60 * 60 * 1000);
-        // Prepare campaign data
-        // All new campaigns start as draft until payment is verified
+        const placeholderEndDate = new Date(currentDate.getTime() + pricing.timeLimitHours * 60 * 60 * 1000);
         const campaignData = {
             brandId: brandUser._id,
-            packageId: packageId,
-            packageType: packageType,
-            gameType: campaignGameType,
+            packageId,
+            packageType,
+            gameTypes: ALL_GAME_TYPES,
             title: title.trim(),
             description: description.trim(),
             brandUrl: (brandUrl === null || brandUrl === void 0 ? void 0 : brandUrl.trim()) || null,
             campaignUrl: (campaignUrl === null || campaignUrl === void 0 ? void 0 : campaignUrl.trim()) || null,
-            videoUrl: (videoUrl === null || videoUrl === void 0 ? void 0 : videoUrl.trim()) || null,
-            puzzleImageUrl: puzzleUrl,
-            originalImageUrl: originalUrl,
+            videoUrl: videoResult.url,
+            videoDurationSeconds: videoMeta.durationSeconds,
+            videoSizeBytes: videoMeta.sizeBytes,
+            videoMimeType: videoMeta.mimeType,
+            puzzleImageUrl: imageResult.url,
             questions: parsedQuestions,
-            timeLimit: parsedTimeLimit,
-            status: "draft", // Always start as draft
-            paymentStatus: "unpaid", // All new campaigns start as unpaid
-            // Payment not yet completed: store expected charged amount; actual
-            // `totalBudget` (allocated) will be set after payment (to the paid amount).
+            words: parsedWords,
+            prizeDescription: prizeDescription.trim(),
+            prizeUnitsAvailable: parsedPrizeUnits,
+            durationWeeks: parsedDurationWeeks,
+            weeklyPrice: pricing.weeklyPrice,
+            timeLimit: pricing.timeLimitHours,
+            status: "draft",
+            paymentStatus: "unpaid",
             totalBudget: 0,
-            expectedChargeAmount: chargedAmount,
+            expectedChargeAmount: pricing.totalAmount,
             dailyAllocation: 0,
             budgetRemaining: 0,
             budgetUsed: 0,
-            startDate: currentDate, // Placeholder - will be updated on payment
-            endDate: placeholderEndDate, // Placeholder - will be updated on payment
+            startDate: currentDate,
+            endDate: placeholderEndDate,
         };
-        // For word_hunt games, add words array
-        if (campaignGameType === "word_hunt" && parsedWords.length > 0) {
-            campaignData.words = parsedWords;
-        }
         const campaign = yield puzzleCampaign_model_1.default.create(campaignData);
-        // Update brand campaigns list (no restrictions on number of campaigns)
         yield brand_model_1.default.findOneAndUpdate({ userId: brandUser._id }, { $push: { campaigns: campaign._id } });
-        // Convert to plain object to ensure all fields are included
         const campaignResponse = campaign.toObject();
-        // Add package name to response
         const responseWithPackageName = Object.assign(Object.assign({}, campaignResponse), { packageName: packageData.name });
-        console.log("Campaign created. Has campaignUrl?", "campaignUrl" in responseWithPackageName);
-        console.log("campaignUrl value in response:", responseWithPackageName.campaignUrl);
-        console.log("brandUrl value in response:", responseWithPackageName.brandUrl);
         res
             .status(201)
             .json({ success: true, campaign: responseWithPackageName });
@@ -277,6 +253,7 @@ exports.createCampaign = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
     }
 }));
 exports.getCampaignAnalytics = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
     try {
         const brandUser = req.user;
         if (brandUser.role !== "brand")
@@ -291,8 +268,8 @@ exports.getCampaignAnalytics = (0, catchAsyncError_1.CatchAsyncError)((req, res,
         const campaignsAnalytics = [];
         // prepare campaign ids for bulk queries
         const campaignIds = campaigns.map((c) => String(c._id));
-        // Fetch all attempts for brand campaigns in one query
-        const allAttempts = yield puzzleAttempt_model_1.default.find({
+        // Fetch all game sessions for brand campaigns in one query
+        const allSessions = yield gameSession_model_1.default.find({
             campaignId: { $in: campaignIds },
         }).lean();
         // Aggregated metrics
@@ -300,32 +277,31 @@ exports.getCampaignAnalytics = (0, catchAsyncError_1.CatchAsyncError)((req, res,
         const activeCampaigns = campaigns.filter((c) => c.status === "active").length;
         const totalBudgetUsed = campaigns.reduce((s, c) => s + (Number(c.budgetUsed) || 0), 0);
         // total games played across brand
-        const totalGamesPlayed = allAttempts.length;
+        const totalGamesPlayed = allSessions.length;
         // unique players across all brand campaigns
-        const uniquePlayerIds = Array.from(new Set(allAttempts.map((a) => String(a.userId))));
+        const uniquePlayerIds = Array.from(new Set(allSessions.map((s) => String(s.userId))));
         const uniquePlayers = uniquePlayerIds.filter((id) => id && id !== "undefined").length;
-        // average gameplay time (in ms) across all attempts
-        const avgPlayTime = allAttempts.length
-            ? Math.round(allAttempts.reduce((s, a) => s + (a.timeTaken || 0), 0) /
-                allAttempts.length)
+        // average completion time (in ms) across all completed sessions
+        const completedSessions = allSessions.filter((s) => s.status === "completed");
+        const avgPlayTime = completedSessions.length
+            ? Math.round(completedSessions.reduce((s, sess) => s + (sess.totalCompletionTimeMs || 0), 0) / completedSessions.length)
             : 0;
         // per-campaign analytics
         for (const c of campaigns) {
-            const attempts = allAttempts.filter((a) => String(a.campaignId) === String(c._id));
-            const plays = attempts.length;
-            const completions = attempts.filter((a) => a.solved).length;
-            const avgCompletionTime = attempts.filter((a) => a.solved).length
-                ? Math.round(attempts
-                    .filter((a) => a.solved)
-                    .reduce((s, a) => s + (a.timeTaken || 0), 0) /
-                    attempts.filter((a) => a.solved).length)
+            const sessions = allSessions.filter((s) => String(s.campaignId) === String(c._id));
+            const plays = sessions.length;
+            const completed = sessions.filter((s) => s.status === "completed");
+            const completions = completed.length;
+            const avgCompletionTime = completed.length
+                ? Math.round(completed.reduce((s, sess) => s + (sess.totalCompletionTimeMs || 0), 0) / completed.length)
                 : 0;
-            // question correctness rates
+            // question correctness rates (from each session's first quiz attempt)
             const qCorrectCounts = (c.questions || []).map(() => 0);
-            for (const a of attempts) {
-                if (Array.isArray(a.answers)) {
-                    for (let i = 0; i < a.answers.length && i < (c.questions || []).length; i++) {
-                        if (a.answers[i] === c.questions[i].correctIndex)
+            for (const s of sessions) {
+                const answers = (_b = (_a = s.quiz) === null || _a === void 0 ? void 0 : _a.firstAttempt) === null || _b === void 0 ? void 0 : _b.answers;
+                if (Array.isArray(answers)) {
+                    for (let i = 0; i < answers.length && i < (c.questions || []).length; i++) {
+                        if (answers[i] === c.questions[i].correctIndex)
                             qCorrectCounts[i]++;
                     }
                 }

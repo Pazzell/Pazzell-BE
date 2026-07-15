@@ -3,66 +3,14 @@ import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
 import PayoutModel from "../models/payout.model";
 import UserModel from "../models/user.model";
+import TransactionModel from "../models/transaction.model";
 import {
-  calculateDailyPrizePool,
   calculateWeeklyPayouts,
-  getDailyPrizePool,
   getWeeklyPrizePoolSummary,
 } from "../services/prizePool.service";
-import {
-  calculateDailyPrizeTable,
-  getPrizeTableForDate,
-} from "../services/dailyPrizeTable.service";
+import { credit } from "../services/wallet/wallet.service";
 
-// Get daily prize pool
-export const fetchDailyPrizePool = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { date } = req.params; // Format: "2025-01-15"
-
-      const prizePool = await getDailyPrizePool(date);
-
-      res.status(200).json({
-        success: true,
-        prizePool,
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to fetch daily prize pool: ${error.message}`, 500)
-      );
-    }
-  }
-);
-
-// Calculate daily prize pool (admin/cron)
-export const triggerDailyPrizePoolCalculation = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { date } = req.body; // Format: "2025-01-15"
-
-      if (!date) {
-        return next(new ErrorHandler("Date is required", 400));
-      }
-
-      const prizePool = await calculateDailyPrizePool(date);
-
-      res.status(200).json({
-        success: true,
-        message: "Daily prize pool calculated successfully",
-        prizePool,
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to calculate daily prize pool: ${error.message}`,
-          500
-        )
-      );
-    }
-  }
-);
-
-// Get weekly prize pool summary
+// Get weekly prize pool summary (current week, live preview)
 export const fetchWeeklyPrizePoolSummary = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -83,7 +31,7 @@ export const fetchWeeklyPrizePoolSummary = CatchAsyncError(
   }
 );
 
-// Calculate weekly payouts (admin/cron - runs on Sunday night)
+// Calculate weekly payouts (admin/cron - runs on Monday, see services/scheduler)
 export const triggerWeeklyPayoutCalculation = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -146,7 +94,6 @@ export const getWeekPayouts = CatchAsyncError(
         .sort({ position: 1 })
         .lean();
 
-      // Fetch user details for each payout
       const payoutsWithUserDetails = await Promise.all(
         payouts.map(async (payout) => {
           const user = await UserModel.findById(payout.userId)
@@ -183,7 +130,11 @@ export const getWeekPayouts = CatchAsyncError(
   }
 );
 
-// Mark payouts as processed (admin)
+// Mark payouts as paid (admin) — credits each payout's amount to the
+// player's wallet (idempotent via `payout:${payoutId}` ledger key) and
+// advances status straight to "paid". Previously this only flipped a status
+// field and bumped a dead `analytics.lifetime.totalEarnings` counter without
+// ever moving real money — now it's the actual crediting step.
 export const processPayouts = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -195,34 +146,34 @@ export const processPayouts = CatchAsyncError(
         );
       }
 
-      // Update payouts status to processed
-      const result = await PayoutModel.updateMany(
-        { _id: { $in: payoutIds }, weekKey },
-        {
-          $set: {
-            status: "processed",
-            processedAt: new Date(),
-          },
-        }
-      );
+      const payouts = await PayoutModel.find({
+        _id: { $in: payoutIds },
+        weekKey,
+      });
 
-      // Update user analytics with total earnings
-      for (const payoutId of payoutIds) {
-        const payout = await PayoutModel.findById(payoutId);
-        if (payout) {
-          const user = await UserModel.findById(payout.userId);
-          if (user) {
-            user.analytics.lifetime.totalEarnings =
-              (user.analytics.lifetime.totalEarnings || 0) + payout.amount;
-            await user.save();
-          }
-        }
+      let processedCount = 0;
+      for (const payout of payouts) {
+        if (payout.status === "paid") continue; // already processed, idempotent no-op
+
+        const ledgerEntry = await credit({
+          userId: payout.userId,
+          amount: payout.amount,
+          reason: "weekly_payout",
+          referenceId: String(payout._id),
+          idempotencyKey: `payout:${payout._id}`,
+        });
+
+        payout.status = "paid";
+        payout.processedAt = new Date();
+        payout.walletTransactionId = String(ledgerEntry._id);
+        await payout.save();
+        processedCount++;
       }
 
       res.status(200).json({
         success: true,
-        message: `${result.modifiedCount} payouts marked as processed`,
-        modifiedCount: result.modifiedCount,
+        message: `${processedCount} payout(s) credited to player wallets`,
+        processedCount,
       });
     } catch (error: any) {
       return next(
@@ -232,11 +183,11 @@ export const processPayouts = CatchAsyncError(
   }
 );
 
-// Get platform earnings summary
+// Get platform earnings summary (revenue collected vs. player pool paid out)
 export const getPlatformEarnings = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { startDate, endDate } = req.query;
+      const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
 
       if (!startDate || !endDate) {
         return next(
@@ -244,84 +195,39 @@ export const getPlatformEarnings = CatchAsyncError(
         );
       }
 
-      const DailyPrizePoolModel = require("../models/dailyPrizePool.model").default;
-
-      const dailyPools = await DailyPrizePoolModel.find({
-        date: {
-          $gte: startDate,
-          $lte: endDate,
+      const revenueAgg = await TransactionModel.aggregate([
+        {
+          $match: {
+            status: "success",
+            createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) },
+          },
         },
-      });
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]);
+      const totalRevenue = revenueAgg[0]?.total || 0;
 
-      const totalRevenue = dailyPools.reduce(
-        (sum: number, pool: any) => sum + pool.totalDailyPool,
-        0
-      );
-      const totalPlatformFee = dailyPools.reduce(
-        (sum: number, pool: any) => sum + pool.platformFee,
-        0
-      );
-      const totalGamerShare = dailyPools.reduce(
-        (sum: number, pool: any) => sum + pool.gamerShare,
-        0
-      );
+      const payoutAgg = await PayoutModel.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]);
+      const totalPlayerPayouts = payoutAgg[0]?.total || 0;
 
       res.status(200).json({
         success: true,
         period: { startDate, endDate },
         summary: {
           totalRevenue,
-          totalPlatformFee,
-          totalGamerShare,
-          platformPercentage: 30,
-          gamerPercentage: 70,
+          totalPlayerPayouts,
+          platformRetained: totalRevenue - totalPlayerPayouts,
         },
       });
     } catch (error: any) {
       return next(
         new ErrorHandler(`Failed to fetch platform earnings: ${error.message}`, 500)
-      );
-    }
-  }
-);
-
-// Get current daily prize table (real-time potential earnings)
-export const getCurrentDailyPrizeTable = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const prizeTable = await calculateDailyPrizeTable();
-
-      res.status(200).json({
-        success: true,
-        prizeTable,
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to fetch daily prize table: ${error.message}`, 500)
-      );
-    }
-  }
-);
-
-// Get prize table for a specific date
-export const getDailyPrizeTableByDate = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { date } = req.params; // Format: "2025-01-20"
-
-      if (!date) {
-        return next(new ErrorHandler("Date is required", 400));
-      }
-
-      const prizeTable = await getPrizeTableForDate(date);
-
-      res.status(200).json({
-        success: true,
-        prizeTable,
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to fetch prize table for date: ${error.message}`, 500)
       );
     }
   }

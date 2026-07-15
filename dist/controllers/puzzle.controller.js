@@ -18,6 +18,8 @@ const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
+const referral_model_1 = __importDefault(require("../models/referral.model"));
+const referralEvent_model_1 = __importDefault(require("../models/referralEvent.model"));
 // List available puzzles (can filter by gameType)
 exports.listPuzzles = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -46,7 +48,6 @@ exports.getPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => _
             puzzle: {
                 puzzleId: campaign._id,
                 puzzleImageUrl: campaign.puzzleImageUrl,
-                originalImageUrl: campaign.originalImageUrl,
                 questions: campaign.questions.map((q) => ({
                     question: q.question,
                     choices: q.choices,
@@ -86,7 +87,13 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
             if (!prev)
                 firstTime = true;
         }
-        const pointsEarned = firstTime ? 1 : 0;
+        const FIXED_POINTS = {
+            spot_the_difference: 1,
+            card_matching: 1,
+            sliding_puzzle: 2,
+            word_hunt: 1,
+        };
+        const pointsEarned = firstTime ? FIXED_POINTS[campaign.gameType] || 0 : 0;
         const attempt = yield puzzleAttempt_model_1.default.create({
             userId: userId,
             puzzleId: id,
@@ -112,8 +119,6 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 userDoc.analytics.lifetime.puzzlesSolved =
                     (userDoc.analytics.lifetime.puzzlesSolved || 0) +
                         (firstTime ? 1 : 0);
-                userDoc.analytics.lifetime.totalPoints =
-                    (userDoc.analytics.lifetime.totalPoints || 0) + pointsEarned;
             }
             // successRate = puzzlesSolved / attempts
             if (userDoc.analytics.lifetime.attempts > 0) {
@@ -126,6 +131,33 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 userDoc.puzzlesSolved.push(id);
             }
             yield userDoc.save();
+            // If this is the user's first successful solve, mark any referral as
+            // successful and credit points to the referrer.
+            const REFERRAL_POINTS = 3;
+            try {
+                if (firstTime && userId) {
+                    const referral = yield referral_model_1.default.findOne({
+                        referredUserId: String(userId),
+                        successful: false,
+                    });
+                    if (referral) {
+                        referral.successful = true;
+                        referral.successfulAt = new Date();
+                        referral.pointsAwarded = REFERRAL_POINTS;
+                        yield referral.save();
+                        // record referral event
+                        yield referralEvent_model_1.default.create({
+                            referrerId: referral.referrerId,
+                            referredUserId: referral.referredUserId,
+                            eventType: "first_puzzle",
+                        });
+                    }
+                }
+            }
+            catch (err) {
+                // non-fatal: log and continue
+                console.error("Referral marking failed:", err);
+            }
         }
         res.status(201).json({
             success: true,

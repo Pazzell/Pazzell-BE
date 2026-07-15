@@ -1,46 +1,32 @@
 import { app } from "./app";
 import "dotenv/config";
-import mongoose from "mongoose";
 import connectDB from "./utils/db";
-import LeaderboardModel from "./models/leaderboard.model";
-import { startScheduler } from "./utils/scheduler";
+import { startScheduler } from "./services/scheduler";
 import { initializePackages } from "./controllers/package.controller";
+import { initConfigCache } from "./services/config/config.service";
 
 //create server
 const PORT = process.env.PORT || 4000;
 
-app.listen(PORT, async () => {
-  console.log(`Server is connected http://localhost:${process.env.PORT}`);
+// Connect to the DB (and warm dependent caches) BEFORE accepting HTTP traffic.
+// Previously app.listen() bound the port synchronously while connectDB() ran
+// in its callback, so requests could land on DB-dependent routes (e.g.
+// session start) before Mongo was connected and fail once Mongoose's
+// operation-buffering timeout was hit — the classic "works on retry" bug on
+// every cold start.
+async function start() {
   await connectDB();
   // Initialize packages after database connection
   await initializePackages();
-  // schedule daily leaderboard reset at local midnight
-  const scheduleDailyReset = async () => {
-    const now = new Date();
-    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    const delay = next.getTime() - now.getTime();
+  // Warm the Config cache (falls back to CONFIG_DEFAULTS for any unseeded key)
+  await initConfigCache();
 
-    setTimeout(async function resetAndSchedule() {
-      try {
-        // Skip if database is not connected
-        if (mongoose.connection.readyState === 1) {
-          const todayKey = new Date().toISOString().slice(0, 10);
-          // keep today's leaderboard; remove older daily leaderboards
-          await LeaderboardModel.deleteMany({
-            type: "daily",
-            date: { $ne: todayKey },
-          });
-          console.log("Daily leaderboard reset completed");
-        }
-      } catch (err) {
-        console.error("Error resetting daily leaderboard:", err);
-      }
-      // schedule next run in 24h
-      setTimeout(resetAndSchedule, 24 * 60 * 60 * 1000);
-    }, delay);
-  };
+  app.listen(PORT, () => {
+    console.log(`Server is connected http://localhost:${process.env.PORT}`);
+    // node-cron scheduler: hourly campaign-expiry, Monday weekly payout/raffle
+    // rollover, nightly wallet reconciliation (see services/scheduler/index.ts)
+    startScheduler();
+  });
+}
 
-  scheduleDailyReset();
-  // start instant event scheduler
-  startScheduler();
-});
+start();

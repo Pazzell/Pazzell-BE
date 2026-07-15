@@ -12,46 +12,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getDailyPrizeTableByDate = exports.getCurrentDailyPrizeTable = exports.getPlatformEarnings = exports.processPayouts = exports.getWeekPayouts = exports.getGamerPayouts = exports.triggerWeeklyPayoutCalculation = exports.fetchWeeklyPrizePoolSummary = exports.triggerDailyPrizePoolCalculation = exports.fetchDailyPrizePool = void 0;
+exports.getPlatformEarnings = exports.processPayouts = exports.getWeekPayouts = exports.getGamerPayouts = exports.triggerWeeklyPayoutCalculation = exports.fetchWeeklyPrizePoolSummary = void 0;
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const payout_model_1 = __importDefault(require("../models/payout.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
+const transaction_model_1 = __importDefault(require("../models/transaction.model"));
 const prizePool_service_1 = require("../services/prizePool.service");
-const dailyPrizeTable_service_1 = require("../services/dailyPrizeTable.service");
-// Get daily prize pool
-exports.fetchDailyPrizePool = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const { date } = req.params; // Format: "2025-01-15"
-        const prizePool = yield (0, prizePool_service_1.getDailyPrizePool)(date);
-        res.status(200).json({
-            success: true,
-            prizePool,
-        });
-    }
-    catch (error) {
-        return next(new ErrorHandler_1.default(`Failed to fetch daily prize pool: ${error.message}`, 500));
-    }
-}));
-// Calculate daily prize pool (admin/cron)
-exports.triggerDailyPrizePoolCalculation = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const { date } = req.body; // Format: "2025-01-15"
-        if (!date) {
-            return next(new ErrorHandler_1.default("Date is required", 400));
-        }
-        const prizePool = yield (0, prizePool_service_1.calculateDailyPrizePool)(date);
-        res.status(200).json({
-            success: true,
-            message: "Daily prize pool calculated successfully",
-            prizePool,
-        });
-    }
-    catch (error) {
-        return next(new ErrorHandler_1.default(`Failed to calculate daily prize pool: ${error.message}`, 500));
-    }
-}));
-// Get weekly prize pool summary
+const wallet_service_1 = require("../services/wallet/wallet.service");
+// Get weekly prize pool summary (current week, live preview)
 exports.fetchWeeklyPrizePoolSummary = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const summary = yield (0, prizePool_service_1.getWeeklyPrizePoolSummary)();
@@ -64,7 +33,7 @@ exports.fetchWeeklyPrizePoolSummary = (0, catchAsyncError_1.CatchAsyncError)((re
         return next(new ErrorHandler_1.default(`Failed to fetch weekly prize pool summary: ${error.message}`, 500));
     }
 }));
-// Calculate weekly payouts (admin/cron - runs on Sunday night)
+// Calculate weekly payouts (admin/cron - runs on Monday, see services/scheduler)
 exports.triggerWeeklyPayoutCalculation = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { weekKey } = req.body; // Format: "2025-01-06_to_2025-01-12"
@@ -107,7 +76,6 @@ exports.getWeekPayouts = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         const payouts = yield payout_model_1.default.find({ weekKey })
             .sort({ position: 1 })
             .lean();
-        // Fetch user details for each payout
         const payoutsWithUserDetails = yield Promise.all(payouts.map((payout) => __awaiter(void 0, void 0, void 0, function* () {
             const user = yield user_model_1.default.findById(payout.userId)
                 .select("firstName lastName email avatar")
@@ -133,102 +101,86 @@ exports.getWeekPayouts = (0, catchAsyncError_1.CatchAsyncError)((req, res, next)
         return next(new ErrorHandler_1.default(`Failed to fetch week payouts: ${error.message}`, 500));
     }
 }));
-// Mark payouts as processed (admin)
+// Mark payouts as paid (admin) — credits each payout's amount to the
+// player's wallet (idempotent via `payout:${payoutId}` ledger key) and
+// advances status straight to "paid". Previously this only flipped a status
+// field and bumped a dead `analytics.lifetime.totalEarnings` counter without
+// ever moving real money — now it's the actual crediting step.
 exports.processPayouts = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { weekKey, payoutIds } = req.body;
         if (!weekKey || !Array.isArray(payoutIds) || payoutIds.length === 0) {
             return next(new ErrorHandler_1.default("Week key and payout IDs array are required", 400));
         }
-        // Update payouts status to processed
-        const result = yield payout_model_1.default.updateMany({ _id: { $in: payoutIds }, weekKey }, {
-            $set: {
-                status: "processed",
-                processedAt: new Date(),
-            },
+        const payouts = yield payout_model_1.default.find({
+            _id: { $in: payoutIds },
+            weekKey,
         });
-        // Update user analytics with total earnings
-        for (const payoutId of payoutIds) {
-            const payout = yield payout_model_1.default.findById(payoutId);
-            if (payout) {
-                const user = yield user_model_1.default.findById(payout.userId);
-                if (user) {
-                    user.analytics.lifetime.totalEarnings =
-                        (user.analytics.lifetime.totalEarnings || 0) + payout.amount;
-                    yield user.save();
-                }
-            }
+        let processedCount = 0;
+        for (const payout of payouts) {
+            if (payout.status === "paid")
+                continue; // already processed, idempotent no-op
+            const ledgerEntry = yield (0, wallet_service_1.credit)({
+                userId: payout.userId,
+                amount: payout.amount,
+                reason: "weekly_payout",
+                referenceId: String(payout._id),
+                idempotencyKey: `payout:${payout._id}`,
+            });
+            payout.status = "paid";
+            payout.processedAt = new Date();
+            payout.walletTransactionId = String(ledgerEntry._id);
+            yield payout.save();
+            processedCount++;
         }
         res.status(200).json({
             success: true,
-            message: `${result.modifiedCount} payouts marked as processed`,
-            modifiedCount: result.modifiedCount,
+            message: `${processedCount} payout(s) credited to player wallets`,
+            processedCount,
         });
     }
     catch (error) {
         return next(new ErrorHandler_1.default(`Failed to process payouts: ${error.message}`, 500));
     }
 }));
-// Get platform earnings summary
+// Get platform earnings summary (revenue collected vs. player pool paid out)
 exports.getPlatformEarnings = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
     try {
         const { startDate, endDate } = req.query;
         if (!startDate || !endDate) {
             return next(new ErrorHandler_1.default("Start date and end date are required", 400));
         }
-        const DailyPrizePoolModel = require("../models/dailyPrizePool.model").default;
-        const dailyPools = yield DailyPrizePoolModel.find({
-            date: {
-                $gte: startDate,
-                $lte: endDate,
+        const revenueAgg = yield transaction_model_1.default.aggregate([
+            {
+                $match: {
+                    status: "success",
+                    createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) },
+                },
             },
-        });
-        const totalRevenue = dailyPools.reduce((sum, pool) => sum + pool.totalDailyPool, 0);
-        const totalPlatformFee = dailyPools.reduce((sum, pool) => sum + pool.platformFee, 0);
-        const totalGamerShare = dailyPools.reduce((sum, pool) => sum + pool.gamerShare, 0);
+            { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]);
+        const totalRevenue = ((_a = revenueAgg[0]) === null || _a === void 0 ? void 0 : _a.total) || 0;
+        const payoutAgg = yield payout_model_1.default.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) },
+                },
+            },
+            { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]);
+        const totalPlayerPayouts = ((_b = payoutAgg[0]) === null || _b === void 0 ? void 0 : _b.total) || 0;
         res.status(200).json({
             success: true,
             period: { startDate, endDate },
             summary: {
                 totalRevenue,
-                totalPlatformFee,
-                totalGamerShare,
-                platformPercentage: 30,
-                gamerPercentage: 70,
+                totalPlayerPayouts,
+                platformRetained: totalRevenue - totalPlayerPayouts,
             },
         });
     }
     catch (error) {
         return next(new ErrorHandler_1.default(`Failed to fetch platform earnings: ${error.message}`, 500));
-    }
-}));
-// Get current daily prize table (real-time potential earnings)
-exports.getCurrentDailyPrizeTable = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const prizeTable = yield (0, dailyPrizeTable_service_1.calculateDailyPrizeTable)();
-        res.status(200).json({
-            success: true,
-            prizeTable,
-        });
-    }
-    catch (error) {
-        return next(new ErrorHandler_1.default(`Failed to fetch daily prize table: ${error.message}`, 500));
-    }
-}));
-// Get prize table for a specific date
-exports.getDailyPrizeTableByDate = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const { date } = req.params; // Format: "2025-01-20"
-        if (!date) {
-            return next(new ErrorHandler_1.default("Date is required", 400));
-        }
-        const prizeTable = yield (0, dailyPrizeTable_service_1.getPrizeTableForDate)(date);
-        res.status(200).json({
-            success: true,
-            prizeTable,
-        });
-    }
-    catch (error) {
-        return next(new ErrorHandler_1.default(`Failed to fetch prize table for date: ${error.message}`, 500));
     }
 }));

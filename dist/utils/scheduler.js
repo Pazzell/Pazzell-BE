@@ -12,79 +12,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.checkExpiredCampaigns = exports.startScheduler = void 0;
+exports.checkAbandonedSessions = exports.checkExpiredCampaigns = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
-const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
-// Weekly leaderboard scheduler
-const startScheduler = () => {
-    // Run once per day at midnight to check if we need to finalize the weekly leaderboard
-    const dailyCheckInterval = 24 * 60 * 60 * 1000; // 24 hours
-    const hourlyCheckInterval = 60 * 60 * 1000; // 1 hour
-    // Daily scheduler for weekly leaderboard
-    setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            // Skip if database is not connected
-            if (mongoose_1.default.connection.readyState !== 1) {
-                return;
-            }
-            const now = new Date();
-            // Check if it's Sunday (end of week)
-            if (now.getDay() === 0) {
-                // Calculate the week's date range (Monday to Sunday)
-                const weekEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                const weekStart = new Date(weekEnd);
-                weekStart.setDate(weekStart.getDate() - 6); // Go back 6 days to Monday
-                // Get all first-time solved attempts from this week
-                const weeklyAttempts = yield puzzleAttempt_model_1.default.aggregate([
-                    {
-                        $match: {
-                            firstTimeSolved: true,
-                            timestamp: { $gte: weekStart, $lt: weekEnd },
-                        },
-                    },
-                    {
-                        $group: {
-                            _id: "$userId",
-                            puzzlesSolved: { $sum: 1 },
-                            points: { $sum: "$pointsEarned" },
-                        },
-                    },
-                    { $sort: { puzzlesSolved: -1, points: -1 } },
-                    { $limit: 100 },
-                ]);
-                const entries = weeklyAttempts.map((a) => ({
-                    userId: a._id,
-                    puzzlesSolved: a.puzzlesSolved,
-                    points: a.points,
-                }));
-                // Create weekly leaderboard
-                const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd.toISOString().slice(0, 10)}`;
-                yield leaderboard_model_1.default.findOneAndUpdate({ type: "weekly", date: weekKey }, { type: "weekly", date: weekKey, entries }, { upsert: true });
-                console.log(`Created weekly leaderboard for week: ${weekKey}`);
-            }
-        }
-        catch (err) {
-            // eslint-disable-next-line no-console
-            console.error("Scheduler error:", err);
-        }
-    }), dailyCheckInterval);
-    // Hourly scheduler for checking expired campaigns
-    setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            yield (0, exports.checkExpiredCampaigns)();
-        }
-        catch (err) {
-            // eslint-disable-next-line no-console
-            console.error("Campaign expiry check error:", err);
-        }
-    }), hourlyCheckInterval);
-    // Run expired campaign check immediately on startup
-    (0, exports.checkExpiredCampaigns)();
-};
-exports.startScheduler = startScheduler;
-// Check and mark expired campaigns as ended
+const gameSession_model_1 = __importDefault(require("../models/gameSession.model"));
+// Sessions are meant to be played in one sitting (4 games + video + quiz).
+// Anything still "in_progress" this long after it started was walked away
+// from, not just slow.
+const ABANDONED_SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// Check and mark expired campaigns as ended. Scheduled hourly via
+// services/scheduler/index.ts (node-cron) — this file just holds the check
+// itself, reused by both the cron job and campaign.controller.ts's
+// pre-read expiry sweep.
 const checkExpiredCampaigns = () => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // Skip if database is not connected
@@ -110,3 +49,30 @@ const checkExpiredCampaigns = () => __awaiter(void 0, void 0, void 0, function* 
     }
 });
 exports.checkExpiredCampaigns = checkExpiredCampaigns;
+// Mark stale in_progress sessions as abandoned. They're already excluded
+// from live stats (which only count status:"completed"), but without this
+// they'd linger as "in_progress" forever, and completeSession() rejects
+// abandoned sessions the same way it does voided ones — so a player who
+// walks away and comes back after the TTL gets a clean "start over" instead
+// of silently resuming a stale session.
+const checkAbandonedSessions = () => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (mongoose_1.default.connection.readyState !== 1) {
+            return;
+        }
+        const cutoff = new Date(Date.now() - ABANDONED_SESSION_TTL_MS);
+        const result = yield gameSession_model_1.default.updateMany({
+            status: "in_progress",
+            startedAt: { $lt: cutoff },
+        }, {
+            $set: { status: "abandoned" },
+        });
+        if (result.modifiedCount > 0) {
+            console.log(`✅ Marked ${result.modifiedCount} session(s) as abandoned`);
+        }
+    }
+    catch (error) {
+        console.error("Error checking abandoned sessions:", error);
+    }
+});
+exports.checkAbandonedSessions = checkAbandonedSessions;

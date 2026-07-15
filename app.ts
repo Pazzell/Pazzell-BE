@@ -10,6 +10,12 @@ import userRouter from "./routes/user.route";
 import packageRouter from "./routes/package.route";
 import paymentRouter from "./routes/payment.route";
 import analyticsRouter from "./routes/analytics.route";
+import referralRouter from "./routes/referral.route";
+import configRouter from "./routes/config.route";
+import sessionRouter from "./routes/session.route";
+import walletRouter from "./routes/wallet.route";
+import raffleRouter from "./routes/raffle.route";
+import forumRouter from "./routes/forum.route";
 import { ErrorMiddleware } from "./middlewares/error";
 
 const app = express();
@@ -33,11 +39,17 @@ app.use(
   authRouter,
   campaignRouter,
   brandRouter,
+  referralRouter,
   leaderboardRouter,
   userRouter,
   packageRouter,
   paymentRouter,
-  analyticsRouter
+  analyticsRouter,
+  configRouter,
+  sessionRouter,
+  walletRouter,
+  raffleRouter,
+  forumRouter
 );
 
 //testing api

@@ -5,22 +5,22 @@ import {
   paystackWebhook,
   getCampaignBudget,
   getTransactionHistory,
+  calculateWeeklyPrice,
 } from "../controllers/payment.controller";
 import {
-  fetchDailyPrizePool,
-  triggerDailyPrizePoolCalculation,
   fetchWeeklyPrizePoolSummary,
   triggerWeeklyPayoutCalculation,
   getGamerPayouts,
   getWeekPayouts,
   processPayouts,
   getPlatformEarnings,
-  getCurrentDailyPrizeTable,
-  getDailyPrizeTableByDate,
 } from "../controllers/payout.controller";
 import { isAuthenticated, authorizeRoles } from "../utils/auth";
 
 const router = express.Router();
+
+// Weekly pricing calculator (public — brands check price before creating a campaign)
+router.get("/payments/calculate-weekly-price", calculateWeeklyPrice);
 
 // Payment endpoints
 router.post("/payments/initialize", isAuthenticated, authorizeRoles("brand"), initializePayment);
@@ -34,11 +34,7 @@ router.post("/payments/webhook", paystackWebhook); // Legacy endpoint
 // Campaign budget
 router.get("/campaigns/:campaignId/budget", getCampaignBudget);
 
-// Daily prize pool
-router.get("/prize-pools/daily/:date", fetchDailyPrizePool);
-router.post("/prize-pools/daily/calculate", isAuthenticated, authorizeRoles("admin"), triggerDailyPrizePoolCalculation);
-
-// Weekly prize pool
+// Weekly prize pool (revenue-based — replaces the retired daily-drip prize pool/table)
 router.get("/prize-pools/weekly/summary", fetchWeeklyPrizePoolSummary);
 
 // Payouts
@@ -49,9 +45,5 @@ router.post("/payouts/process", isAuthenticated, authorizeRoles("admin"), proces
 
 // Platform earnings
 router.get("/platform/earnings", isAuthenticated, authorizeRoles("admin"), getPlatformEarnings);
-
-// Daily Prize Table (Real-time potential earnings)
-router.get("/prize-table/today", getCurrentDailyPrizeTable);
-router.get("/prize-table/date/:date", getDailyPrizeTableByDate);
 
 export default router;

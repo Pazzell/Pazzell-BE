@@ -11,9 +11,10 @@ import jwt from "jsonwebtoken";
 import { Secret } from "jsonwebtoken";
 import path from "path";
 import ejs from "ejs";
-import sendMail from "../utils/sendEmail";
+import { getEmailService } from "../services/email/emailFactory";
 import { createActivationToken } from "./user.controller";
 import { generateUsername, generateAvatar } from "../utils/userHelpers";
+import { captureReferralAtSignup } from "../services/referral.service";
 
 // Interface for password reset token payload
 interface IResetTokenPayload {
@@ -36,7 +37,8 @@ export const googleAuth = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Accept either a firebase idToken or a minimal profile payload
-      const { idToken, email, name, avatar, googleId, givenName, familyName } = req.body;
+      const { idToken, email, name, avatar, googleId, givenName, familyName } =
+        req.body;
 
       let profile: {
         email: string;
@@ -74,7 +76,9 @@ export const googleAuth = CatchAsyncError(
         }
 
         const username = await generateUsername(profile.email);
-        const avatar = profile.picture || generateAvatar(`${firstName} ${lastName}`.trim() || profile.email);
+        const avatar =
+          profile.picture ||
+          generateAvatar(`${firstName} ${lastName}`.trim() || profile.email);
 
         user = await UserModel.create({
           firstName,
@@ -86,6 +90,14 @@ export const googleAuth = CatchAsyncError(
           role: "gamer",
           isVerified: true,
         });
+        // Capture referral relationship (no signup bonus — the referrer's reward
+        // is credited once the referee crosses the points threshold; see
+        // referral.service.ts checkReferralQualification).
+        const { referrerId, referrerUsername, referralCode } = req.body;
+        await captureReferralAtSignup(
+          referrerId || referrerUsername || referralCode,
+          String(user._id)
+        );
       } else {
         // ensure googleId is stored
         if (!user.googleId && profile.uid) {
@@ -102,7 +114,9 @@ export const googleAuth = CatchAsyncError(
 
       sendToken(user, 200, res);
     } catch (error: any) {
-      return next(new ErrorHandler(`Google authentication failed: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(`Google authentication failed: ${error.message}`, 500)
+      );
     }
   }
 );
@@ -122,10 +136,18 @@ export const registerGamer = CatchAsyncError(
       }
 
       const existing = await UserModel.findOne({ email });
-      if (existing) return next(new ErrorHandler("This email is already registered. Please use a different email or try logging in.", 409));
+      if (existing)
+        return next(
+          new ErrorHandler(
+            "This email is already registered. Please use a different email or try logging in.",
+            409
+          )
+        );
 
       const username = await generateUsername(email);
-      const avatar = generateAvatar(`${firstName} ${lastName || ''}`.trim() || email);
+      const avatar = generateAvatar(
+        `${firstName} ${lastName || ""}`.trim() || email
+      );
 
       // Create activation token BEFORE creating user
       const activationToken = createActivationToken({
@@ -144,7 +166,7 @@ export const registerGamer = CatchAsyncError(
           path.join(__dirname, "../mails/activation-mail.ejs"),
           data
         );
-        await sendMail({
+        await getEmailService().sendMail({
           email,
           subject: "Verify your gamer account",
           template: "activation-mail.ejs",
@@ -163,9 +185,17 @@ export const registerGamer = CatchAsyncError(
           isVerified: false,
         });
 
+        // Capture referral relationship (no signup bonus — see googleAuth comment above).
+        const { referrerId, referrerUsername, referralCode } = req.body;
+        await captureReferralAtSignup(
+          referrerId || referrerUsername || referralCode,
+          String(user._id)
+        );
+
         res.status(201).json({
           success: true,
-          message: "Registration successful! Please check your email to verify your account.",
+          message:
+            "Registration successful! Please check your email to verify your account.",
           activationToken: activationToken.token,
         });
       } catch (mailErr: any) {
@@ -179,7 +209,9 @@ export const registerGamer = CatchAsyncError(
         );
       }
     } catch (error: any) {
-      return next(new ErrorHandler(`Gamer registration failed: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(`Gamer registration failed: ${error.message}`, 500)
+      );
     }
   }
 );
@@ -209,7 +241,10 @@ export const activateUser = CatchAsyncError(
       if (existingUser) {
         if (existingUser.role !== role) {
           return next(
-            new ErrorHandler("Email is registered as a different account type", 400)
+            new ErrorHandler(
+              "Email is registered as a different account type",
+              400
+            )
           );
         }
         // Mark as verified if not already
@@ -220,7 +255,9 @@ export const activateUser = CatchAsyncError(
         // For brands, ensure brand profile exists
         if (role === "brand") {
           const { companyName } = decoded.user;
-          const brandProfile = await BrandModel.findOne({ userId: existingUser._id });
+          const brandProfile = await BrandModel.findOne({
+            userId: existingUser._id,
+          });
           if (!brandProfile) {
             await BrandModel.create({
               userId: existingUser._id,
@@ -239,7 +276,9 @@ export const activateUser = CatchAsyncError(
       if (role === "gamer") {
         const { firstName, lastName } = decoded.user;
         const username = await generateUsername(email);
-        const avatar = generateAvatar(`${firstName} ${lastName || ''}`.trim() || email);
+        const avatar = generateAvatar(
+          `${firstName} ${lastName || ""}`.trim() || email
+        );
 
         user = await UserModel.create({
           firstName,
@@ -251,6 +290,13 @@ export const activateUser = CatchAsyncError(
           role: "gamer",
           isVerified: true,
         });
+        // Capture referral relationship (no signup bonus — see googleAuth comment above).
+        const { referrerId, referrerUsername, referralCode } =
+          decoded.user as any;
+        await captureReferralAtSignup(
+          referrerId || referrerUsername || referralCode,
+          String(user._id)
+        );
       } else if (role === "brand") {
         const { name, companyName } = decoded.user;
 
@@ -276,7 +322,9 @@ export const activateUser = CatchAsyncError(
 
       sendToken(user, 201, res);
     } catch (error: any) {
-      return next(new ErrorHandler(`Account activation failed: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(`Account activation failed: ${error.message}`, 500)
+      );
     }
   }
 );
@@ -287,14 +335,27 @@ export const login = CatchAsyncError(
     try {
       const { email, password } = req.body;
       if (!email || !password)
-        return next(new ErrorHandler("Please provide both email and password", 400));
+        return next(
+          new ErrorHandler("Please provide both email and password", 400)
+        );
 
       const user = await UserModel.findOne({ email }).select("+password");
       if (!user)
-        return next(new ErrorHandler("Invalid email or password. Please check your credentials and try again.", 401));
+        return next(
+          new ErrorHandler(
+            "Invalid email or password. Please check your credentials and try again.",
+            401
+          )
+        );
 
       const match = await user.comparePassword!(password);
-      if (!match) return next(new ErrorHandler("Invalid email or password. Please check your credentials and try again.", 401));
+      if (!match)
+        return next(
+          new ErrorHandler(
+            "Invalid email or password. Please check your credentials and try again.",
+            401
+          )
+        );
 
       // Mark user as online after successful login
       const redis = require("../utils/redis").redis;
@@ -315,11 +376,22 @@ export const registerBrand = CatchAsyncError(
     try {
       const { name, email, password, companyName } = req.body;
       if (!email || !password || !companyName) {
-        return next(new ErrorHandler("Missing required fields: email, password, and companyName are required", 400));
+        return next(
+          new ErrorHandler(
+            "Missing required fields: email, password, and companyName are required",
+            400
+          )
+        );
       }
 
       const existing = await UserModel.findOne({ email });
-      if (existing) return next(new ErrorHandler("This email is already registered. Please use a different email or try logging in.", 409));
+      if (existing)
+        return next(
+          new ErrorHandler(
+            "This email is already registered. Please use a different email or try logging in.",
+            409
+          )
+        );
 
       // Create activation token BEFORE creating user
       const activationToken = createActivationToken({
@@ -338,7 +410,7 @@ export const registerBrand = CatchAsyncError(
           path.join(__dirname, "../mails/activation-mail.ejs"),
           data
         );
-        await sendMail({
+        await getEmailService().sendMail({
           email,
           subject: "Activate your brand account",
           template: "activation-mail.ejs",
@@ -365,7 +437,8 @@ export const registerBrand = CatchAsyncError(
 
         res.status(201).json({
           success: true,
-          message: "Registration successful! Please check your email to verify your account.",
+          message:
+            "Registration successful! Please check your email to verify your account.",
           activationToken: activationToken.token,
         });
       } catch (mailErr: any) {
@@ -379,7 +452,9 @@ export const registerBrand = CatchAsyncError(
         );
       }
     } catch (error: any) {
-      return next(new ErrorHandler(`Brand registration failed: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(`Brand registration failed: ${error.message}`, 500)
+      );
     }
   }
 );
@@ -399,7 +474,6 @@ export const logout = CatchAsyncError(async (req: Request, res: Response) => {
   res.cookie("refresh_token", "", { maxAge: 1 });
   res.status(200).json({ success: true });
 });
-
 
 // Resend activation email (unified for both gamer and brand)
 export const resendActivation = CatchAsyncError(
@@ -451,7 +525,7 @@ export const resendActivation = CatchAsyncError(
       const data = { user: { name: displayName }, activationCode };
 
       // Send activation email
-      await sendMail({
+      await getEmailService().sendMail({
         email: user.email,
         subject: "Verify your account",
         template: "activation-mail.ejs",
@@ -464,7 +538,12 @@ export const resendActivation = CatchAsyncError(
         activationToken: activationToken.token,
       });
     } catch (error: any) {
-      return next(new ErrorHandler(`Failed to resend activation email: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(
+          `Failed to resend activation email: ${error.message}`,
+          500
+        )
+      );
     }
   }
 );
@@ -485,7 +564,8 @@ export const forgotPassword = CatchAsyncError(
         // Don't reveal if email exists or not for security
         return res.status(200).json({
           success: true,
-          message: "If an account with that email exists, a password reset link has been sent.",
+          message:
+            "If an account with that email exists, a password reset link has been sent.",
         });
       }
 
@@ -513,7 +593,7 @@ export const forgotPassword = CatchAsyncError(
       const data = { user: { name: userName }, resetLink };
 
       try {
-        await sendMail({
+        await getEmailService().sendMail({
           email: user.email,
           subject: "Reset Your Password - Tex Resolve",
           template: "reset-password.ejs",
@@ -539,7 +619,9 @@ export const forgotPassword = CatchAsyncError(
         );
       }
     } catch (error: any) {
-      return next(new ErrorHandler(`Forgot password failed: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(`Forgot password failed: ${error.message}`, 500)
+      );
     }
   }
 );
@@ -552,10 +634,7 @@ export const resetPassword = CatchAsyncError(
 
       if (!token || !new_password) {
         return next(
-          new ErrorHandler(
-            "Missing required fields: token, new_password",
-            400
-          )
+          new ErrorHandler("Missing required fields: token, new_password", 400)
         );
       }
 
@@ -576,7 +655,10 @@ export const resetPassword = CatchAsyncError(
       } catch (err: any) {
         if (err.name === "TokenExpiredError") {
           return next(
-            new ErrorHandler("Reset link has expired. Please request a new one.", 400)
+            new ErrorHandler(
+              "Reset link has expired. Please request a new one.",
+              400
+            )
           );
         }
         return next(new ErrorHandler("Invalid reset token", 400));
@@ -594,10 +676,13 @@ export const resetPassword = CatchAsyncError(
 
       res.status(200).json({
         success: true,
-        message: "Password reset successful. You can now log in with your new password.",
+        message:
+          "Password reset successful. You can now log in with your new password.",
       });
     } catch (error: any) {
-      return next(new ErrorHandler(`Reset password failed: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(`Reset password failed: ${error.message}`, 500)
+      );
     }
   }
 );

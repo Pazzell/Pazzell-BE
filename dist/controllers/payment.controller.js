@@ -12,12 +12,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getTransactionHistory = exports.getCampaignBudget = exports.paystackWebhook = exports.verifyPayment = exports.initializePayment = void 0;
+exports.getTransactionHistory = exports.getCampaignBudget = exports.paystackWebhook = exports.verifyPayment = exports.initializePayment = exports.calculateWeeklyPrice = void 0;
+exports.computeWeeklyPricing = computeWeeklyPricing;
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
 const transaction_model_1 = __importDefault(require("../models/transaction.model"));
 const puzzleCampaign_model_1 = __importDefault(require("../models/puzzleCampaign.model"));
 const payment_1 = require("../services/payment");
+const queueFactory_1 = require("../services/queue/queueFactory");
+const notificationFactory_1 = require("../services/notification/notificationFactory");
+const config_service_1 = require("../services/config/config.service");
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 // Log payment configuration on startup
 console.log("✅ Payment Gateway: Paystack");
@@ -28,11 +32,49 @@ if (process.env.PAYSTACK_SECRET_KEY) {
 else {
     console.warn("⚠️  Paystack is not configured - PAYSTACK_SECRET_KEY missing");
 }
-// Package pricing
+// Fallback base price used only if a campaign somehow has neither
+// expectedChargeAmount nor totalBudget set (see initializePayment below).
 const PACKAGE_PRICES = {
-    basic: 7000, // ₦7,000
-    premium: 10000, // ₦10,000
+    basic: 7000,
+    premium: 10000,
 };
+// Weekly pricing: amount = weeks × tier weekly price (config-driven,
+// currently ₦7,000/week basic, ₦10,000/week premium — see services/config/config.service.ts).
+function computeWeeklyPricing(packageType, durationWeeks) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+            throw new Error("durationWeeks must be a positive number");
+        }
+        const weeklyPrice = yield (0, config_service_1.getWeeklyPrice)(packageType);
+        const totalAmount = Math.round(weeklyPrice * durationWeeks);
+        const timeLimitHours = durationWeeks * 7 * 24;
+        return {
+            packageType,
+            weeklyPrice,
+            durationWeeks,
+            totalAmount,
+            timeLimitHours,
+        };
+    });
+}
+// GET /payments/calculate-weekly-price?packageType=basic&weeks=2
+exports.calculateWeeklyPrice = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { packageType, weeks } = req.query;
+        if (!packageType || !["basic", "premium"].includes(packageType)) {
+            return next(new ErrorHandler_1.default("packageType must be 'basic' or 'premium'", 400));
+        }
+        const durationWeeks = Number(weeks);
+        if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+            return next(new ErrorHandler_1.default("weeks must be a positive number", 400));
+        }
+        const result = yield computeWeeklyPricing(packageType, durationWeeks);
+        res.status(200).json({ success: true, pricing: result });
+    }
+    catch (error) {
+        return next(new ErrorHandler_1.default(`Failed to calculate weekly price: ${error.message}`, 500));
+    }
+}));
 // Initialize payment for campaign
 exports.initializePayment = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -162,6 +204,27 @@ exports.verifyPayment = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) 
             campaign.startDate = now;
             campaign.endDate = endDate;
             yield campaign.save();
+            // Enqueue payment event (no-op when PAYMENT_QUEUE_PROVIDER=none)
+            (0, queueFactory_1.getPaymentQueue)().enqueue({
+                reference: transaction.reference,
+                transactionId: String(transaction._id),
+                campaignId: String(transaction.campaignId),
+                brandId: String(transaction.brandId),
+                amount: transaction.amount,
+                currency: transaction.currency || "NGN",
+                event: "payment.verified",
+                timestamp: new Date().toISOString(),
+            }).catch((e) => console.error("Queue enqueue error:", e));
+            // Publish notification (no-op when NOTIFICATION_PROVIDER=none)
+            (0, notificationFactory_1.getNotificationService)().publish({
+                subject: "Payment Verified",
+                message: `Payment ${transaction.reference} verified for campaign ${transaction.campaignId}`,
+                topicKey: "payment",
+                metadata: {
+                    reference: transaction.reference,
+                    campaignId: String(transaction.campaignId),
+                },
+            }).catch((e) => console.error("SNS publish error:", e));
             res.status(200).json({
                 success: true,
                 message: "Payment verified successfully",
@@ -233,6 +296,25 @@ exports.paystackWebhook = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
                 yield transaction.save();
                 // Activate campaign
                 yield activateCampaignAfterPayment(transaction, event.data);
+                // Enqueue webhook payment event (no-op when PAYMENT_QUEUE_PROVIDER=none)
+                (0, queueFactory_1.getPaymentQueue)().enqueue({
+                    reference,
+                    transactionId: String(transaction._id),
+                    campaignId: String(transaction.campaignId),
+                    brandId: String(transaction.brandId),
+                    amount: transaction.amount,
+                    currency: transaction.currency || "NGN",
+                    event: "webhook.received",
+                    rawPaystackData: event.data,
+                    timestamp: new Date().toISOString(),
+                }).catch((e) => console.error("Queue enqueue error:", e));
+                // Publish notification (no-op when NOTIFICATION_PROVIDER=none)
+                (0, notificationFactory_1.getNotificationService)().publish({
+                    subject: "Webhook Payment Success",
+                    message: `Webhook charge.success for reference ${reference}`,
+                    topicKey: "payment",
+                    metadata: { reference, campaignId: String(transaction.campaignId) },
+                }).catch((e) => console.error("SNS publish error:", e));
             }
         }
         res.status(200).send("Webhook received");

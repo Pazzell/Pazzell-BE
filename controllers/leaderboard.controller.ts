@@ -1,95 +1,58 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
-import LeaderboardModel from "../models/leaderboard.model";
 import UserModel from "../models/user.model";
+import { getWeekBounds, parseWeekKey } from "../utils/weekBoundary";
+import {
+  getUnifiedWeeklyEntries,
+  getHiddenUserIds,
+} from "../services/leaderboard.service";
+import { getAllTimePointsAggregate } from "../services/points/pointsLedger.service";
 
-// Get current week's leaderboard
+async function buildWeeklyResponseEntries(
+  weekStart: Date,
+  weekEnd: Date,
+  weekKey: string
+) {
+  const entries = await getUnifiedWeeklyEntries(weekStart, weekEnd, weekKey);
+  const hiddenIds = await getHiddenUserIds();
+  const visible = entries.filter((e) => !hiddenIds.has(String(e.userId))).slice(0, 100);
+
+  return Promise.all(
+    visible.map(async (entry, index) => {
+      const user = await UserModel.findById(entry.userId)
+        .select("firstName lastName username avatar")
+        .lean();
+
+      return {
+        position: index + 1,
+        userId: entry.userId,
+        fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
+        username: user?.username || "",
+        avatar: user?.avatar || "",
+        puzzlesSolved: entry.puzzlesSolved,
+        points: entry.points,
+        avgCompletionTimeMs: entry.avgCompletionTimeMs,
+        avgCompletionTimeSec: entry.avgCompletionTimeMs
+          ? Math.round(entry.avgCompletionTimeMs / 1000)
+          : null,
+      };
+    })
+  );
+}
+
+// Get current week's leaderboard. Aggregates points weekly and resets at week
+// end (a live query bounded by the week range — no explicit reset job needed).
+// Tiebreaker: lower average completion time ranks higher, computed from first
+// completions only within the week (see services/leaderboard.service.ts).
 export const getWeeklyLeaderboard = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const now = new Date();
-
-      // Calculate current week's start (Monday) and end (Sunday)
-      const dayOfWeek = now.getDay();
-      const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Sunday is 0, Monday is 1
-
-      const weekStart = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate() - daysFromMonday
-      );
-      weekStart.setHours(0, 0, 0, 0);
-
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
-      weekEnd.setHours(23, 59, 59, 999);
-
-      // DEBUG: Count all attempts regardless of week
-      const totalAttempts = await PuzzleAttemptModel.countDocuments({
-        firstTimeSolved: true,
-      });
-
-      // DEBUG: Count attempts in current week
-      const weekAttempts = await PuzzleAttemptModel.countDocuments({
-        firstTimeSolved: true,
-        timestamp: { $gte: weekStart, $lte: weekEnd },
-      });
-
-      // count firstTimeSolved attempts that occurred this week grouped by user
-      const agg = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            firstTimeSolved: true,
-            timestamp: { $gte: weekStart, $lte: weekEnd },
-          },
-        },
-        {
-          $group: {
-            _id: "$userId",
-            puzzlesSolved: { $sum: 1 },
-            points: { $sum: "$pointsEarned" },
-          },
-        },
-        { $sort: { points: -1, puzzlesSolved: -1 } },
-        { $limit: 100 },
-      ]);
-
-      const entries = agg.map((a: any) => ({
-        userId: a._id,
-        puzzlesSolved: a.puzzlesSolved,
-        points: a.points,
-      }));
-
-      // Create week key
-      const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd.toISOString().slice(0, 10)}`;
-
-      // upsert leaderboard document for this week
-      await LeaderboardModel.findOneAndUpdate(
-        { type: "weekly", date: weekKey },
-        { type: "weekly", date: weekKey, entries },
-        { upsert: true }
-      );
-
-      // Fetch user details for each entry
-      const entriesWithUserDetails = await Promise.all(
-        entries.map(async (entry: any, index: number) => {
-          const user = await UserModel.findById(entry.userId)
-            .select("firstName lastName username avatar")
-            .lean();
-
-          return {
-            position: index + 1,
-            userId: entry.userId,
-            fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
-            username: user?.username || "",
-            avatar: user?.avatar || "",
-            puzzlesSolved: entry.puzzlesSolved,
-            points: entry.points,
-            amountEarned: entry.points, // Points = amount earned
-          };
-        })
+      const { weekStart, weekEnd, weekKey } = getWeekBounds();
+      const entriesWithUserDetails = await buildWeeklyResponseEntries(
+        weekStart,
+        weekEnd,
+        weekKey
       );
 
       res.status(200).json({
@@ -101,13 +64,6 @@ export const getWeeklyLeaderboard = CatchAsyncError(
           totalPlayers: entriesWithUserDetails.length,
           entries: entriesWithUserDetails,
         },
-        debug: {
-          totalAttemptsWithFirstTimeSolved: totalAttempts,
-          attemptsInCurrentWeek: weekAttempts,
-          weekStartFull: weekStart.toISOString(),
-          weekEndFull: weekEnd.toISOString(),
-          currentDate: now.toISOString(),
-        },
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
@@ -115,47 +71,18 @@ export const getWeeklyLeaderboard = CatchAsyncError(
   }
 );
 
-// Get leaderboard for a specific week
+// Get leaderboard for a specific past (or current) week — computed live from
+// source data, same as the current-week endpoint above.
 export const getLeaderboardByWeek = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { weekKey } = req.params; // Format: "2025-01-06_to_2025-01-12"
+      const { weekKey } = req.params;
+      const { weekStart, weekEnd } = parseWeekKey(weekKey);
 
-      const board = await LeaderboardModel.findOne({
-        type: "weekly",
-        date: weekKey,
-      });
-
-      if (!board) {
-        return res.status(200).json({
-          success: true,
-          leaderboard: {
-            type: "weekly",
-            weekKey,
-            totalPlayers: 0,
-            entries: [],
-          },
-        });
-      }
-
-      // Fetch user details for each entry
-      const entriesWithUserDetails = await Promise.all(
-        board.entries.map(async (entry: any, index: number) => {
-          const user = await UserModel.findById(entry.userId)
-            .select("firstName lastName username avatar")
-            .lean();
-
-          return {
-            position: index + 1,
-            userId: entry.userId,
-            fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
-            username: user?.username || "",
-            avatar: user?.avatar || "",
-            puzzlesSolved: entry.puzzlesSolved,
-            points: entry.points,
-            amountEarned: entry.points, // Points = amount earned
-          };
-        })
+      const entriesWithUserDetails = await buildWeeklyResponseEntries(
+        weekStart,
+        weekEnd,
+        weekKey
       );
 
       res.status(200).json({
@@ -173,35 +100,32 @@ export const getLeaderboardByWeek = CatchAsyncError(
   }
 );
 
-// Get all-time leaderboard
+// Get all-time leaderboard (lifetime PointsLedger totals — session
+// completions + referral/winner-share bonuses)
 export const getAllTimeLeaderboard = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Aggregate all puzzle attempts (no time filter)
-      const agg = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            firstTimeSolved: true,
-          },
-        },
-        {
-          $group: {
-            _id: "$userId",
-            puzzlesSolved: { $sum: 1 },
-            points: { $sum: "$pointsEarned" },
-          },
-        },
-        { $sort: { points: -1, puzzlesSolved: -1 } },
-        { $limit: 100 },
-      ]);
+      const agg = await getAllTimePointsAggregate();
+      agg.sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        const aTime = a.avgCompletionTimeMs ?? Infinity;
+        const bTime = b.avgCompletionTimeMs ?? Infinity;
+        if (aTime !== bTime) return aTime - bTime;
+        return b.sessionCompletions - a.sessionCompletions;
+      });
+      const top100 = agg.slice(0, 100);
 
-      const entries = agg.map((a: any) => ({
-        userId: a._id,
-        puzzlesSolved: a.puzzlesSolved,
-        points: a.points,
-      }));
+      const hiddenIds = await getHiddenUserIds();
 
-      // Fetch user details for each entry
+      const entries = top100
+        .filter((a) => !hiddenIds.has(String(a.userId)))
+        .map((a) => ({
+          userId: a.userId,
+          puzzlesSolved: a.sessionCompletions,
+          points: a.points,
+          avgTime: a.avgCompletionTimeMs,
+        }));
+
       const entriesWithUserDetails = await Promise.all(
         entries.map(async (entry: any, index: number) => {
           const user = await UserModel.findById(entry.userId)
@@ -211,12 +135,17 @@ export const getAllTimeLeaderboard = CatchAsyncError(
           return {
             position: index + 1,
             userId: entry.userId,
-            fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
+            fullName: user
+              ? `${user.firstName} ${user.lastName}`
+              : "Unknown User",
             username: user?.username || "",
             avatar: user?.avatar || "",
             puzzlesSolved: entry.puzzlesSolved,
             points: entry.points,
-            amountEarned: entry.points, // Points = amount earned
+            avgCompletionTimeMs: entry.avgTime || null,
+            avgCompletionTimeSec: entry.avgTime
+              ? Math.round(entry.avgTime / 1000)
+              : null,
           };
         })
       );
@@ -230,7 +159,12 @@ export const getAllTimeLeaderboard = CatchAsyncError(
         },
       });
     } catch (error: any) {
-      return next(new ErrorHandler(`Failed to fetch all-time leaderboard: ${error.message}`, 500));
+      return next(
+        new ErrorHandler(
+          `Failed to fetch all-time leaderboard: ${error.message}`,
+          500
+        )
+      );
     }
   }
 );

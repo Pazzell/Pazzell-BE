@@ -19,6 +19,18 @@ export interface IUserAnalytics {
   };
 }
 
+export interface IUserNotifications {
+  emailNotifications: boolean;
+  referralBonusAlerts: boolean;
+  leaderboardUpdates: boolean;
+  newCampaignAlerts: boolean;
+  weeklyDigest: boolean;
+}
+
+export interface IUserPrivacy {
+  showOnLeaderboard: boolean;
+}
+
 export interface IUser extends Document {
   name?: string; // deprecated, kept for brand users
   firstName?: string; // for gamer users
@@ -33,6 +45,8 @@ export interface IUser extends Document {
   isVerified: boolean;
   analytics: IUserAnalytics;
   puzzlesSolved: string[]; // puzzle ids
+  notifications: IUserNotifications;
+  privacy: IUserPrivacy;
   comparePassword?: (password: string) => Promise<boolean>;
   SignAccessToken: () => string;
   SignRefreshToken: () => string;
@@ -67,6 +81,16 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       },
     },
     puzzlesSolved: [{ type: String }],
+    notifications: {
+      emailNotifications: { type: Boolean, default: true },
+      referralBonusAlerts: { type: Boolean, default: true },
+      leaderboardUpdates: { type: Boolean, default: true },
+      newCampaignAlerts: { type: Boolean, default: true },
+      weeklyDigest: { type: Boolean, default: true },
+    },
+    privacy: {
+      showOnLeaderboard: { type: Boolean, default: true },
+    },
   },
   { timestamps: true }
 );

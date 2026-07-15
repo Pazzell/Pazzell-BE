@@ -9,14 +9,12 @@ export interface IQuestion {
 export interface IPuzzleCampaign extends Document {
   brandId: string;
   packageId: string; // reference to package
-  gameType: "sliding_puzzle" | "card_matching" | "whack_a_mole" | "word_hunt";
   title: string;
   description: string;
   brandUrl?: string; // brand's website or social media URL
   campaignUrl?: string; // specific URL for this campaign
   videoUrl?: string; // optional promotional video URL
   puzzleImageUrl: string;
-  originalImageUrl: string;
   questions: IQuestion[];
   words?: string[]; // for word_hunt games only
   timeLimit: number; // campaign duration in hours
@@ -33,25 +31,33 @@ export interface IPuzzleCampaign extends Document {
   budgetRemaining?: number; // Amount left to allocate
   paymentStatus?: "unpaid" | "paid" | "partial";
   transactionId?: string; // Reference to Transaction
+
+  // Multi-game campaign fields — every campaign spans all four game types.
+  gameTypes: (
+    | "sliding_puzzle"
+    | "card_matching"
+    | "spot_the_difference"
+    | "word_hunt"
+  )[];
+  videoDurationSeconds?: number;
+  videoSizeBytes?: number;
+  videoMimeType?: string;
+  prizeDescription?: string;
+  prizeUnitsAvailable?: number; // physical prize unit count (future flexibility) — draw winner count stays fixed at 1
+  durationWeeks?: number; // duration in weeks
+  weeklyPrice?: number; // NGN price-per-week snapshot at creation time, for audit
 }
 
 const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
   {
     brandId: { type: String, required: true },
     packageId: { type: String, required: true, index: true },
-    gameType: {
-      type: String,
-      enum: ["sliding_puzzle", "card_matching", "whack_a_mole", "word_hunt"],
-      required: true,
-      default: "sliding_puzzle",
-    },
     title: { type: String, required: true },
     description: { type: String, required: true },
     brandUrl: { type: String, required: false },
     campaignUrl: { type: String, required: false },
     videoUrl: { type: String, required: false },
     puzzleImageUrl: { type: String, required: true },
-    originalImageUrl: { type: String, required: true },
     questions: [
       {
         question: { type: String, required: true },
@@ -85,14 +91,35 @@ const puzzleCampaignSchema: Schema<IPuzzleCampaign> = new mongoose.Schema(
       default: "unpaid",
     },
     transactionId: { type: String },
+
+    // Multi-game fields — every campaign spans all four game types.
+    gameTypes: {
+      type: [
+        {
+          type: String,
+          enum: [
+            "sliding_puzzle",
+            "card_matching",
+            "spot_the_difference",
+            "word_hunt",
+          ],
+        },
+      ],
+      required: true,
+    },
+    videoDurationSeconds: { type: Number },
+    videoSizeBytes: { type: Number },
+    videoMimeType: { type: String },
+    prizeDescription: { type: String },
+    prizeUnitsAvailable: { type: Number, default: 1 },
+    durationWeeks: { type: Number },
+    weeklyPrice: { type: Number },
   },
   { timestamps: true }
 );
 
 // index for quick analytics by brand
 puzzleCampaignSchema.index({ brandId: 1 });
-// index for querying by game type
-puzzleCampaignSchema.index({ gameType: 1 });
 // index for querying by status
 puzzleCampaignSchema.index({ status: 1 });
 // index for querying by end date (for auto-ending campaigns)
