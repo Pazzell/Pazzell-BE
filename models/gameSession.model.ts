@@ -36,6 +36,7 @@ export interface IGameSession extends Document {
 
   completedAt?: Date;
   totalCompletionTimeMs?: number; // server-computed = completedAt - startedAt, authoritative
+  totalMoves?: number; // client-reported sum of movesTaken across all games — informational only, never trusted for scoring
   isFirstCompletionForUser?: boolean; // only true on the DB row that "won" the race for first completion
   pointsAwarded: number;
   raffleTicketAwarded: boolean;
@@ -102,6 +103,7 @@ const gameSessionSchema: Schema<IGameSession> = new mongoose.Schema(
 
     completedAt: { type: Date },
     totalCompletionTimeMs: { type: Number },
+    totalMoves: { type: Number },
     isFirstCompletionForUser: { type: Boolean },
     pointsAwarded: { type: Number, default: 0 },
     raffleTicketAwarded: { type: Boolean, default: false },

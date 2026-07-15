@@ -69,6 +69,7 @@ function runHourlyCampaignExpiry() {
         if (mongoose_1.default.connection.readyState !== 1)
             return;
         yield (0, scheduler_1.checkExpiredCampaigns)();
+        yield (0, scheduler_1.checkAbandonedSessions)();
     });
 }
 function runNightlyWalletReconciliation() {

@@ -3,9 +3,27 @@ import TransactionModel from "../models/transaction.model";
 import PayoutModel from "../models/payout.model";
 import RaffleTicketModel from "../models/raffleTicket.model";
 import RaffleDrawModel from "../models/raffleDraw.model";
+import GameSessionModel from "../models/gameSession.model";
 import { awardPoints } from "../services/points/pointsLedger.service";
 import { getPreviousWeekKey } from "../utils/weekBoundary";
 import { runWeeklyRollover } from "../services/scheduler";
+import { checkAbandonedSessions } from "../utils/scheduler";
+
+function makeSession(overrides: Partial<any> = {}) {
+  return GameSessionModel.create({
+    userId: "user-1",
+    campaignId: "campaign-1",
+    status: "in_progress",
+    startedAt: new Date(),
+    games: [],
+    video: {},
+    quiz: { firstAttempt: null, attempts: [] },
+    pointsAwarded: 0,
+    raffleTicketAwarded: false,
+    anticheat: { flagged: false, flaggedReasons: [], voided: false },
+    ...overrides,
+  });
+}
 
 describe("services/scheduler runWeeklyRollover", () => {
   beforeAll(async () => {
@@ -66,5 +84,50 @@ describe("services/scheduler runWeeklyRollover", () => {
     await expect(runWeeklyRollover()).resolves.toBeUndefined();
     const payoutCount = await PayoutModel.countDocuments({});
     expect(payoutCount).toBe(0);
+  });
+});
+
+describe("utils/scheduler checkAbandonedSessions", () => {
+  beforeAll(async () => {
+    await connectTestDB();
+  });
+  afterEach(async () => {
+    await clearTestDB();
+  });
+  afterAll(async () => {
+    await closeTestDB();
+  });
+
+  it("marks a session started well past the TTL as abandoned", async () => {
+    const staleStart = new Date(Date.now() - 7 * 60 * 60 * 1000); // 7h ago
+    const session = await makeSession({ status: "in_progress", startedAt: staleStart });
+
+    await checkAbandonedSessions();
+
+    const updated = await GameSessionModel.findById(session._id);
+    expect(updated!.status).toBe("abandoned");
+  });
+
+  it("leaves a recently-started in_progress session alone", async () => {
+    const session = await makeSession({ status: "in_progress", startedAt: new Date() });
+
+    await checkAbandonedSessions();
+
+    const updated = await GameSessionModel.findById(session._id);
+    expect(updated!.status).toBe("in_progress");
+  });
+
+  it("does not touch already-completed sessions even if old", async () => {
+    const staleStart = new Date(Date.now() - 7 * 60 * 60 * 1000);
+    const session = await makeSession({
+      status: "completed",
+      startedAt: staleStart,
+      completedAt: staleStart,
+    });
+
+    await checkAbandonedSessions();
+
+    const updated = await GameSessionModel.findById(session._id);
+    expect(updated!.status).toBe("completed");
   });
 });

@@ -109,17 +109,19 @@ exports.postQuizAttempt = (0, catchAsyncError_1.CatchAsyncError)((req, res, next
         handleSessionError(error, next);
     }
 }));
-// POST /sessions/:id/complete
+// POST /sessions/:id/complete  { totalMoves? }
 exports.postCompleteSession = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = String(req.user._id);
         const { id } = req.params;
-        const result = yield (0, gameSession_service_1.completeSession)(id, userId);
+        const { totalMoves } = req.body;
+        const result = yield (0, gameSession_service_1.completeSession)(id, userId, totalMoves !== undefined ? Number(totalMoves) : undefined);
         res.status(200).json({
             success: true,
             isFirstCompletion: result.isFirstCompletion,
             pointsAwarded: result.pointsAwarded,
             totalCompletionTimeMs: result.totalCompletionTimeMs,
+            totalMoves: result.totalMoves,
             voided: result.voided,
             flagged: result.flagged,
         });
