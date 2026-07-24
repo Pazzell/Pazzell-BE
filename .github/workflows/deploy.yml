@@ -1,73 +1,73 @@
-name: Build and Deploy
+# name: Build and Deploy
 
-on:
-  push:
-    branches:
-      - feat/deploy-app
+# on:
+#   push:
+#     branches:
+#       - feat/deploy-app
 
-permissions:
-  id-token: write   # required for OIDC
-  contents: read
+# permissions:
+#   id-token: write   # required for OIDC
+#   contents: read
 
-env:
-  AWS_REGION: eu-west-1      
-  ECR_REPOSITORY: pazzell-server
+# env:
+#   AWS_REGION: eu-west-1      
+#   ECR_REPOSITORY: pazzell-server
 
-jobs:
-  deploy:
-    name: Build, Push & Deploy
-    runs-on: ubuntu-latest
+# jobs:
+#   deploy:
+#     name: Build, Push & Deploy
+#     runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+#       - name: Configure AWS credentials via OIDC
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+#           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+#       - name: Login to Amazon ECR
+#         id: login-ecr
+#         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Docker image to ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+#       - name: Build and push Docker image to ECR
+#         env:
+#           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+#           IMAGE_TAG: ${{ github.sha }}
+#         run: |
+#           docker build \
+#             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+#             -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+#             .
+#           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+#           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-      - name: Deploy via SSM Run Command
-        run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=pazzell-server" "Name=instance-state-name,Values=running" \
-            --query "Reservations[0].Instances[0].InstanceId" \
-            --output text)
+#       - name: Deploy via SSM Run Command
+#         run: |
+#           INSTANCE_ID=$(aws ec2 describe-instances \
+#             --filters "Name=tag:Name,Values=pazzell-server" "Name=instance-state-name,Values=running" \
+#             --query "Reservations[0].Instances[0].InstanceId" \
+#             --output text)
 
-          echo "Deploying to instance: $INSTANCE_ID"
+#           echo "Deploying to instance: $INSTANCE_ID"
 
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --parameters '{"commands":["/opt/pazzell/deploy.sh"]}' \
-            --query "Command.CommandId" \
-            --output text)
+#           COMMAND_ID=$(aws ssm send-command \
+#             --instance-ids "$INSTANCE_ID" \
+#             --document-name "AWS-RunShellScript" \
+#             --parameters '{"commands":["/opt/pazzell/deploy.sh"]}' \
+#             --query "Command.CommandId" \
+#             --output text)
 
-          echo "SSM Command ID: $COMMAND_ID"
+#           echo "SSM Command ID: $COMMAND_ID"
 
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID"
+#           aws ssm wait command-executed \
+#             --command-id "$COMMAND_ID" \
+#             --instance-id "$INSTANCE_ID"
 
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --query "[StandardOutputContent, StandardErrorContent]" \
-            --output text
+#           aws ssm get-command-invocation \
+#             --command-id "$COMMAND_ID" \
+#             --instance-id "$INSTANCE_ID" \
+#             --query "[StandardOutputContent, StandardErrorContent]" \
+#             --output text
