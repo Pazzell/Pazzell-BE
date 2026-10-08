@@ -9,11 +9,6 @@ import {
   flagForumPost,
   listFlags,
   resolveFlag,
-  createWinnerShareSubmission,
-  getMyWinnerShareSubmissions,
-  listWinnerShareSubmissions,
-  verifySubmission,
-  rejectSubmission,
 } from "../controllers/forum.controller";
 import { isAuthenticated, authorizeRoles } from "../utils/auth";
 
@@ -40,35 +35,6 @@ router.patch(
   isAuthenticated,
   authorizeRoles("admin"),
   resolveFlag
-);
-
-router.post(
-  "/forum/winner-submissions",
-  isAuthenticated,
-  createWinnerShareSubmission
-);
-router.get(
-  "/forum/winner-submissions/mine",
-  isAuthenticated,
-  getMyWinnerShareSubmissions
-);
-router.get(
-  "/forum/winner-submissions",
-  isAuthenticated,
-  authorizeRoles("admin"),
-  listWinnerShareSubmissions
-);
-router.post(
-  "/forum/winner-submissions/:id/verify",
-  isAuthenticated,
-  authorizeRoles("admin"),
-  verifySubmission
-);
-router.post(
-  "/forum/winner-submissions/:id/reject",
-  isAuthenticated,
-  authorizeRoles("admin"),
-  rejectSubmission
 );
 
 export default router;

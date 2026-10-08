@@ -8,7 +8,8 @@ export const connectTestDB = async () => {
   process.env.ACCESS_TOKEN = process.env.ACCESS_TOKEN || "testaccesssecret";
   process.env.REFRESH_TOKEN = process.env.REFRESH_TOKEN || "testrefreshsecret";
 
-  mongo = await MongoMemoryServer.create();
+  // mongod can take well over the 10s default to come up on a loaded machine
+  mongo = await MongoMemoryServer.create({ instance: { launchTimeout: 120000 } });
   const uri = mongo.getUri();
   await mongoose.connect(uri);
 

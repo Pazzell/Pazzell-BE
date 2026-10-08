@@ -1,4 +1,4 @@
-import { bucket } from "../../firebaseConfig";
+import { getBucket } from "../../firebaseConfig";
 import {
   IStorageService,
   UploadFileOptions,
@@ -10,6 +10,7 @@ export class FirebaseStorageService implements IStorageService {
     const { buffer, mimetype, originalname, folder, fileName } = options;
     const name = fileName || `${Date.now()}-${originalname}`;
     const filePath = `${folder}/${name}`;
+    const bucket = getBucket();
     const fileRef = bucket.file(filePath);
 
     await fileRef.save(buffer, { resumable: false, contentType: mimetype });
@@ -27,7 +28,7 @@ export class FirebaseStorageService implements IStorageService {
 
   async deleteFile(filePath: string): Promise<boolean> {
     try {
-      const file = bucket.file(filePath);
+      const file = getBucket().file(filePath);
       const [exists] = await file.exists();
       if (!exists) return true;
       await file.delete();

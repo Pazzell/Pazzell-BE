@@ -1,133 +1,96 @@
-import { connectTestDB, clearTestDB, closeTestDB } from "./setup";
-import TransactionModel from "../models/transaction.model";
-import PayoutModel from "../models/payout.model";
-import RaffleTicketModel from "../models/raffleTicket.model";
-import RaffleDrawModel from "../models/raffleDraw.model";
-import GameSessionModel from "../models/gameSession.model";
-import { awardPoints } from "../services/points/pointsLedger.service";
-import { getPreviousWeekKey } from "../utils/weekBoundary";
-import { runWeeklyRollover } from "../services/scheduler";
-import { checkAbandonedSessions } from "../utils/scheduler";
+import { connectTestDB, closeTestDB } from "./setup";
+import { closeRedisConnection } from "../utils/redis";
+import { createUser, createCampaign, liveWindow, resetState, DAY_MS } from "./helpers";
+import userModel from "../models/user.model";
+import CampaignModel from "../models/campaign.model";
+import CustomQuizModel from "../models/customQuiz.model";
+import MatchAttemptModel from "../models/matchAttempt.model";
+import TriviaAttemptModel from "../models/triviaAttempt.model";
+import { creditWallet, getBalance } from "../services/wallet/wallet.service";
+import WalletModel from "../models/wallet.model";
+import {
+  runExpirySweep,
+  runNightlyWalletReconciliation,
+  runStaleAttemptSweep,
+} from "../services/scheduler";
 
-function makeSession(overrides: Partial<any> = {}) {
-  return GameSessionModel.create({
-    userId: "user-1",
-    campaignId: "campaign-1",
-    status: "in_progress",
-    startedAt: new Date(),
-    games: [],
-    video: {},
-    quiz: { firstAttempt: null, attempts: [] },
-    pointsAwarded: 0,
-    raffleTicketAwarded: false,
-    anticheat: { flagged: false, flaggedReasons: [], voided: false },
-    ...overrides,
-  });
-}
-
-describe("services/scheduler runWeeklyRollover", () => {
-  beforeAll(async () => {
-    await connectTestDB();
-  });
-  afterEach(async () => {
-    await clearTestDB();
-  });
+describe("Scheduled jobs", () => {
+  beforeAll(connectTestDB);
+  afterEach(resetState);
   afterAll(async () => {
     await closeTestDB();
+    await closeRedisConnection();
   });
 
-  it("calculates last week's payouts and draws raffles for campaigns that sold tickets last week", async () => {
-    const lastWeekDate = new Date();
-    lastWeekDate.setDate(lastWeekDate.getDate() - 7);
-    const previousWeekKey = getPreviousWeekKey();
+  it("ends campaigns whose 30 days are over and leaves the others alone", async () => {
+    const brand = await createUser({ role: "brand" });
+    const over = { startsAt: new Date(Date.now() - 31 * DAY_MS), endsAt: new Date(Date.now() - 60_000) };
+    const liveExpired = await createCampaign(brand.id, { status: "live", ...over });
+    const pausedExpired = await createCampaign(brand.id, { status: "paused", ...over });
+    const takenDown = await createCampaign(brand.id, { status: "taken_down", ...over });
+    const running = await createCampaign(brand.id, liveWindow());
+    const draft = await createCampaign(brand.id, { status: "draft" });
 
-    // Revenue + a top player for last week's payout calculation
-    await TransactionModel.create({
-      campaignId: "campaign-1",
-      brandId: "brand-1",
-      packageType: "basic",
-      amount: 5000,
-      currency: "NGN",
-      reference: `ref-${Math.random()}`,
-      status: "success",
-      createdAt: lastWeekDate,
-    });
-    await awardPoints({
-      userId: "player-1",
-      points: 7,
-      source: "session_completion",
-      campaignId: "campaign-1",
-      at: lastWeekDate,
-    });
+    await runExpirySweep();
 
-    // A raffle ticket minted last week for campaign-1
-    await RaffleTicketModel.create({
-      userId: "player-1",
-      campaignId: "campaign-1",
-      weekKey: previousWeekKey,
-      sourceSessionId: "session-1",
-      createdAt: lastWeekDate,
-    });
-
-    await runWeeklyRollover();
-
-    const payout = await PayoutModel.findOne({ userId: "player-1", weekKey: previousWeekKey });
-    expect(payout).not.toBeNull();
-    expect(payout!.amount).toBeGreaterThan(0);
-
-    const draw = await RaffleDrawModel.findOne({ campaignId: "campaign-1", weekKey: previousWeekKey });
-    expect(draw).not.toBeNull();
-    expect(draw!.winnerUserId).toBe("player-1");
+    const status = async (id: string) => (await CampaignModel.findById(id).lean())!.status;
+    expect(await status(liveExpired)).toBe("ended");
+    expect(await status(pausedExpired)).toBe("ended");
+    expect(await status(takenDown)).toBe("taken_down");
+    expect(await status(running)).toBe("live");
+    expect(await status(draft)).toBe("draft");
   });
 
-  it("is a no-op for weeks with no revenue or ticket activity", async () => {
-    await expect(runWeeklyRollover()).resolves.toBeUndefined();
-    const payoutCount = await PayoutModel.countDocuments({});
-    expect(payoutCount).toBe(0);
-  });
-});
+  it("locks the extra quizzes of users whose Pro plan has lapsed", async () => {
+    const lapsed = await createUser({ proUntil: new Date(Date.now() - 60_000) });
+    const active = await createUser({ proUntil: new Date(Date.now() + DAY_MS) });
+    for (const user of [lapsed, active]) {
+      for (let i = 0; i < 3; i++) {
+        await CustomQuizModel.create({
+          ownerId: user.id,
+          title: `Quiz ${i}`,
+          status: "live",
+          shareSlug: `${user.id}-slug-${i}-padpadpad`,
+          defaultTimerSeconds: 5,
+          defaultCardCount: 5,
+          createdAt: new Date(Date.now() - (10 - i) * 1000),
+        });
+      }
+    }
+    // Both were Pro when their quizzes were last synced.
+    await userModel.updateMany({}, { quizLocksSyncedAsPro: true });
 
-describe("utils/scheduler checkAbandonedSessions", () => {
-  beforeAll(async () => {
-    await connectTestDB();
-  });
-  afterEach(async () => {
-    await clearTestDB();
-  });
-  afterAll(async () => {
-    await closeTestDB();
-  });
+    await runExpirySweep();
 
-  it("marks a session started well past the TTL as abandoned", async () => {
-    const staleStart = new Date(Date.now() - 7 * 60 * 60 * 1000); // 7h ago
-    const session = await makeSession({ status: "in_progress", startedAt: staleStart });
-
-    await checkAbandonedSessions();
-
-    const updated = await GameSessionModel.findById(session._id);
-    expect(updated!.status).toBe("abandoned");
-  });
-
-  it("leaves a recently-started in_progress session alone", async () => {
-    const session = await makeSession({ status: "in_progress", startedAt: new Date() });
-
-    await checkAbandonedSessions();
-
-    const updated = await GameSessionModel.findById(session._id);
-    expect(updated!.status).toBe("in_progress");
+    const statuses = async (ownerId: string) =>
+      (await CustomQuizModel.find({ ownerId }).sort({ createdAt: 1 }).lean()).map((q) => q.status);
+    expect(await statuses(lapsed.id)).toEqual(["live", "locked", "locked"]);
+    expect(await statuses(active.id)).toEqual(["live", "live", "live"]);
   });
 
-  it("does not touch already-completed sessions even if old", async () => {
-    const staleStart = new Date(Date.now() - 7 * 60 * 60 * 1000);
-    const session = await makeSession({
-      status: "completed",
-      startedAt: staleStart,
-      completedAt: staleStart,
-    });
+  it("closes attempts and sessions that were walked away from", async () => {
+    const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
+    await MatchAttemptModel.create([
+      { userId: "u1", level: 1, timerSeconds: 5, questionCount: 3, startedAt: old },
+      { userId: "u2", level: 1, timerSeconds: 5, questionCount: 3 },
+    ]);
+    await TriviaAttemptModel.create([
+      { userId: "u1", sourceType: "topic", sourceId: "t", sourceKey: "topic:t", timerSeconds: 5, cardCount: 5, startedAt: old },
+      { userId: "u2", sourceType: "topic", sourceId: "t", sourceKey: "topic:t", timerSeconds: 5, cardCount: 5 },
+    ]);
 
-    await checkAbandonedSessions();
+    await runStaleAttemptSweep();
 
-    const updated = await GameSessionModel.findById(session._id);
-    expect(updated!.status).toBe("completed");
+    expect(await MatchAttemptModel.countDocuments({ status: "abandoned", active: false })).toBe(1);
+    expect(await MatchAttemptModel.countDocuments({ status: "in_progress", active: true })).toBe(1);
+    expect(await TriviaAttemptModel.countDocuments({ status: "abandoned", active: false })).toBe(1);
+    expect(await TriviaAttemptModel.countDocuments({ status: "studying", active: true })).toBe(1);
+  });
+
+  it("still reconciles wallet balances against the ledger", async () => {
+    await creditWallet("user-x", 500, "reward", { idempotencyKey: "r-1" });
+    await WalletModel.updateOne({ userId: "user-x" }, { balance: 999 });
+    await runNightlyWalletReconciliation();
+    expect(await getBalance("user-x")).toBe(500);
   });
 });

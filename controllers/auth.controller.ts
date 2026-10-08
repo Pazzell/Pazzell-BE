@@ -14,7 +14,6 @@ import ejs from "ejs";
 import { getEmailService } from "../services/email/emailFactory";
 import { createActivationToken } from "./user.controller";
 import { generateUsername, generateAvatar } from "../utils/userHelpers";
-import { captureReferralAtSignup } from "../services/referral.service";
 
 // Interface for password reset token payload
 interface IResetTokenPayload {
@@ -90,14 +89,6 @@ export const googleAuth = CatchAsyncError(
           role: "gamer",
           isVerified: true,
         });
-        // Capture referral relationship (no signup bonus — the referrer's reward
-        // is credited once the referee crosses the points threshold; see
-        // referral.service.ts checkReferralQualification).
-        const { referrerId, referrerUsername, referralCode } = req.body;
-        await captureReferralAtSignup(
-          referrerId || referrerUsername || referralCode,
-          String(user._id)
-        );
       } else {
         // ensure googleId is stored
         if (!user.googleId && profile.uid) {
@@ -174,7 +165,7 @@ export const registerGamer = CatchAsyncError(
         });
 
         // Only create user AFTER email is successfully sent
-        const user = await UserModel.create({
+        await UserModel.create({
           firstName,
           lastName: lastName || "",
           username,
@@ -184,13 +175,6 @@ export const registerGamer = CatchAsyncError(
           role: "gamer",
           isVerified: false,
         });
-
-        // Capture referral relationship (no signup bonus — see googleAuth comment above).
-        const { referrerId, referrerUsername, referralCode } = req.body;
-        await captureReferralAtSignup(
-          referrerId || referrerUsername || referralCode,
-          String(user._id)
-        );
 
         res.status(201).json({
           success: true,
@@ -263,7 +247,6 @@ export const activateUser = CatchAsyncError(
               userId: existingUser._id,
               companyEmail: email,
               companyName,
-              campaigns: [],
             });
           }
         }
@@ -290,13 +273,6 @@ export const activateUser = CatchAsyncError(
           role: "gamer",
           isVerified: true,
         });
-        // Capture referral relationship (no signup bonus — see googleAuth comment above).
-        const { referrerId, referrerUsername, referralCode } =
-          decoded.user as any;
-        await captureReferralAtSignup(
-          referrerId || referrerUsername || referralCode,
-          String(user._id)
-        );
       } else if (role === "brand") {
         const { name, companyName } = decoded.user;
 
@@ -314,7 +290,6 @@ export const activateUser = CatchAsyncError(
           userId: user._id,
           companyEmail: email,
           companyName,
-          campaigns: [],
         });
       } else {
         return next(new ErrorHandler("Invalid account type", 400));
@@ -432,7 +407,6 @@ export const registerBrand = CatchAsyncError(
           userId: user._id,
           companyEmail: email,
           companyName,
-          campaigns: [],
         });
 
         res.status(201).json({
@@ -595,7 +569,7 @@ export const forgotPassword = CatchAsyncError(
       try {
         await getEmailService().sendMail({
           email: user.email,
-          subject: "Reset Your Password - Tex Resolve",
+          subject: "Reset Your Password - Pazzell",
           template: "reset-password.ejs",
           data,
         });

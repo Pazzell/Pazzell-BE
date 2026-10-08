@@ -1,50 +1,55 @@
 import express from "express";
-import multer from "multer";
 import {
-  getActiveCampaigns,
-  getAllCampaigns,
-  getCampaignsByBrand,
-  getCampaignById,
-  checkCampaignCompletion,
+  getPricing,
+  createCampaign,
+  listMyCampaigns,
+  getMyCampaign,
   updateCampaign,
   deleteCampaign,
-  generateCampaignQuestions,
+  createCard,
+  bulkCreateCards,
+  updateCard,
+  deleteCard,
+  startCampaignCheckout,
+  cancelCampaignCheckout,
+  getDashboard,
+  getNextCampaign,
+  getCampaignInfo,
+  postUrlClick,
 } from "../controllers/campaign.controller";
-import { isAuthenticated } from "../utils/auth";
+import { isAuthenticated, authorizeRoles } from "../utils/auth";
+import { imageUpload } from "../services/upload/image.service";
+import { checkoutLimiter, clickLimiter, writeLimiter } from "../middlewares/rateLimit";
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const brand = [isAuthenticated, authorizeRoles("brand")];
+const brandImages = imageUpload.fields([
+  { name: "logo", maxCount: 1 },
+  { name: "cover", maxCount: 1 },
+]);
+const cardImage = imageUpload.single("image");
 
-// Get all campaigns
-router.get("/campaigns", getAllCampaigns);
+// Brand: campaigns (every :id is checked against the calling brand in the controller)
+router.get("/brand/campaigns/pricing", brand, getPricing);
+router.post("/brand/campaigns", brand, writeLimiter, brandImages, createCampaign);
+router.get("/brand/campaigns", brand, listMyCampaigns);
+router.get("/brand/campaigns/:id", brand, getMyCampaign);
+router.get("/brand/campaigns/:id/preview", brand, getMyCampaign);
+router.patch("/brand/campaigns/:id", brand, writeLimiter, brandImages, updateCampaign);
+router.delete("/brand/campaigns/:id", brand, deleteCampaign);
 
-// Get active campaigns only
-router.get("/campaigns/active", getActiveCampaigns);
+router.post("/brand/campaigns/:id/cards", brand, writeLimiter, cardImage, createCard);
+router.post("/brand/campaigns/:id/cards/bulk", brand, writeLimiter, bulkCreateCards);
+router.patch("/brand/campaigns/:id/cards/:cardId", brand, writeLimiter, cardImage, updateCard);
+router.delete("/brand/campaigns/:id/cards/:cardId", brand, deleteCard);
 
-// Get campaigns by brand ID
-router.get("/campaigns/brand/:brandId", getCampaignsByBrand);
+router.post("/brand/campaigns/:id/checkout", brand, checkoutLimiter, startCampaignCheckout);
+router.post("/brand/campaigns/:id/cancel-checkout", brand, cancelCampaignCheckout);
+router.get("/brand/campaigns/:id/dashboard", brand, getDashboard);
 
-// AI: generate 5 quiz questions from a brand passage (brand only)
-router.post(
-  "/campaigns/generate-questions",
-  isAuthenticated,
-  generateCampaignQuestions
-);
-
-// Check if current user has completed a campaign
-router.get(
-  "/campaigns/:campaignId/completion",
-  isAuthenticated,
-  checkCampaignCompletion
-);
-
-// Get single campaign by campaign ID
-router.get("/campaigns/:campaignId", getCampaignById);
-
-// Update campaign
-router.patch("/campaigns/:campaignId", isAuthenticated, upload.single("image"), updateCampaign);
-
-// Delete campaign
-router.delete("/campaigns/:campaignId", isAuthenticated, deleteCampaign);
+// Players
+router.get("/campaigns/next", isAuthenticated, getNextCampaign);
+router.get("/campaigns/:id", isAuthenticated, getCampaignInfo);
+router.post("/campaigns/:id/click", isAuthenticated, clickLimiter, postUrlClick);
 
 export default router;

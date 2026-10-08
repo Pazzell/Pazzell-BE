@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import WalletModel, { IWallet } from "../../models/wallet.model";
 import WalletTransactionModel, {
   IWalletTransaction,
@@ -131,6 +132,27 @@ export async function debit(
     }
     throw e;
   }
+}
+
+/**
+ * Entry point for future reward features: credits `amount` to the user's wallet.
+ * The wallet is withdraw-only — nothing in the product debits it except a
+ * withdrawal to the player's bank account. Pass `idempotencyKey` (e.g. the id of
+ * the thing being rewarded) so a retried call cannot credit twice.
+ */
+export async function creditWallet(
+  userId: string,
+  amount: number,
+  reason: Extract<WalletTransactionReason, "reward" | "admin_adjustment"> = "reward",
+  options: { referenceId?: string; idempotencyKey?: string } = {}
+): Promise<IWalletTransaction> {
+  return credit({
+    userId,
+    amount,
+    reason,
+    referenceId: options.referenceId,
+    idempotencyKey: options.idempotencyKey || `${reason}:${randomUUID()}`,
+  });
 }
 
 /** Compensating credit for a failed withdrawal — append-only, never mutates the original debit. */

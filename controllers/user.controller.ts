@@ -3,17 +3,11 @@ import userModel, { IUser } from "../models/user.model";
 import ErrorHandler from "../utils/ErrorHandler";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import jwt, { Secret, JwtPayload } from "jsonwebtoken";
-import GameSessionModel from "../models/gameSession.model";
-import LeaderboardModel from "../models/leaderboard.model";
-import ReferralModel from "../models/referral.model";
-import { getStorageService } from "../services/storage/storageFactory";
-import { getWeekBounds } from "../utils/weekBoundary";
-import {
-  getUnifiedWeeklyEntries,
-  getUserWeeklyRank,
-} from "../services/leaderboard.service";
-import { getAllTimePointsAggregate } from "../services/points/pointsLedger.service";
-import PointsLedgerModel from "../models/pointsLedger.model";
+import BrandModel from "../models/brand.model";
+import CampaignModel from "../models/campaign.model";
+import { storeImage } from "../services/upload/image.service";
+import { getPlan } from "../services/plan/plan.service";
+import { parseHttpUrl } from "../utils/validators";
 
 import ejs from "ejs";
 import path from "path";
@@ -276,25 +270,19 @@ export const updateAccessToken = CatchAsyncError(
 export const getUserInfo = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const userId = req.user?._id as string;
-
-      const userJson = await redis.get(userId);
-
-      if (userJson) {
-        const user = JSON.parse(userJson);
-
-        res.status(200).json({
-          success: true,
-          user,
-        });
-      }
+      // req.user is read fresh from MongoDB by isAuthenticated
+      res.status(200).json({
+        success: true,
+        user: req.user,
+        plan: getPlan(req.user),
+      });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
     }
   }
 );
 
-// Get gamer profile with full analytics
+// Get gamer profile
 export const getGamerProfile = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -310,137 +298,6 @@ export const getGamerProfile = CatchAsyncError(
         return next(new ErrorHandler("User not found", 404));
       }
 
-      // Calculate current week's leaderboard position (unified weekly source —
-      // see services/leaderboard.service.ts)
-      const now = new Date();
-      const { weekStart, weekEnd, weekKey } = getWeekBounds(now);
-      const weeklyLeaderboardPosition = await getUserWeeklyRank(
-        String(userId),
-        weekStart,
-        weekEnd,
-        weekKey
-      );
-
-      // Get all-time leaderboard for position (lifetime PointsLedger totals)
-      const allTimeAgg = await getAllTimePointsAggregate();
-      allTimeAgg.sort((a, b) => {
-        if (b.points !== a.points) return b.points - a.points;
-        return b.sessionCompletions - a.sessionCompletions;
-      });
-
-      // Find user's all-time leaderboard position
-      let allTimeLeaderboardPosition = null;
-      const allTimeUserIndex = allTimeAgg.findIndex(
-        (entry) => String(entry.userId) === String(userId)
-      );
-      if (allTimeUserIndex !== -1) {
-        allTimeLeaderboardPosition = allTimeUserIndex + 1;
-      }
-
-      // Calculate weekly analytics from this week's game sessions
-      const weeklySessions = await GameSessionModel.find({
-        userId: String(userId),
-        startedAt: { $gte: weekStart, $lte: weekEnd },
-      }).lean();
-
-      const weeklyStats = weeklySessions.reduce(
-        (acc, session) => {
-          if (session.status === "completed" && session.isFirstCompletionForUser) {
-            acc.puzzlesSolved += 1;
-          }
-          acc.totalPoints += session.pointsAwarded || 0;
-          acc.totalTime += session.totalCompletionTimeMs || 0;
-          acc.totalMoves += (session.games || []).reduce(
-            (sum: number, g: any) => sum + (g.clientMovesTaken || 0),
-            0
-          );
-          acc.attempts += 1;
-          if (session.status === "completed") {
-            acc.successfulAttempts += 1;
-          }
-          return acc;
-        },
-        {
-          puzzlesSolved: 0,
-          totalPoints: 0,
-          totalEarnings: 0,
-          totalTime: 0,
-          totalMoves: 0,
-          attempts: 0,
-          successfulAttempts: 0,
-          successRate: 0,
-        }
-      );
-
-      // Calculate success rate
-      weeklyStats.successRate =
-        weeklyStats.attempts > 0
-          ? weeklyStats.successfulAttempts / weeklyStats.attempts
-          : 0;
-      weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
-
-      // Authoritative weekly total — same unified source as the public weekly
-      // leaderboard (all PointsLedger sources: session completions, referral
-      // and winner-share bonuses).
-      const unifiedWeeklyEntries = await getUnifiedWeeklyEntries(
-        weekStart,
-        weekEnd,
-        weekKey
-      );
-      const myUnifiedEntry = unifiedWeeklyEntries.find(
-        (e) => String(e.userId) === String(userId)
-      );
-      const weeklyTotalPoints = myUnifiedEntry?.points || 0;
-
-      // Lifetime stats across all of this user's game sessions.
-      const allSessions = await GameSessionModel.find({
-        userId: String(userId),
-      }).lean();
-      const lifetimeStats = allSessions.reduce(
-        (acc, session) => {
-          if (session.status === "completed" && session.isFirstCompletionForUser) {
-            acc.puzzlesSolved += 1;
-          }
-          acc.totalTime += session.totalCompletionTimeMs || 0;
-          acc.totalMoves += (session.games || []).reduce(
-            (sum: number, g: any) => sum + (g.clientMovesTaken || 0),
-            0
-          );
-          acc.attempts += 1;
-          if (session.status === "completed") {
-            acc.successfulAttempts += 1;
-          }
-          return acc;
-        },
-        { puzzlesSolved: 0, totalTime: 0, totalMoves: 0, attempts: 0, successfulAttempts: 0 }
-      );
-      const lifetimeSuccessRate =
-        lifetimeStats.attempts > 0
-          ? lifetimeStats.successfulAttempts / lifetimeStats.attempts
-          : 0;
-
-      // Referral stats shown separately (informational — not summed into
-      // weeklyTotalPoints to avoid double-counting referral bonuses already
-      // folded into it above via the points ledger).
-      const weeklyReferralAgg = await ReferralModel.aggregate([
-        {
-          $match: {
-            referrerId: String(userId),
-            successful: true,
-            successfulAt: { $gte: weekStart, $lte: weekEnd },
-          },
-        },
-        { $group: { _id: null, referralPoints: { $sum: "$pointsAwarded" }, referralCount: { $sum: 1 } } },
-      ]);
-      const weeklyReferralPoints = weeklyReferralAgg[0]?.referralPoints || 0;
-      const weeklyReferralCount = weeklyReferralAgg[0]?.referralCount || 0;
-
-      // All referrals this user has ever made (pending + successful)
-      const allMyReferrals = await ReferralModel.find({
-        referrerId: String(userId),
-      }).lean();
-      const successfulReferrals = allMyReferrals.filter((r: any) => r.successful);
-
       res.status(200).json({
         success: true,
         profile: {
@@ -452,51 +309,11 @@ export const getGamerProfile = CatchAsyncError(
           avatar: user.avatar,
           role: user.role,
           isVerified: user.isVerified,
-          // Points shown on the dashboard — current week only, resets at week end.
-          // totalPoints is the same unified source as the public weekly leaderboard.
-          points: {
-            weekKey,
-            totalPoints: weeklyTotalPoints,
-          },
-          analytics: {
-            lifetime: {
-              puzzlesSolved: lifetimeStats.puzzlesSolved,
-              totalTime: lifetimeStats.totalTime,
-              totalMoves: lifetimeStats.totalMoves,
-              attempts: lifetimeStats.attempts,
-              successRate: Math.round(lifetimeSuccessRate * 100) / 100,
-              leaderboardPosition: allTimeLeaderboardPosition,
-            },
-            weekly: {
-              weekStart: weekStart.toISOString().slice(0, 10),
-              weekEnd: weekEnd.toISOString().slice(0, 10),
-              puzzlesSolved: weeklyStats.puzzlesSolved,
-              totalPoints: weeklyStats.totalPoints,
-              totalTime: weeklyStats.totalTime,
-              totalMoves: weeklyStats.totalMoves,
-              attempts: weeklyStats.attempts,
-              successRate: Math.round(weeklyStats.successRate * 100) / 100,
-              leaderboardPosition: weeklyLeaderboardPosition,
-            },
-            referral: {
-              weekKey,
-              totalReferrals: allMyReferrals.length,
-              successfulReferrals: successfulReferrals.length,
-              pendingReferrals: allMyReferrals.length - successfulReferrals.length,
-              pointsThisWeek: weeklyReferralPoints,
-              referralCountThisWeek: weeklyReferralCount,
-            },
-          },
-          puzzlesSolved: user.puzzlesSolved,
+          plan: getPlan(user),
           notifications: (user as any).notifications || {
             emailNotifications: true,
-            referralBonusAlerts: true,
-            leaderboardUpdates: true,
             newCampaignAlerts: true,
             weeklyDigest: true,
-          },
-          privacy: (user as any).privacy || {
-            showOnLeaderboard: true,
           },
           createdAt: (user as any).createdAt,
           updatedAt: (user as any).updatedAt,
@@ -525,12 +342,10 @@ export const getBrandProfile = CatchAsyncError(
       }
 
       // Get brand details
-      const BrandModel = require("../models/brand.model").default;
       const brandProfile = await BrandModel.findOne({ userId }).lean();
 
       // Get campaign count only (not the full list for better performance)
-      const PuzzleCampaignModel = require("../models/puzzleCampaign.model").default;
-      const totalCampaigns = await PuzzleCampaignModel.countDocuments({
+      const totalCampaigns = await CampaignModel.countDocuments({
         brandId: userId,
       });
 
@@ -550,6 +365,8 @@ export const getBrandProfile = CatchAsyncError(
             ? {
                 companyEmail: brandProfile.companyEmail,
                 companyName: brandProfile.companyName,
+                logoUrl: brandProfile.logoUrl || null,
+                websiteUrl: brandProfile.websiteUrl || null,
                 verified: brandProfile.verified,
                 totalCampaigns,
               }
@@ -604,19 +421,10 @@ export const updateGamerProfile = CatchAsyncError(
       const uploadedFile: any = (req as any).file;
 
       if (uploadedFile) {
-        const now = Date.now();
-        const fileName = `${userId}-${now}-${uploadedFile.originalname}`;
-        const result = await getStorageService().uploadFile({
-          buffer: uploadedFile.buffer,
-          mimetype: uploadedFile.mimetype,
-          originalname: fileName,
-          folder: "avatars",
-          fileName,
-        });
-        updateData.avatar = result.url;
+        updateData.avatar = (await storeImage(uploadedFile, userId, "avatars")).url;
       } else if (avatar && typeof avatar === "string") {
         // URL was provided as string
-        updateData.avatar = avatar;
+        updateData.avatar = parseHttpUrl(avatar, "avatar");
       }
 
       // Check if there's anything to update
@@ -651,8 +459,6 @@ export const updateGamerProfile = CatchAsyncError(
           avatar: updatedUser.avatar,
           role: updatedUser.role,
           isVerified: updatedUser.isVerified,
-          analytics: updatedUser.analytics,
-          puzzlesSolved: updatedUser.puzzlesSolved,
         },
       });
     } catch (error: any) {
@@ -671,7 +477,7 @@ export const updateBrandProfile = CatchAsyncError(
         return next(new ErrorHandler("Access denied. Brand profile only.", 403));
       }
 
-      const { name, avatar, companyName } = req.body;
+      const { name, avatar, companyName, websiteUrl } = req.body;
 
       // Build update object for user model with only provided fields
       const userUpdateData: any = {};
@@ -685,24 +491,28 @@ export const updateBrandProfile = CatchAsyncError(
       // Handle avatar upload (file or URL)
       const uploadedFile: any = (req as any).file;
 
+      // The brand logo doubles as the account avatar ("avatar" file field or URL)
+      const brandUpdateData: any = {};
       if (uploadedFile) {
-        const now = Date.now();
-        const fileName = `${userId}-${now}-${uploadedFile.originalname}`;
-        const result = await getStorageService().uploadFile({
-          buffer: uploadedFile.buffer,
-          mimetype: uploadedFile.mimetype,
-          originalname: fileName,
-          folder: "avatars",
-          fileName,
-        });
-        userUpdateData.avatar = result.url;
+        userUpdateData.avatar = (await storeImage(uploadedFile, userId, "logos")).url;
+        brandUpdateData.logoUrl = userUpdateData.avatar;
       } else if (avatar && typeof avatar === "string") {
         // URL was provided as string
-        userUpdateData.avatar = avatar;
+        userUpdateData.avatar = parseHttpUrl(avatar, "avatar");
+        brandUpdateData.logoUrl = userUpdateData.avatar;
+      }
+      if (userUpdateData.companyName) {
+        brandUpdateData.companyName = userUpdateData.companyName;
+      }
+      if (websiteUrl !== undefined && websiteUrl !== "") {
+        brandUpdateData.websiteUrl = parseHttpUrl(websiteUrl, "websiteUrl");
       }
 
       // Check if there's anything to update
-      if (Object.keys(userUpdateData).length === 0) {
+      if (
+        Object.keys(userUpdateData).length === 0 &&
+        Object.keys(brandUpdateData).length === 0
+      ) {
         return next(new ErrorHandler("No valid fields provided for update", 400));
       }
 
@@ -715,14 +525,11 @@ export const updateBrandProfile = CatchAsyncError(
         return next(new ErrorHandler("User not found", 404));
       }
 
-      // If companyName is updated, also update brand profile
-      if (companyName) {
-        const BrandModel = require("../models/brand.model").default;
-        await BrandModel.findOneAndUpdate(
-          { userId },
-          { companyName: companyName.trim() }
-        );
-      }
+      const brandProfile = await BrandModel.findOneAndUpdate(
+        { userId },
+        { $set: brandUpdateData },
+        { new: true }
+      );
 
       // Update redis cache if exists
       try {
@@ -742,41 +549,12 @@ export const updateBrandProfile = CatchAsyncError(
           role: updatedUser.role,
           companyName: updatedUser.companyName,
           isVerified: updatedUser.isVerified,
+          logoUrl: brandProfile?.logoUrl || null,
+          websiteUrl: brandProfile?.websiteUrl || null,
         },
       });
     } catch (error: any) {
-      return next(new ErrorHandler(error.message, 400));
-    }
-  }
-);
-
-// Get all gamers
-export const getAllGamers = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Find all users who are NOT brands or admins (includes users with role 'gamer' or no role set)
-      const gamerUsers = await userModel.find({
-        role: { $nin: ["brand", "admin"] }
-      })
-        .select("_id firstName lastName username email avatar isVerified analytics puzzlesSolved createdAt")
-        .lean();
-
-      const gamers = gamerUsers.map((gamer) => ({
-        _id: gamer._id,
-        firstName: gamer.firstName,
-        lastName: gamer.lastName,
-        username: gamer.username,
-        email: gamer.email,
-        avatar: gamer.avatar,
-        isVerified: gamer.isVerified,
-        analytics: gamer.analytics,
-        totalPuzzlesSolved: gamer.puzzlesSolved?.length || 0,
-        createdAt: (gamer as any).createdAt,
-      }));
-
-      res.status(200).json({ success: true, gamers });
-    } catch (error: any) {
-      return next(new ErrorHandler(error.message, 400));
+      return next(new ErrorHandler(error.message, Number(error.statusCode) || 400));
     }
   }
 );
@@ -833,21 +611,11 @@ export const updateNotifications = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user?._id as string;
-      const {
-        emailNotifications,
-        referralBonusAlerts,
-        leaderboardUpdates,
-        newCampaignAlerts,
-        weeklyDigest,
-      } = req.body;
+      const { emailNotifications, newCampaignAlerts, weeklyDigest } = req.body;
 
       const update: Record<string, boolean> = {};
       if (typeof emailNotifications === "boolean")
         update["notifications.emailNotifications"] = emailNotifications;
-      if (typeof referralBonusAlerts === "boolean")
-        update["notifications.referralBonusAlerts"] = referralBonusAlerts;
-      if (typeof leaderboardUpdates === "boolean")
-        update["notifications.leaderboardUpdates"] = leaderboardUpdates;
       if (typeof newCampaignAlerts === "boolean")
         update["notifications.newCampaignAlerts"] = newCampaignAlerts;
       if (typeof weeklyDigest === "boolean")
@@ -869,40 +637,6 @@ export const updateNotifications = CatchAsyncError(
         success: true,
         message: "Notification preferences saved",
         notifications: updated.notifications,
-      });
-    } catch (error: any) {
-      return next(new ErrorHandler(error.message, 500));
-    }
-  }
-);
-
-// PATCH /profile/privacy
-export const updatePrivacy = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.user?._id as string;
-      const { showOnLeaderboard } = req.body;
-
-      if (typeof showOnLeaderboard !== "boolean") {
-        return next(
-          new ErrorHandler("showOnLeaderboard must be a boolean", 400)
-        );
-      }
-
-      const updated = await userModel
-        .findByIdAndUpdate(
-          userId,
-          { $set: { "privacy.showOnLeaderboard": showOnLeaderboard } },
-          { new: true }
-        )
-        .select("privacy");
-
-      if (!updated) return next(new ErrorHandler("User not found", 404));
-
-      res.status(200).json({
-        success: true,
-        message: "Privacy settings saved",
-        privacy: updated.privacy,
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -954,67 +688,6 @@ export const deleteAccount = CatchAsyncError(
         .json({ success: true, message: "Account deleted successfully" });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
-    }
-  }
-);
-
-// Clear all gamer data (Admin only)
-export const clearAllGamerData = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { confirm } = req.body;
-
-      if (!confirm || confirm !== true) {
-        return next(
-          new ErrorHandler(
-            "Please confirm this action by sending { confirm: true } in the request body",
-            400
-          )
-        );
-      }
-
-      // Delete all game sessions and points ledger entries
-      const gameSessionsDeleted = await GameSessionModel.deleteMany({});
-      const pointsLedgerDeleted = await PointsLedgerModel.deleteMany({});
-
-      // Reset all gamer analytics to zero
-      const usersUpdateResult = await userModel.updateMany(
-        { role: { $nin: ["brand", "admin"] } },
-        {
-          $set: {
-            "analytics.lifetime.puzzlesSolved": 0,
-            "analytics.lifetime.totalPoints": 0,
-            "analytics.lifetime.totalEarnings": 0,
-            "analytics.lifetime.totalTime": 0,
-            "analytics.lifetime.totalMoves": 0,
-            "analytics.lifetime.attempts": 0,
-            "analytics.lifetime.successRate": 0,
-            "analytics.daily": {
-              date: new Date().toISOString().slice(0, 10),
-              puzzlesSolved: 0,
-            },
-            puzzlesSolved: [],
-          },
-        }
-      );
-
-      // Clear all leaderboard records
-      const leaderboardsDeleted = await LeaderboardModel.deleteMany({});
-
-      res.status(200).json({
-        success: true,
-        message: "All gamer data cleared successfully",
-        summary: {
-          gameSessionsDeleted: gameSessionsDeleted.deletedCount,
-          pointsLedgerEntriesDeleted: pointsLedgerDeleted.deletedCount,
-          usersReset: usersUpdateResult.modifiedCount,
-          leaderboardsCleared: leaderboardsDeleted.deletedCount,
-        },
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to clear gamer data: ${error.message}`, 500)
-      );
     }
   }
 );

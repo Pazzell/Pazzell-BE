@@ -87,7 +87,7 @@ export class PaystackTransferService implements ITransferService {
           amount: Math.round(params.amount * 100), // NGN -> kobo
           recipient: params.recipientCode,
           reference: params.reference,
-          reason: params.reason || "Pazzell weekly reward withdrawal",
+          reason: params.reason || "Pazzell reward withdrawal",
         },
         {
           headers: {

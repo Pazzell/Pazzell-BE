@@ -3,32 +3,10 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import "dotenv/config";
 
-export interface IUserAnalytics {
-  lifetime: {
-    puzzlesSolved: number;
-    totalPoints: number;
-    totalEarnings: number;
-    totalTime: number; // in ms
-    totalMoves: number;
-    attempts: number;
-    successRate: number; // ratio
-  };
-  daily?: {
-    date: string;
-    puzzlesSolved: number;
-  };
-}
-
 export interface IUserNotifications {
   emailNotifications: boolean;
-  referralBonusAlerts: boolean;
-  leaderboardUpdates: boolean;
   newCampaignAlerts: boolean;
   weeklyDigest: boolean;
-}
-
-export interface IUserPrivacy {
-  showOnLeaderboard: boolean;
 }
 
 export interface IUser extends Document {
@@ -39,14 +17,21 @@ export interface IUser extends Document {
   email: string;
   password?: string;
   avatar?: string;
+  // "gamer" is the player role (the product's "user" role)
   role: "gamer" | "brand" | "admin";
   googleId?: string;
   companyName?: string; // for brand users
   isVerified: boolean;
-  analytics: IUserAnalytics;
-  puzzlesSolved: string[]; // puzzle ids
   notifications: IUserNotifications;
-  privacy: IUserPrivacy;
+  // Pro is active while proUntil > now (UTC). Never set from client input —
+  // only services/plan/plan.service.ts writes it after a verified payment.
+  proUntil?: Date | null;
+  // The plan state (isPro) the owner's custom-quiz locks were last applied for.
+  // When it differs from the live plan the locks are re-applied
+  // (see services/customQuiz/quizLock.service.ts).
+  quizLocksSyncedAsPro: boolean;
+  // Non-campaign trivias completed since the last completed campaign trivia.
+  nonCampaignPlaysSinceCampaign: number;
   comparePassword?: (password: string) => Promise<boolean>;
   SignAccessToken: () => string;
   SignRefreshToken: () => string;
@@ -65,35 +50,20 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     googleId: { type: String },
     companyName: { type: String },
     isVerified: { type: Boolean, default: false },
-    analytics: {
-      lifetime: {
-        puzzlesSolved: { type: Number, default: 0 },
-        totalPoints: { type: Number, default: 0 },
-        totalEarnings: { type: Number, default: 0 },
-        totalTime: { type: Number, default: 0 },
-        totalMoves: { type: Number, default: 0 },
-        attempts: { type: Number, default: 0 },
-        successRate: { type: Number, default: 0 },
-      },
-      daily: {
-        date: { type: String },
-        puzzlesSolved: { type: Number, default: 0 },
-      },
-    },
-    puzzlesSolved: [{ type: String }],
     notifications: {
       emailNotifications: { type: Boolean, default: true },
-      referralBonusAlerts: { type: Boolean, default: true },
-      leaderboardUpdates: { type: Boolean, default: true },
       newCampaignAlerts: { type: Boolean, default: true },
       weeklyDigest: { type: Boolean, default: true },
     },
-    privacy: {
-      showOnLeaderboard: { type: Boolean, default: true },
-    },
+    proUntil: { type: Date, default: null },
+    quizLocksSyncedAsPro: { type: Boolean, default: false },
+    nonCampaignPlaysSinceCampaign: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );
+
+// Pro-expiry sweep: users whose plan lapsed but whose quizzes are still unlocked
+userSchema.index({ quizLocksSyncedAsPro: 1, proUntil: 1 });
 
 userSchema.methods.SignAccessToken = function () {
   // Normalize ACCESS_TOKEN_EXPIRE: allow numeric (hours) or string like '1d'/'24h'
