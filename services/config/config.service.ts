@@ -21,6 +21,8 @@ export const CONFIG_DEFAULTS: Record<string, any> = {
   "match.defaultTimerSeconds": 5,
   "trivia.minCards": 5,
   "trivia.maxCards": 30,
+  // Share of a session's cards that are image cards; the rest are definitions.
+  "trivia.imagePercent": envNumber("TRIVIA_IMAGE_PERCENT", 70),
   "customQuiz.freeLimit": 1,
   "customQuiz.minCardsToPublish": 5,
   "campaign.minCardsToPublish": 5,
@@ -55,6 +57,10 @@ export function validateConfigValue(key: string, value: any): string | null {
       return Number.isInteger(value) && value >= 0 && value <= 5000
         ? null
         : "must be an integer between 0 and 5000";
+    case "trivia.imagePercent":
+      return Number.isInteger(value) && value >= 0 && value <= 100
+        ? null
+        : "must be an integer between 0 and 100";
     case "campaign.priceAmount":
     case "pro.priceAmount":
       return isPositiveNumber(value) ? null : "must be a positive number";
@@ -168,6 +174,9 @@ export const getTriviaCardBounds = async (): Promise<{
   minCards: await getConfigValue<number>("trivia.minCards"),
   maxCards: await getConfigValue<number>("trivia.maxCards"),
 });
+
+export const getTriviaImagePercent = async (): Promise<number> =>
+  getConfigValue<number>("trivia.imagePercent");
 
 export const getCustomQuizFreeLimit = async (): Promise<number> =>
   getConfigValue<number>("customQuiz.freeLimit");

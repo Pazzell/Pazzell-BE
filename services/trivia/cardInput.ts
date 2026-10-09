@@ -126,6 +126,7 @@ export const editorCard = (card: any) => ({
   text: card.text || null,
   options: card.options,
   correctOptionIndex: card.correctOptionIndex,
+  attribution: card.attribution || null,
   createdAt: card.createdAt,
   updatedAt: card.updatedAt,
 });

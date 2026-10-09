@@ -18,6 +18,13 @@ import {
   startSession,
   submitAnswer,
 } from "../services/trivia/session.service";
+import { importImageCards, IMPORT_MAX_COUNT } from "../services/trivia/imageImport.service";
+import {
+  COUNTRY_MIXED,
+  COUNTRY_WORLDWIDE,
+  IMPORT_CATEGORIES,
+  IMPORT_COUNTRIES,
+} from "../services/trivia/wikimedia";
 
 // --- Player: topics -------------------------------------------------------------
 
@@ -262,6 +269,28 @@ export const adminBulkCreateCards = CatchAsyncError(async (req: Request, res: Re
   res.status(201).json({ success: true, created: cards.length, cards: cards.map(editorCard) });
 });
 
+// GET /admin/trivia/import/categories — what POST /admin/trivia/import can fetch
+export const adminListImportCategories = CatchAsyncError(async (_req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    categories: IMPORT_CATEGORIES.map((c) => ({
+      key: c.key,
+      topicName: c.topicName,
+      topicSlug: c.topicSlug,
+      supportsCountry: c.people,
+    })),
+    countries: [COUNTRY_MIXED, COUNTRY_WORLDWIDE, ...Object.keys(IMPORT_COUNTRIES)],
+    maxCount: IMPORT_MAX_COUNT,
+  });
+});
+
+// POST /admin/trivia/import  { category, count?, topicId?, country? }
+// Fetches pictures for the category and adds them to a topic as image cards.
+export const adminImportImageCards = CatchAsyncError(async (req: Request, res: Response) => {
+  const result = await importImageCards(String(req.user!._id), req.body || {});
+  res.status(201).json({ success: true, import: result });
+});
+
 async function loadTopicCard(topicId: string, cardId: string) {
   const card = await TriviaCardModel.findOne({
     _id: assertObjectId(cardId, "card id"),
@@ -275,6 +304,8 @@ async function loadTopicCard(topicId: string, cardId: string) {
 export const adminUpdateCard = CatchAsyncError(async (req: Request, res: Response) => {
   const card = await loadTopicCard(req.params.id, req.params.cardId);
   const content = await buildCardContent(req.body, req.file, String(req.user!._id), "cards", card);
+  // The credit belongs to the picture: it goes when the picture is replaced or removed.
+  if (content.imageUrl !== card.imageUrl) card.attribution = undefined;
   card.set(content);
   if (content.type === "definition") card.imageUrl = undefined;
   await card.save();

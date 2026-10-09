@@ -511,10 +511,20 @@ Errors: `403 CAMPAIGN_REQUIRED` (see 8.3), `400 INVALID_TIMER`, `400 INVALID_CAR
     { "position": 1, "total": 10, "type": "definition", "imageUrl": null,
       "text": "The only player allowed to handle the ball in open play",
       "options": [ { "text": "Goalkeeper", "isCorrect": true }, { "text": "Striker", "isCorrect": false } ] },
-    { "position": 2, "total": 10, "type": "image", "imageUrl": "https://…/a1b2.webp", "text": null,
-      "options": [ { "text": "Ghana", "isCorrect": false }, { "text": "Nigeria", "isCorrect": true } ] }
+    { "position": 2, "total": 10, "type": "image", "imageUrl": "https://…/a1b2.webp",
+      "text": "Which animal is this?",
+      "attribution": "Markus Trienke · CC BY-SA 2.0 · Wikimedia Commons",
+      "options": [ { "text": "Monkey", "isCorrect": false }, { "text": "Dog", "isCorrect": true } ] }
   ] }
 ```
+
+Every card also carries `attribution`: the image credit for a picture fetched from an API, or
+`null`. When it is set, show it as small text with the image (the picture's licence requires it).
+The same field is on each quiz question.
+
+**Card mix.** A session's cards are picked at random with about 70% image cards and 30%
+definitions (the `trivia.imagePercent` setting). When a topic has too few cards of one type, the
+other type fills the gap, so the session always has the number of cards asked for.
 
 The order is stable for the life of the session, so it suits a continuous vertical feed: one
 card per screen, scroll-snap, a "7 of 20" indicator from `position`/`total`. Highlight the
@@ -688,7 +698,7 @@ The campaign gate applies to it, and a completed play counts toward the player's
 
 Invalid cards return `400 INVALID_CARD`; in bulk the message names the row (`Card 3: …`) and
 `details.index` is its zero-based position. Editor responses return a card as
-`{ id, type, imageUrl, text, options, correctOptionIndex, createdAt, updatedAt }`.
+`{ id, type, imageUrl, text, options, correctOptionIndex, attribution, createdAt, updatedAt }`.
 
 ---
 
@@ -845,6 +855,7 @@ any other role).
 | `game.submitGraceMs` | 1000 | Yes (0–5000) |
 | `match.defaultTimerSeconds` | 5 | Yes (1–7) |
 | `trivia.minCards` / `trivia.maxCards` | 5 / 30 | Yes |
+| `trivia.imagePercent` | 70 | Yes (0–100) |
 | `customQuiz.freeLimit` / `customQuiz.minCardsToPublish` | 1 / 5 | Yes |
 | `campaign.minCardsToPublish` | 5 | Yes |
 | `campaign.interruptionThreshold` | 10 | Yes (positive integer) |
@@ -883,6 +894,44 @@ cannot produce that many distinct questions is rejected with `400`.
 
 For bulk entry with images: upload each image with `POST /uploads/images`, then put the returned
 `url` in the card's `imageUrl`.
+
+### Importing image cards
+
+Image cards can also be fetched automatically. The server looks up the best-known entries of a
+category on Wikidata, downloads each picture from Wikimedia Commons into our own storage, and
+adds it to a topic as an image card with two options. No API key is needed.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/admin/trivia/import/categories` | `{ categories: [ { key, topicName, topicSlug, supportsCountry } ], countries, maxCount }` |
+| POST | `/admin/trivia/import` | `{ category, count?, topicId?, country? }` |
+
+- `category`: `animals`, `plants`, `food`, `tech`, `footballers`, `musicians`, `celebrities` or
+  `pastors`.
+- `count`: how many cards to add, 1 to 50 (default 20). Call it again for more: each call
+  continues after the entries already imported, most famous first.
+- `topicId`: the topic to add to. Without it the cards go to the category's own topic
+  (`topicSlug`), which is created if it does not exist.
+- `country`: for the people categories only (`footballers`, `musicians`, `celebrities`,
+  `pastors`); ignored for the others. Without it, or with `"mixed"`, the cards alternate between
+  Nigerian and worldwide people. `"worldwide"` drops the Nigerian half; a country from
+  `countries` (e.g. `"ghana"`) or a Wikidata id (e.g. `"Q117"`) fetches that country only.
+  Mixed and worldwide requests can take up to a minute.
+
+```json
+{ "success": true,
+  "import": { "category": "footballers",
+              "topic": { "id": "6701…", "name": "Football", "slug": "football" },
+              "requested": 20, "created": 20,
+              "skipped": { "unusableLicense": 1, "imageFailed": 0, "noWrongOption": 0 } } }
+```
+
+The request answers when the import has finished, so show a progress state. Imported cards are
+live at once: players get them in the topic's next session, with no approval step. Only pictures under
+a free licence (public domain, CC0, CC BY, CC BY-SA) are taken; the credit is stored in the
+card's `attribution`. Imported cards are ordinary cards afterwards: review, edit or delete them
+with the card endpoints above. Errors: `400 INVALID_IMPORT_CATEGORY`, `400 INVALID_IMPORT_COUNT`,
+`400 INVALID_IMPORT_COUNTRY`, `502 IMPORT_SOURCE_UNAVAILABLE`.
 
 ### Campaigns and revenue
 
@@ -1035,7 +1084,8 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 | `DB_URI`, `REDIS_URL` | MongoDB and Redis |
 | `ACCESS_TOKEN`, `REFRESH_TOKEN`, `ACCESS_TOKEN_EXPIRE`, `REFRESH_TOKEN_EXPIRE`, `ACTIVATION_SECRET` | JWT secrets and lifetimes |
 | `PAYSTACK_SECRET_KEY`, `TRANSFER_PROVIDER` | Payment gateway and withdrawals |
-| `PAYMENT_CURRENCY`, `PRO_PRICE_AMOUNT`, `PRO_DURATION_DAYS`, `CAMPAIGN_PRICE_AMOUNT`, `CAMPAIGN_DURATION_DAYS`, `CAMPAIGN_INTERRUPTION_THRESHOLD`, `GAME_SUBMIT_GRACE_MS` | Defaults for the settings in section 9 (an admin override wins) |
+| `PAYMENT_CURRENCY`, `PRO_PRICE_AMOUNT`, `PRO_DURATION_DAYS`, `CAMPAIGN_PRICE_AMOUNT`, `CAMPAIGN_DURATION_DAYS`, `CAMPAIGN_INTERRUPTION_THRESHOLD`, `GAME_SUBMIT_GRACE_MS`, `TRIVIA_IMAGE_PERCENT` | Defaults for the settings in section 9 (an admin override wins) |
+| `WIKIMEDIA_CONTACT` | Contact email or URL sent to Wikimedia with image-import requests |
 | `STORAGE_PROVIDER` (`firebase` \| `aws` \| `memory`), `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`, `AWS_S3_PUBLIC_BASE_URL`, `FIREBASE_STORAGE_BUCKET` | Image storage |
 | `TYPE`, `PROJECT_ID`, `PRIVATE_KEY_ID`, `PRIVATE_KEY`, `CLIENT_EMAIL`, `CLIENT_ID`, `AUTH_URI`, `TOKEN_URI`, `AUTH_PROVIDER_CERT_URL`, `CLIENT_CERT_URL`, `UNIVERSE_DOMAIN` | Firebase service account (Google sign-in, Firebase storage) |
 | `EMAIL_PROVIDER`, `SMTP_*`, `SENDGRID_API_KEY`, `TWILIO_SMTP_*`, `AWS_SES_FROM_EMAIL` | Email |

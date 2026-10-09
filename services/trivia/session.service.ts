@@ -7,6 +7,7 @@ import {
   getSubmitGraceMs,
   getTimerRange,
   getTriviaCardBounds,
+  getTriviaImagePercent,
   isValidTimerSeconds,
 } from "../config/config.service";
 import { deadlineFrom, isPastDeadline, remainingMs, STALE_ATTEMPT_MS } from "../game/timing";
@@ -19,6 +20,7 @@ import {
   resetCampaignCounter,
 } from "../campaign/campaign.service";
 import { brandForAttempt, resolveSource, titleForAttempt } from "./sources";
+import { pickMixedCards, shuffle } from "./mix";
 
 // One session engine for every kind of trivia (admin topics, custom quizzes, brand
 // campaigns):  studying -> quiz -> completed  (or abandoned).
@@ -29,15 +31,6 @@ type Player = {
   proUntil?: Date | string | null;
   nonCampaignPlaysSinceCampaign?: number;
 };
-
-function shuffle<T>(items: readonly T[]): T[] {
-  const out = [...items];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
 
 /** Allowed card counts for a source: at least 5 (or all cards if fewer), up to the cap. */
 export async function cardCountBounds(available: number) {
@@ -138,9 +131,9 @@ export async function startSession(
     throw e;
   }
 
-  // Random card set; the quiz order and each card's option order are shuffled
-  // independently of the study order.
-  const selected = shuffle(source.cards).slice(0, cardCount);
+  // Random card set, weighted toward image cards; the quiz order and each card's option
+  // order are shuffled independently of the study order.
+  const selected = pickMixedCards(source.cards, cardCount, await getTriviaImagePercent());
   const quizOrder = shuffle(selected.map((_, i) => i));
   await TriviaAttemptQuestionModel.insertMany(
     selected.map((card, studyIndex) => ({
@@ -154,6 +147,7 @@ export async function startSession(
         text: card.text,
         options: card.options,
         correctOptionIndex: card.correctOptionIndex,
+        attribution: card.attribution,
       },
       optionOrder: Math.random() < 0.5 ? [0, 1] : [1, 0],
     }))
@@ -201,6 +195,7 @@ export async function getStudyCards(userId: string, sessionId: string) {
       type: row.card.type,
       imageUrl: row.card.imageUrl || null,
       text: row.card.text || null,
+      attribution: row.card.attribution || null,
       options: row.card.options.map((text, index) => ({
         text,
         isCorrect: index === row.card.correctOptionIndex,
@@ -349,6 +344,7 @@ export async function getCurrentQuestion(player: Player, sessionId: string) {
       type: question.card.type,
       imageUrl: question.card.imageUrl || null,
       text: question.card.text || null,
+      attribution: question.card.attribution || null,
       options: question.optionOrder.map((original, position) => ({
         index: position,
         text: question.card.options[original],

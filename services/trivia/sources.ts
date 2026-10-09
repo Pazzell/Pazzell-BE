@@ -36,6 +36,7 @@ const toCards = (rows: any[]): SourceCard[] =>
     text: c.text,
     options: c.options,
     correctOptionIndex: c.correctOptionIndex,
+    attribution: c.attribution,
   }));
 
 const notFound = (what: string, code: string) => new ErrorHandler(`${what} not found`, 404, code);

@@ -10,10 +10,12 @@ export interface ICardContent {
   text?: string; // the definition/statement; optional caption for image cards
   options: string[]; // exactly 2
   correctOptionIndex: number; // 0 or 1
+  attribution?: string; // image credit (author and licence) for pictures fetched from an API
 }
 
 export const CARD_TEXT_MAX = 300;
 export const CARD_OPTION_MAX = 80;
+export const CARD_ATTRIBUTION_MAX = 200;
 
 export const cardContentFields = {
   type: { type: String, enum: ["image", "definition"], required: true },
@@ -28,4 +30,5 @@ export const cardContentFields = {
     },
   },
   correctOptionIndex: { type: Number, required: true, enum: [0, 1] },
+  attribution: { type: String, maxlength: CARD_ATTRIBUTION_MAX },
 };

@@ -14,6 +14,8 @@ import {
   adminBulkCreateCards,
   adminUpdateCard,
   adminDeleteCard,
+  adminListImportCategories,
+  adminImportImageCards,
 } from "../controllers/trivia.controller";
 import {
   listCampaigns,
@@ -50,6 +52,9 @@ router.post("/admin/trivia/topics/:id/cards", image, adminCreateCard);
 router.post("/admin/trivia/topics/:id/cards/bulk", adminBulkCreateCards);
 router.patch("/admin/trivia/topics/:id/cards/:cardId", image, adminUpdateCard);
 router.delete("/admin/trivia/topics/:id/cards/:cardId", adminDeleteCard);
+// Image cards fetched from Wikidata / Wikimedia Commons
+router.get("/admin/trivia/import/categories", adminListImportCategories);
+router.post("/admin/trivia/import", adminImportImageCards);
 
 // Campaign moderation
 router.get("/admin/campaigns", listCampaigns);
