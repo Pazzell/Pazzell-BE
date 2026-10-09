@@ -48,8 +48,8 @@ describe("Trivia (admin topics)", () => {
       expect(res.status).toBe(200);
       expect(res.body.settings.timer).toEqual({ minSeconds: 1, maxSeconds: 7, matchDefaultSeconds: 5 });
       expect(res.body.settings.trivia).toEqual({ minCards: 5, maxCards: 30 });
-      expect(res.body.settings.pro).toEqual({ amount: 1330.21, currency: "NGN", durationDays: 30 });
-      expect(res.body.settings.campaign).toMatchObject({ amount: 13302.07, durationDays: 30, interruptionThreshold: 10 });
+      expect(res.body.settings.pro).toEqual({ amount: 1500, currency: "NGN", durationDays: 30 });
+      expect(res.body.settings.campaign).toMatchObject({ amount: 15000, durationDays: 30, interruptionThreshold: 10 });
     });
 
     it.each([0, 8, 3.5, "5"])("rejects timerSeconds=%p", async (timerSeconds) => {

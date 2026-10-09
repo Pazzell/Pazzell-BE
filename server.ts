@@ -2,7 +2,7 @@ import { app } from "./app";
 import "dotenv/config";
 import connectDB from "./utils/db";
 import { startScheduler } from "./services/scheduler";
-import { initConfigCache } from "./services/config/config.service";
+import { initConfigCache, migrateRetiredPricing } from "./services/config/config.service";
 
 //create server
 const PORT = process.env.PORT || 4000;
@@ -15,6 +15,9 @@ const PORT = process.env.PORT || 4000;
 // every cold start.
 async function start() {
   await connectDB();
+  // Stored dollar prices from an earlier seed become the naira prices
+  const repriced = await migrateRetiredPricing();
+  if (repriced.length > 0) console.log(`Updated stored pricing to naira: ${repriced.join(", ")}`);
   // Warm the Config cache (falls back to CONFIG_DEFAULTS for any unseeded key)
   await initConfigCache();
 

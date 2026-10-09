@@ -50,7 +50,7 @@ describe("Custom trivia", () => {
         feature: "custom_quiz",
         limit: 1,
         current: 1,
-        pro: { amount: 1330.21, currency: "NGN", durationDays: 30 },
+        pro: { amount: 1500, currency: "NGN", durationDays: 30 },
       });
       expect(await CustomQuizModel.countDocuments({ ownerId: user.id })).toBe(1);
     });

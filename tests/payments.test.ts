@@ -93,14 +93,14 @@ describe("Pro plan and payments", () => {
       const payment = await PaymentModel.findOne({ userId: user.id }).lean();
       expect(payment).toMatchObject({
         purpose: "pro",
-        amount: 1330.21,
+        amount: 1500,
         currency: "NGN",
         durationDays: 30,
         status: "pending",
         gateway: "paystack",
       });
       expect(initialize).toHaveBeenCalledWith(
-        expect.objectContaining({ amount: 1330.21, currency: "NGN", email: user.email })
+        expect.objectContaining({ amount: 1500, currency: "NGN", email: user.email })
       );
       expect(await proUntilOf(user)).toBeNull(); // nothing is granted before the payment is confirmed
     });
@@ -134,7 +134,7 @@ describe("Pro plan and payments", () => {
     it("rejects a webhook with a missing or wrong signature", async () => {
       const user = await createUser();
       const { reference } = (await checkout(user)).body.checkout;
-      const body = chargeSuccess(reference, 1330.21, new Date());
+      const body = chargeSuccess(reference, 1500, new Date());
 
       const unsigned = await api().post("/api/v1/payments/webhook/paystack").send(body);
       expect(unsigned.status).toBe(400);
@@ -153,7 +153,7 @@ describe("Pro plan and payments", () => {
       const { reference } = (await checkout(user)).body.checkout;
       const paidAt = new Date(Date.now() - 60_000);
 
-      const res = await signedWebhook(chargeSuccess(reference, 1330.21, paidAt));
+      const res = await signedWebhook(chargeSuccess(reference, 1500, paidAt));
       expect(res.status).toBe(200);
 
       const proUntil = await proUntilOf(user);
@@ -170,7 +170,7 @@ describe("Pro plan and payments", () => {
       const user = await createUser();
       const { reference } = (await checkout(user)).body.checkout;
       const paidAt = new Date();
-      const body = chargeSuccess(reference, 1330.21, paidAt);
+      const body = chargeSuccess(reference, 1500, paidAt);
 
       await signedWebhook(body);
       const afterFirst = await proUntilOf(user);
@@ -185,7 +185,7 @@ describe("Pro plan and payments", () => {
       const user = await createUser();
       const { reference } = (await checkout(user)).body.checkout;
       const paidAt = new Date();
-      const body = chargeSuccess(reference, 1330.21, paidAt);
+      const body = chargeSuccess(reference, 1500, paidAt);
 
       await Promise.all(Array.from({ length: 6 }, () => signedWebhook(body)));
 
@@ -197,11 +197,11 @@ describe("Pro plan and payments", () => {
       const user = await createUser();
       const firstPaid = new Date(Date.now() - 10 * DAY_MS);
       const first = (await checkout(user)).body.checkout.reference;
-      await signedWebhook(chargeSuccess(first, 1330.21, firstPaid));
+      await signedWebhook(chargeSuccess(first, 1500, firstPaid));
 
       const secondPaid = new Date();
       const second = (await checkout(user)).body.checkout.reference;
-      await signedWebhook(chargeSuccess(second, 1330.21, secondPaid));
+      await signedWebhook(chargeSuccess(second, 1500, secondPaid));
 
       // 30 days added on top of the remaining 20, not restarted from today.
       expect((await proUntilOf(user))!.getTime()).toBe(firstPaid.getTime() + 60 * DAY_MS);
@@ -213,13 +213,13 @@ describe("Pro plan and payments", () => {
       const user = await createUser();
       const firstPaid = new Date(Date.now() - 45 * DAY_MS);
       const first = (await checkout(user)).body.checkout.reference;
-      await signedWebhook(chargeSuccess(first, 1330.21, firstPaid));
+      await signedWebhook(chargeSuccess(first, 1500, firstPaid));
       // Paid 45 days ago for 30 days: expired.
       expect((await api().get("/api/v1/plan/me").set(user.auth)).body.plan.isPro).toBe(false);
 
       const secondPaid = new Date();
       const second = (await checkout(user)).body.checkout.reference;
-      await signedWebhook(chargeSuccess(second, 1330.21, secondPaid));
+      await signedWebhook(chargeSuccess(second, 1500, secondPaid));
       expect((await proUntilOf(user))!.getTime()).toBe(secondPaid.getTime() + 30 * DAY_MS);
     });
 
@@ -228,8 +228,8 @@ describe("Pro plan and payments", () => {
       const expired = await createUser();
       const a = (await checkout(stillPro)).body.checkout.reference;
       const b = (await checkout(expired)).body.checkout.reference;
-      await signedWebhook(chargeSuccess(a, 1330.21, new Date(Date.now() - 30 * DAY_MS + 60_000)));
-      await signedWebhook(chargeSuccess(b, 1330.21, new Date(Date.now() - 30 * DAY_MS - 60_000)));
+      await signedWebhook(chargeSuccess(a, 1500, new Date(Date.now() - 30 * DAY_MS + 60_000)));
+      await signedWebhook(chargeSuccess(b, 1500, new Date(Date.now() - 30 * DAY_MS - 60_000)));
 
       expect((await api().get("/api/v1/plan/me").set(stillPro.auth)).body.plan.isPro).toBe(true);
       expect((await api().get("/api/v1/plan/me").set(expired.auth)).body.plan.isPro).toBe(false);
@@ -243,12 +243,12 @@ describe("Pro plan and payments", () => {
       expect((await PaymentModel.findOne({ reference }).lean())!.failureReason).toBe("amount_mismatch");
 
       const other = (await checkout(user)).body.checkout.reference;
-      await signedWebhook(chargeSuccess(other, 1330.21, new Date(), "USD"));
+      await signedWebhook(chargeSuccess(other, 1500, new Date(), "USD"));
       expect(await proUntilOf(user)).toBeNull();
     });
 
     it("ignores a signed webhook for an unknown reference", async () => {
-      const res = await signedWebhook(chargeSuccess("pz_pro_unknown", 1330.21, new Date()));
+      const res = await signedWebhook(chargeSuccess("pz_pro_unknown", 1500, new Date()));
       expect(res.status).toBe(200);
       expect(await ProSubscriptionModel.countDocuments({})).toBe(0);
     });
@@ -263,7 +263,7 @@ describe("Pro plan and payments", () => {
         success: true,
         status: "success",
         reference,
-        amount: 1330.21,
+        amount: 1500,
         currency: "NGN",
         paidAt,
       });
@@ -273,7 +273,7 @@ describe("Pro plan and payments", () => {
       expect(first.body.payment.status).toBe("success");
       expect(first.body.plan.isPro).toBe(true);
 
-      await signedWebhook(chargeSuccess(reference, 1330.21, paidAt));
+      await signedWebhook(chargeSuccess(reference, 1500, paidAt));
       await api().get(`/api/v1/payments/verify/${reference}`).set(user.auth);
 
       expect((await proUntilOf(user))!.getTime()).toBe(paidAt.getTime() + 30 * DAY_MS);
@@ -283,7 +283,7 @@ describe("Pro plan and payments", () => {
     it("grants nothing while the gateway has not confirmed the payment", async () => {
       const user = await createUser();
       const { reference } = (await checkout(user)).body.checkout;
-      verify.mockResolvedValue({ success: false, status: "pending", reference, amount: 1330.21, currency: "NGN" });
+      verify.mockResolvedValue({ success: false, status: "pending", reference, amount: 1500, currency: "NGN" });
       const res = await api().get(`/api/v1/payments/verify/${reference}`).set(user.auth);
       expect(res.body.payment.status).toBe("pending");
       expect(res.body.plan.isPro).toBe(false);
@@ -305,7 +305,7 @@ describe("Pro plan and payments", () => {
       await creditWallet(user.id, 5000, "reward", { idempotencyKey: "reward-1" });
 
       const { reference } = (await checkout(user)).body.checkout;
-      await signedWebhook(chargeSuccess(reference, 1330.21, new Date()));
+      await signedWebhook(chargeSuccess(reference, 1500, new Date()));
 
       expect((await api().get("/api/v1/plan/me").set(user.auth)).body.plan.isPro).toBe(true);
       expect(await getBalance(user.id)).toBe(5000);

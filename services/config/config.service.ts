@@ -27,9 +27,9 @@ export const CONFIG_DEFAULTS: Record<string, any> = {
   "customQuiz.minCardsToPublish": 5,
   "campaign.minCardsToPublish": 5,
   "campaign.interruptionThreshold": envNumber("CAMPAIGN_INTERRUPTION_THRESHOLD", 10),
-  "campaign.priceAmount": envNumber("CAMPAIGN_PRICE_AMOUNT", 13302.07),
+  "campaign.priceAmount": envNumber("CAMPAIGN_PRICE_AMOUNT", 15000),
   "campaign.durationDays": envNumber("CAMPAIGN_DURATION_DAYS", 30),
-  "pro.priceAmount": envNumber("PRO_PRICE_AMOUNT", 1330.21),
+  "pro.priceAmount": envNumber("PRO_PRICE_AMOUNT", 1500),
   "pro.durationDays": envNumber("PRO_DURATION_DAYS", 30),
   "payments.currency": (process.env.PAYMENT_CURRENCY || "NGN").toUpperCase(),
 };
@@ -71,6 +71,51 @@ export function validateConfigValue(key: string, value: any): string | null {
     default:
       return isPositiveInt(value) ? null : "must be a positive integer";
   }
+}
+
+// Prices this product once stored as defaults: first in US dollars, then as their naira
+// conversion. Both were replaced by the round naira prices above.
+const RETIRED_PRICE_DEFAULTS: Record<string, number[]> = {
+  "pro.priceAmount": [1, 1330.21],
+  "campaign.priceAmount": [10, 13302.07],
+};
+
+/**
+ * Brings a database that still holds a retired default price (the seed script stores the
+ * defaults, and a stored value wins over the code) to the current naira prices. A price
+ * an admin has set to anything else is left alone, and so is the currency in that case.
+ * Returns the keys it changed.
+ */
+export async function migrateRetiredPricing(): Promise<string[]> {
+  const keys = ["payments.currency", ...Object.keys(RETIRED_PRICE_DEFAULTS)];
+  const rows = await ConfigModel.find({ key: { $in: keys } }).lean();
+  const stored = new Map<string, any>(rows.map((row) => [row.key, row.value]));
+
+  const priceKeys = Object.keys(RETIRED_PRICE_DEFAULTS);
+  const retired = priceKeys.filter((key) => RETIRED_PRICE_DEFAULTS[key].includes(stored.get(key)));
+  const custom = priceKeys.filter((key) => stored.has(key) && !retired.includes(key));
+
+  const changed: string[] = [];
+  const set = async (key: string) => {
+    await ConfigModel.updateOne({ key }, { $set: { value: CONFIG_DEFAULTS[key] } });
+    changed.push(key);
+  };
+
+  if (stored.get("payments.currency") === "USD") {
+    if (custom.length > 0) {
+      console.warn(
+        `Stored payments.currency is USD with custom prices (${custom.join(", ")}); left unchanged. ` +
+          "Set the currency and prices at /admin/config."
+      );
+      return changed;
+    }
+    await set("payments.currency");
+  }
+  for (const key of retired) {
+    if (stored.get(key) !== CONFIG_DEFAULTS[key]) await set(key);
+  }
+  if (changed.length > 0) _cache = null;
+  return changed;
 }
 
 let _cache: Map<string, any> | null = null;

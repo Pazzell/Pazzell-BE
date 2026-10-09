@@ -11,7 +11,12 @@ import TriviaCardModel from "../models/triviaCard.model";
 import CampaignModel from "../models/campaign.model";
 import { getActiveLevels } from "../services/match/levels";
 import { generateQuestions } from "../services/match/questionGenerator";
-import { getCampaignPricing } from "../services/config/config.service";
+import {
+  getCampaignPricing,
+  getProPricing,
+  migrateRetiredPricing,
+  resetConfigCache,
+} from "../services/config/config.service";
 
 describe("Seed script", () => {
   beforeAll(connectTestDB);
@@ -43,12 +48,12 @@ describe("Seed script", () => {
 
     const stored = await ConfigModel.find({}).lean();
     const byKey = Object.fromEntries(stored.map((c) => [c.key, c.value]));
-    expect(byKey["campaign.priceAmount"]).toBe(13302.07);
+    expect(byKey["campaign.priceAmount"]).toBe(15000);
     expect(byKey["campaign.durationDays"]).toBe(30);
     expect(byKey["campaign.interruptionThreshold"]).toBe(10);
-    expect(byKey["pro.priceAmount"]).toBe(1330.21);
+    expect(byKey["pro.priceAmount"]).toBe(1500);
     expect(byKey).not.toHaveProperty("game.timerMaxSeconds");
-    expect(await getCampaignPricing()).toEqual({ amount: 13302.07, currency: "NGN", durationDays: 30 });
+    expect(await getCampaignPricing()).toEqual({ amount: 15000, currency: "NGN", durationDays: 30 });
 
     const admin = await userModel.findOne({ role: "admin" }).select("+password");
     expect(admin!.email).toBe(summary.admin.email);
@@ -60,6 +65,41 @@ describe("Seed script", () => {
     expect(profile).toMatchObject({ companyName: "Sunrise Foods", websiteUrl: "https://example.com/" });
     const campaign = await CampaignModel.findOne({ brandId: String(brandUser!._id) }).lean();
     expect(campaign!.status).toBe("draft"); // never live without a payment
+  });
+
+  it("moves stored dollar prices from an earlier seed to the naira prices", async () => {
+    const valueOf = async (key: string) => (await ConfigModel.findOne({ key }).lean())!.value;
+    const store = (key: string, value: any) => ConfigModel.updateOne({ key }, { value });
+    await runSeed();
+
+    // Nothing to do on a freshly seeded database.
+    expect(await migrateRetiredPricing()).toEqual([]);
+
+    await store("payments.currency", "USD");
+    await store("pro.priceAmount", 1);
+    await store("campaign.priceAmount", 10);
+    resetConfigCache();
+    expect((await migrateRetiredPricing()).sort()).toEqual(
+      ["campaign.priceAmount", "payments.currency", "pro.priceAmount"]
+    );
+    expect(await getProPricing()).toEqual({ amount: 1500, currency: "NGN", durationDays: 30 });
+    expect(await getCampaignPricing()).toEqual({ amount: 15000, currency: "NGN", durationDays: 30 });
+
+    // The converted prices that were the default for a short while.
+    await store("pro.priceAmount", 1330.21);
+    await store("campaign.priceAmount", 13302.07);
+    await migrateRetiredPricing();
+    expect(await valueOf("pro.priceAmount")).toBe(1500);
+    expect(await valueOf("campaign.priceAmount")).toBe(15000);
+
+    // A price an admin chose is never touched, and neither is its currency.
+    await store("payments.currency", "USD");
+    await store("pro.priceAmount", 3);
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    expect(await migrateRetiredPricing()).toEqual([]);
+    warn.mockRestore();
+    expect(await valueOf("payments.currency")).toBe("USD");
+    expect(await valueOf("pro.priceAmount")).toBe(3);
   });
 
   it("is idempotent and never overwrites existing data", async () => {

@@ -95,7 +95,7 @@ describe("Brand campaigns", () => {
 
     it("shows the flat price and lets a brand build and preview a draft", async () => {
       const pricing = await api().get(`${brandBase}/pricing`).set(brand.auth);
-      expect(pricing.body.pricing).toEqual({ amount: 13302.07, currency: "NGN", durationDays: 30 });
+      expect(pricing.body.pricing).toEqual({ amount: 15000, currency: "NGN", durationDays: 30 });
 
       const id = await draftWithCards();
       const preview = await api().get(`${brandBase}/${id}/preview`).set(brand.auth);
@@ -140,7 +140,7 @@ describe("Brand campaigns", () => {
 
       const checkout = await api().post(`${brandBase}/${id}/checkout`).set(brand.auth).send({});
       expect(checkout.status).toBe(201);
-      expect(checkout.body.checkout.payment).toMatchObject({ amount: 13302.07, currency: "NGN", purpose: "campaign" });
+      expect(checkout.body.checkout.payment).toMatchObject({ amount: 15000, currency: "NGN", purpose: "campaign" });
       const reference = checkout.body.checkout.reference;
 
       // Awaiting payment: not live, not served, nobody is gated by it.
@@ -152,11 +152,11 @@ describe("Brand campaigns", () => {
       await api().post(`/api/v1/trivia/sessions/${(await startTopic(player, topicId)).body.session.id}/abandon`).set(player.auth);
 
       // An unsigned "payment succeeded" call does nothing.
-      await api().post("/api/v1/payments/webhook/paystack").send(chargeSuccess(reference, 13302.07, new Date()));
+      await api().post("/api/v1/payments/webhook/paystack").send(chargeSuccess(reference, 15000, new Date()));
       expect((await CampaignModel.findById(id).lean())!.status).toBe("awaiting_payment");
 
       const paidAt = new Date(Date.now() - 5000);
-      await signedWebhook(chargeSuccess(reference, 13302.07, paidAt));
+      await signedWebhook(chargeSuccess(reference, 15000, paidAt));
       campaign = await CampaignModel.findById(id).lean();
       expect(campaign!.status).toBe("live");
       expect(campaign!.startsAt!.getTime()).toBe(paidAt.getTime());
@@ -164,8 +164,8 @@ describe("Brand campaigns", () => {
       expect(campaign!.paymentId).toBe(String((await PaymentModel.findOne({ reference }).lean())!._id));
 
       // A second delivery (even with a different timestamp) cannot re-activate or move the window.
-      await signedWebhook(chargeSuccess(reference, 13302.07, new Date(Date.now() + 5 * DAY_MS)));
-      await signedWebhook(chargeSuccess(reference, 13302.07, paidAt));
+      await signedWebhook(chargeSuccess(reference, 15000, new Date(Date.now() + 5 * DAY_MS)));
+      await signedWebhook(chargeSuccess(reference, 15000, paidAt));
       const again = await CampaignModel.findById(id).lean();
       expect(again!.startsAt!.getTime()).toBe(paidAt.getTime());
       expect(again!.endsAt!.getTime()).toBe(paidAt.getTime() + 30 * DAY_MS);
@@ -188,7 +188,7 @@ describe("Brand campaigns", () => {
       expect(second.body.checkout.reference).toBe(first.body.checkout.reference);
       expect(await PaymentModel.countDocuments({ campaignId: id })).toBe(1);
 
-      await signedWebhook(chargeSuccess(first.body.checkout.reference, 13302.07, new Date()));
+      await signedWebhook(chargeSuccess(first.body.checkout.reference, 15000, new Date()));
       expect((await CampaignModel.findById(id).lean())!.status).toBe("live");
       expect(await getBalance(brand.id)).toBe(9000);
       expect(await WalletTransactionModel.countDocuments({ userId: brand.id, type: "debit" })).toBe(0);
@@ -515,17 +515,17 @@ describe("Brand campaigns", () => {
       const admin = await createUser({ role: "admin" });
       const now = new Date();
       await PaymentModel.create([
-        { userId: "u1", purpose: "pro", amount: 1330.21, currency: "NGN", durationDays: 30, reference: "r1", idempotencyKey: "k1", status: "success", paidAt: now },
-        { userId: "u2", purpose: "pro", amount: 1330.21, currency: "NGN", durationDays: 30, reference: "r2", idempotencyKey: "k2", status: "success", paidAt: now },
-        { userId: "b1", purpose: "campaign", amount: 13302.07, currency: "NGN", durationDays: 30, reference: "r3", idempotencyKey: "k3", status: "success", paidAt: now },
-        { userId: "b2", purpose: "campaign", amount: 13302.07, currency: "NGN", durationDays: 30, reference: "r4", idempotencyKey: "k4", status: "pending" },
+        { userId: "u1", purpose: "pro", amount: 1500, currency: "NGN", durationDays: 30, reference: "r1", idempotencyKey: "k1", status: "success", paidAt: now },
+        { userId: "u2", purpose: "pro", amount: 1500, currency: "NGN", durationDays: 30, reference: "r2", idempotencyKey: "k2", status: "success", paidAt: now },
+        { userId: "b1", purpose: "campaign", amount: 15000, currency: "NGN", durationDays: 30, reference: "r3", idempotencyKey: "k3", status: "success", paidAt: now },
+        { userId: "b2", purpose: "campaign", amount: 15000, currency: "NGN", durationDays: 30, reference: "r4", idempotencyKey: "k4", status: "pending" },
       ]);
       const res = await api().get("/api/v1/admin/revenue").set(admin.auth);
       expect(res.body.breakdown).toEqual([
-        { purpose: "campaign", currency: "NGN", payments: 1, total: 13302.07 },
-        { purpose: "pro", currency: "NGN", payments: 2, total: 2660.42 },
+        { purpose: "campaign", currency: "NGN", payments: 1, total: 15000 },
+        { purpose: "pro", currency: "NGN", payments: 2, total: 3000 },
       ]);
-      expect(res.body.totalsByCurrency).toEqual({ NGN: 15962.49 });
+      expect(res.body.totalsByCurrency).toEqual({ NGN: 18000 });
       expect(res.body.pendingPayments).toBe(1);
     });
   });

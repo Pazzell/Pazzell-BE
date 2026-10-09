@@ -66,8 +66,8 @@ are never read from the client. Sending them has no effect.
     "timer": { "minSeconds": 1, "maxSeconds": 7, "matchDefaultSeconds": 5 },
     "trivia": { "minCards": 5, "maxCards": 30 },
     "customQuiz": { "freeLimit": 1, "minCardsToPublish": 5 },
-    "pro": { "amount": 1330.21, "currency": "NGN", "durationDays": 30 },
-    "campaign": { "amount": 13302.07, "currency": "NGN", "durationDays": 30, "interruptionThreshold": 10 }
+    "pro": { "amount": 1500, "currency": "NGN", "durationDays": 30 },
+    "campaign": { "amount": 15000, "currency": "NGN", "durationDays": 30, "interruptionThreshold": 10 }
   }
 }
 ```
@@ -144,7 +144,7 @@ Presence endpoints (optional): `POST /analytics/user/online`, `POST /analytics/u
 ## 4. Plans, Pro and payments
 
 - Two tiers: **freemium** (default) and **pro**.
-- Pro costs the configured price (default 1,330.21 NGN) for the configured duration (default 30 days)
+- Pro costs the configured price (default 1,500 NGN) for the configured duration (default 30 days)
   starting from the payment time. Renewing while still Pro adds the duration to the current
   `proUntil`; renewing after expiry starts from the new payment time.
 - Pro benefits: never interrupted by campaign trivia, and unlimited custom trivias.
@@ -157,7 +157,7 @@ Presence endpoints (optional): `POST /analytics/user/online`, `POST /analytics/u
 {
   "success": true,
   "plan": { "tier": "pro", "isPro": true, "proUntil": "2026-11-05T09:12:44.000Z" },
-  "pricing": { "amount": 1330.21, "currency": "NGN", "durationDays": 30 },
+  "pricing": { "amount": 1500, "currency": "NGN", "durationDays": 30 },
   "campaignGate": { "required": false, "counter": 4, "threshold": 10, "campaign": null },
   "history": [ { "paidAt": "…", "startsAt": "…", "endsAt": "…", "paymentId": "…" } ]
 }
@@ -174,7 +174,7 @@ returns the same checkout (`200`) instead of creating a second one.
   "checkout": {
     "authorizationUrl": "https://checkout.paystack.com/abc123",
     "reference": "pz_pro_5f0c…",
-    "payment": { "id": "…", "purpose": "pro", "amount": 1330.21, "currency": "NGN", "durationDays": 30,
+    "payment": { "id": "…", "purpose": "pro", "amount": 1500, "currency": "NGN", "durationDays": 30,
                  "reference": "pz_pro_5f0c…", "status": "pending", "paidAt": null }
   }
 }
@@ -719,7 +719,7 @@ Sponsored trivia created by `brand` accounts and delivered to freemium players.
         any state ──(admin takedown, with a reason)──▶ taken_down
 ```
 
-- Flat price (default 13,302.07 NGN) for a fixed duration (default 30 days). No packages, no tiers, no
+- Flat price (default 15,000 NGN) for a fixed duration (default 30 days). No packages, no tiers, no
   start date to choose. `startsAt` is the confirmed payment time; `endsAt` is exactly the
   duration later.
 - A campaign is editable only as a `draft`. It needs at least `campaign.minCardsToPublish` (5)
@@ -764,7 +764,7 @@ Checkout response (`201`, or `200` when a checkout opened in the last 30 minutes
 ```json
 { "success": true,
   "checkout": { "authorizationUrl": "https://checkout.paystack.com/…", "reference": "pz_campaign_…",
-                "payment": { "id": "…", "purpose": "campaign", "campaignId": "6705…", "amount": 13302.07,
+                "payment": { "id": "…", "purpose": "campaign", "campaignId": "6705…", "amount": 15000,
                              "currency": "NGN", "durationDays": 30, "status": "pending" } },
   "campaign": { "id": "6705…", "status": "awaiting_payment" } }
 ```
@@ -859,8 +859,8 @@ any other role).
 | `customQuiz.freeLimit` / `customQuiz.minCardsToPublish` | 1 / 5 | Yes |
 | `campaign.minCardsToPublish` | 5 | Yes |
 | `campaign.interruptionThreshold` | 10 | Yes (positive integer) |
-| `campaign.priceAmount` / `campaign.durationDays` | 13302.07 / 30 | Yes |
-| `pro.priceAmount` / `pro.durationDays` | 1330.21 / 30 | Yes |
+| `campaign.priceAmount` / `campaign.durationDays` | 15000 / 30 | Yes |
+| `pro.priceAmount` / `pro.durationDays` | 1500 / 30 | Yes |
 | `payments.currency` | `NGN` | Yes (3-letter code) |
 
 A price or duration change applies to checkouts started afterwards; existing payments keep the
@@ -949,9 +949,9 @@ with the card endpoints above. Errors: `400 INVALID_IMPORT_CATEGORY`, `400 INVAL
 
 ```json
 { "success": true, "range": { "from": null, "to": null },
-  "breakdown": [ { "purpose": "campaign", "currency": "NGN", "payments": 3, "total": 39906.21 },
-                 { "purpose": "pro", "currency": "NGN", "payments": 41, "total": 54538.61 } ],
-  "totalsByCurrency": { "NGN": 94444.82 }, "pendingPayments": 2 }
+  "breakdown": [ { "purpose": "campaign", "currency": "NGN", "payments": 3, "total": 45000 },
+                 { "purpose": "pro", "currency": "NGN", "payments": 41, "total": 61500 } ],
+  "totalsByCurrency": { "NGN": 106500 }, "pendingPayments": 2 }
 ```
 
 Forum moderation (`/forum/moderation/flags`) is unchanged.
