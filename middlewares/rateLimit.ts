@@ -28,7 +28,7 @@ export const createRateLimiter = ({ windowMs, limit, enabledInTest = false }: Li
 
 const MINUTE = 60 * 1000;
 
-// Answer submission for Match and Trivia (a 1-second timer allows at most ~60/min of real play)
+// Answer submission (a 1-second timer allows at most ~60/min of real play)
 export const submitLimiter = createRateLimiter({ windowMs: MINUTE, limit: 180 });
 // Starting sessions / attempts
 export const sessionStartLimiter = createRateLimiter({ windowMs: MINUTE, limit: 30 });

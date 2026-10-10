@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import MatchAttemptModel from "../models/matchAttempt.model";
 import TriviaAttemptModel from "../models/triviaAttempt.model";
 import { redis } from "../utils/redis";
 
@@ -9,14 +8,10 @@ import { redis } from "../utils/redis";
 export const getAppAnalytics = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // 1. Total games played (all-time count of finished Match attempts and trivia
-      // sessions — one that is only started, or was abandoned, never counts).
-      const completed = { status: "completed" };
-      const [matchTotal, triviaTotal] = await Promise.all([
-        MatchAttemptModel.countDocuments(completed),
-        TriviaAttemptModel.countDocuments({ ...completed, isPreview: false }),
-      ]);
-      const totalGamesPlayed = matchTotal + triviaTotal;
+      // 1. Total games played (all-time count of finished trivia sessions — one that
+      // is only started, or was abandoned, never counts; neither does an owner test play).
+      const completed = { status: "completed", isPreview: false };
+      const totalGamesPlayed = await TriviaAttemptModel.countDocuments(completed);
 
       // 2. Total games played today (keyed off completedAt, not startedAt)
       const todayStart = new Date();
@@ -25,11 +20,7 @@ export const getAppAnalytics = CatchAsyncError(
       todayEnd.setHours(23, 59, 59, 999);
       const today = { ...completed, completedAt: { $gte: todayStart, $lte: todayEnd } };
 
-      const [matchToday, triviaToday] = await Promise.all([
-        MatchAttemptModel.countDocuments(today),
-        TriviaAttemptModel.countDocuments({ ...today, isPreview: false }),
-      ]);
-      const gamesPlayedToday = matchToday + triviaToday;
+      const gamesPlayedToday = await TriviaAttemptModel.countDocuments(today);
 
       // 3. Currently playing (users actively in a game right now)
       const currentlyPlayingSet = await redis.smembers("users:currently_playing");
@@ -59,7 +50,7 @@ export const startPlayingGame = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user?._id as string;
-      // What is being played, e.g. "match:3" or "topic:<id>" (informational only)
+      // What is being played, e.g. "topic:<id>" or "campaign:<id>" (informational only)
       const game = typeof req.body?.game === "string" ? req.body.game.slice(0, 80) : "game";
 
       if (!userId) {

@@ -5,12 +5,9 @@ import { runSeed } from "../scripts/seed";
 import userModel from "../models/user.model";
 import BrandModel from "../models/brand.model";
 import ConfigModel from "../models/config.model";
-import MatchLevelConfigModel from "../models/matchLevelConfig.model";
 import TriviaTopicModel from "../models/triviaTopic.model";
 import TriviaCardModel from "../models/triviaCard.model";
 import CampaignModel from "../models/campaign.model";
-import { getActiveLevels } from "../services/match/levels";
-import { generateQuestions } from "../services/match/questionGenerator";
 import {
   getCampaignPricing,
   getProPricing,
@@ -26,12 +23,8 @@ describe("Seed script", () => {
     await closeRedisConnection();
   });
 
-  it("seeds levels, topics, settings, an admin and a sample brand", async () => {
+  it("seeds topics, settings, an admin and a sample brand", async () => {
     const summary = await runSeed();
-
-    expect(await MatchLevelConfigModel.countDocuments({})).toBeGreaterThanOrEqual(10);
-    const levels = await getActiveLevels();
-    for (const level of levels) expect(generateQuestions(level)).toHaveLength(level.questionCount);
 
     const topics = await TriviaTopicModel.find({}).lean();
     expect(topics.length).toBeGreaterThanOrEqual(3);
@@ -105,12 +98,10 @@ describe("Seed script", () => {
   it("is idempotent and never overwrites existing data", async () => {
     await runSeed();
     await ConfigModel.updateOne({ key: "campaign.priceAmount" }, { value: 25 });
-    await MatchLevelConfigModel.updateOne({ level: 1 }, { questionCount: 9 });
     const counts = async () => ({
       users: await userModel.countDocuments({}),
       topics: await TriviaTopicModel.countDocuments({}),
       cards: await TriviaCardModel.countDocuments({}),
-      levels: await MatchLevelConfigModel.countDocuments({}),
       campaigns: await CampaignModel.countDocuments({}),
     });
     const before = await counts();
@@ -118,9 +109,8 @@ describe("Seed script", () => {
     const second = await runSeed();
 
     expect(await counts()).toEqual(before);
-    expect(second).toMatchObject({ settings: 0, levels: 0, topics: 0, cards: 0 });
+    expect(second).toMatchObject({ settings: 0, topics: 0, cards: 0 });
     expect(second.admin.created).toBe(false);
     expect((await ConfigModel.findOne({ key: "campaign.priceAmount" }).lean())!.value).toBe(25);
-    expect((await MatchLevelConfigModel.findOne({ level: 1 }).lean())!.questionCount).toBe(9);
   });
 });

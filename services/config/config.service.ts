@@ -13,12 +13,13 @@ const envNumber = (name: string, fallback: number): number => {
  * Precedence: admin override in the Config collection > env var > the literal here.
  */
 export const CONFIG_DEFAULTS: Record<string, any> = {
-  // Per-question countdown range, shared by Match, topics, custom quizzes and campaigns.
+  // Per-question countdown range, shared by topics, custom quizzes and campaigns.
   "game.timerMinSeconds": 1,
   "game.timerMaxSeconds": 7,
   // Network grace added to every question deadline before a submit counts as late.
   "game.submitGraceMs": envNumber("GAME_SUBMIT_GRACE_MS", 1000),
-  "match.defaultTimerSeconds": 5,
+  // Timer a setup screen starts on, and a new custom quiz's default.
+  "trivia.defaultTimerSeconds": 5,
   "trivia.minCards": 5,
   "trivia.maxCards": 30,
   // Share of a session's cards that are image cards; the rest are definitions.
@@ -47,7 +48,7 @@ const isPositiveNumber = (v: any) => typeof v === "number" && Number.isFinite(v)
 /** Returns an error message when `value` is not acceptable for `key`, otherwise null. */
 export function validateConfigValue(key: string, value: any): string | null {
   switch (key) {
-    case "match.defaultTimerSeconds":
+    case "trivia.defaultTimerSeconds":
       return Number.isInteger(value) &&
         value >= CONFIG_DEFAULTS["game.timerMinSeconds"] &&
         value <= CONFIG_DEFAULTS["game.timerMaxSeconds"]
@@ -209,8 +210,8 @@ export const isValidTimerSeconds = (value: any): value is number => {
 export const getSubmitGraceMs = async (): Promise<number> =>
   getConfigValue<number>("game.submitGraceMs");
 
-export const getMatchDefaultTimerSeconds = async (): Promise<number> =>
-  getConfigValue<number>("match.defaultTimerSeconds");
+export const getDefaultTimerSeconds = async (): Promise<number> =>
+  getConfigValue<number>("trivia.defaultTimerSeconds");
 
 export const getTriviaCardBounds = async (): Promise<{
   minCards: number;

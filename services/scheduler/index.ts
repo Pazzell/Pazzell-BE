@@ -3,7 +3,6 @@ import mongoose from "mongoose";
 import { reconcileAllWallets } from "../wallet/wallet.service";
 import { expireCampaigns } from "../campaign/campaign.service";
 import { lockQuizzesForExpiredPro } from "../customQuiz/quizLock.service";
-import { abandonStaleMatchAttempts } from "../match/match.service";
 import { abandonStaleTriviaSessions } from "../trivia/session.service";
 
 /**
@@ -31,11 +30,8 @@ export async function runExpirySweep(): Promise<void> {
 export async function runStaleAttemptSweep(): Promise<void> {
   if (mongoose.connection.readyState !== 1) return;
   try {
-    const match = await abandonStaleMatchAttempts();
-    const trivia = await abandonStaleTriviaSessions();
-    if (match + trivia > 0) {
-      console.log(`Closed ${match} Match attempt(s) and ${trivia} trivia session(s) as abandoned`);
-    }
+    const closed = await abandonStaleTriviaSessions();
+    if (closed > 0) console.log(`Closed ${closed} trivia session(s) as abandoned`);
   } catch (err) {
     console.error("Stale attempt sweep failed:", err);
   }
@@ -64,7 +60,7 @@ export function startScheduler(): void {
     runExpirySweep().catch((err) => console.error("Expiry sweep error:", err));
   });
 
-  // Hourly — close Match attempts and trivia sessions that were walked away from
+  // Hourly — close trivia sessions that were walked away from
   cron.schedule("0 * * * *", () => {
     runStaleAttemptSweep().catch((err) => console.error("Stale attempt sweep error:", err));
   });

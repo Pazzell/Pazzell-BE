@@ -200,13 +200,17 @@ describe("POST /admin/trivia/import", () => {
       .set(player.auth)
       .send({ sourceType: "topic", sourceId: topic.id, timerSeconds: 5, cardCount: 5 });
     expect(start.status).toBe(201);
-    const study = await api().get(`/api/v1/trivia/sessions/${start.body.session.id}/study`).set(player.auth);
-    const images = study.body.cards.filter((c: any) => c.type === "image");
+    const session = `/api/v1/trivia/sessions/${start.body.session.id}`;
+    const questions: any[] = [];
+    for (let index = 0; index < 5; index++) {
+      questions.push((await api().get(`${session}/question`).set(player.auth)).body.question);
+      await api().post(`${session}/answer`).set(player.auth).send({ questionIndex: index, optionIndex: 0 });
+    }
+    const images = questions.filter((q) => q.type === "image");
     // 70% of 5 is 4 image cards, but only 3 exist: the definitions fill the gap.
     expect(images).toHaveLength(3);
-    expect(study.body.cards).toHaveLength(5);
     for (const image of images) expect(image.attribution).toContain("Wikimedia Commons");
-    expect(study.body.cards.find((c: any) => c.type === "definition").attribution).toBeNull();
+    expect(questions.find((q) => q.type === "definition").attribution).toBeNull();
   });
 
   it("mixes home-country and worldwide people unless a country is named", async () => {

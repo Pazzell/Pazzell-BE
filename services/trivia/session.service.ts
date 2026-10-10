@@ -1,7 +1,7 @@
 import ErrorHandler from "../../utils/ErrorHandler";
 import TriviaAttemptModel, { ITriviaAttempt } from "../../models/triviaAttempt.model";
 import TriviaAttemptQuestionModel from "../../models/triviaAttemptQuestion.model";
-import { QuestionOutcome } from "../../models/matchQuestion.model";
+import { QuestionOutcome } from "../../models/triviaAttemptQuestion.model";
 import userModel from "../../models/user.model";
 import {
   getSubmitGraceMs,
@@ -20,10 +20,11 @@ import {
   resetCampaignCounter,
 } from "../campaign/campaign.service";
 import { brandForAttempt, resolveSource, titleForAttempt } from "./sources";
-import { pickMixedCards, shuffle } from "./mix";
+import { pickMixedCards } from "./mix";
 
 // One session engine for every kind of trivia (admin topics, custom quizzes, brand
-// campaigns):  studying -> quiz -> completed  (or abandoned).
+// campaigns):  quiz -> completed  (or abandoned). There is no separate study step: a
+// session started with `practice` on has the correct option marked on every question.
 
 type Player = {
   _id: any;
@@ -52,31 +53,45 @@ async function publicSession(attempt: ITriviaAttempt) {
       title: await titleForAttempt(attempt.sourceType, attempt.sourceId),
     },
     isPreview: attempt.isPreview,
+    practice: !!attempt.practice,
     timerSeconds: attempt.timerSeconds,
     cardCount: attempt.cardCount,
     currentIndex: Math.min(attempt.currentIndex, attempt.cardCount),
     brand: await brandForAttempt(attempt.sourceType, attempt.sourceId),
     startedAt: attempt.startedAt,
-    quizStartedAt: attempt.quizStartedAt || null,
     completedAt: attempt.completedAt || null,
   };
 }
 
 /**
- * Starts a session. If the player already has one in progress for this topic / quiz /
- * campaign it is returned as-is, so a refresh or a second tab can never produce a new
- * card set. Starting a non-campaign session is refused while a campaign is owed.
+ * Starts a session, which goes straight into the quiz. If the player already has one in
+ * progress for this topic / quiz / campaign it is returned as-is (its own timer, card
+ * count and practice setting included), so a refresh or a second tab can never produce
+ * a new card set. Starting a non-campaign session is refused while a campaign is owed.
  */
 export async function startSession(
   player: Player,
-  input: { sourceType?: any; sourceId?: any; slug?: any; timerSeconds?: any; cardCount?: any }
+  input: {
+    sourceType?: any;
+    sourceId?: any;
+    slug?: any;
+    timerSeconds?: any;
+    cardCount?: any;
+    practice?: any;
+  }
 ) {
   const userId = String(player._id);
   const source = await resolveSource(player, input);
   const sourceKey = `${source.sourceType}:${source.sourceId}`;
 
   const existing = await TriviaAttemptModel.findOne({ userId, sourceKey, active: true });
-  if (existing) return { session: await publicSession(existing), resumed: true };
+  if (existing) {
+    return { session: await publicSession(await withoutStudyPhase(existing)), resumed: true };
+  }
+
+  if (input.practice !== undefined && typeof input.practice !== "boolean") {
+    throw new ErrorHandler("practice must be true or false", 400, "INVALID_PRACTICE");
+  }
 
   if (source.sourceType !== "campaign" && !source.isPreview) {
     await assertNoCampaignOwed(player);
@@ -120,6 +135,7 @@ export async function startSession(
       sourceId: source.sourceId,
       sourceKey,
       isPreview: source.isPreview,
+      practice: input.practice === true,
       timerSeconds,
       cardCount,
     });
@@ -131,15 +147,13 @@ export async function startSession(
     throw e;
   }
 
-  // Random card set, weighted toward image cards; the quiz order and each card's option
-  // order are shuffled independently of the study order.
+  // Random card set in random order, weighted toward image cards; each card's two
+  // options are shuffled as well.
   const selected = pickMixedCards(source.cards, cardCount, await getTriviaImagePercent());
-  const quizOrder = shuffle(selected.map((_, i) => i));
   await TriviaAttemptQuestionModel.insertMany(
-    selected.map((card, studyIndex) => ({
+    selected.map((card, quizIndex) => ({
       attemptId: String(attempt._id),
-      studyIndex,
-      quizIndex: quizOrder.indexOf(studyIndex),
+      quizIndex,
       cardId: card.id,
       card: {
         type: card.type,
@@ -160,62 +174,25 @@ export async function startSession(
   return { session: await publicSession(attempt), resumed: false };
 }
 
+/** A session left in the old study step carries on as a quiz. */
+async function withoutStudyPhase(attempt: ITriviaAttempt): Promise<ITriviaAttempt> {
+  if ((attempt.status as string) !== "studying") return attempt;
+  await TriviaAttemptModel.updateOne(
+    { _id: attempt._id, status: "studying" },
+    { $set: { status: "quiz" } }
+  );
+  return (await TriviaAttemptModel.findById(attempt._id))!;
+}
+
 async function loadOwnedAttempt(userId: string, sessionId: string): Promise<ITriviaAttempt> {
   const attempt = await TriviaAttemptModel.findOne({ _id: sessionId, userId });
   // 404 (not 403) so session ids of other players cannot be probed.
   if (!attempt) throw new ErrorHandler("Session not found", 404, "SESSION_NOT_FOUND");
-  return attempt;
+  return withoutStudyPhase(attempt);
 }
 
 export async function getSession(userId: string, sessionId: string) {
   return publicSession(await loadOwnedAttempt(userId, sessionId));
-}
-
-/**
- * Study phase: the selected cards in a stable order, each with both options and the
- * correct one marked. Only available before the quiz begins.
- */
-export async function getStudyCards(userId: string, sessionId: string) {
-  const attempt = await loadOwnedAttempt(userId, sessionId);
-  if (attempt.status !== "studying") {
-    throw new ErrorHandler(
-      "Study cards are only available before the quiz starts",
-      409,
-      "STUDY_PHASE_OVER"
-    );
-  }
-  const rows = await TriviaAttemptQuestionModel.find({ attemptId: String(attempt._id) })
-    .sort({ studyIndex: 1 })
-    .lean();
-  return {
-    session: await publicSession(attempt),
-    cards: rows.map((row) => ({
-      position: row.studyIndex + 1,
-      total: rows.length,
-      type: row.card.type,
-      imageUrl: row.card.imageUrl || null,
-      text: row.card.text || null,
-      attribution: row.card.attribution || null,
-      options: row.card.options.map((text, index) => ({
-        text,
-        isCorrect: index === row.card.correctOptionIndex,
-      })),
-    })),
-  };
-}
-
-/** Moves the session from study to quiz. Calling it again is harmless. */
-export async function beginQuiz(userId: string, sessionId: string) {
-  const attempt = await loadOwnedAttempt(userId, sessionId);
-  if (attempt.status === "studying") {
-    await TriviaAttemptModel.updateOne(
-      { _id: attempt._id, status: "studying" },
-      { $set: { status: "quiz", quizStartedAt: new Date() } }
-    );
-  } else if (attempt.status !== "quiz") {
-    throw new ErrorHandler("This session is no longer in progress", 409, "SESSION_NOT_ACTIVE");
-  }
-  return publicSession((await TriviaAttemptModel.findById(attempt._id))!);
 }
 
 async function buildResult(attempt: ITriviaAttempt, player?: Player) {
@@ -307,18 +284,16 @@ async function expireOverdue(attempt: ITriviaAttempt, now: Date): Promise<ITrivi
 }
 
 function assertInQuiz(attempt: ITriviaAttempt) {
-  if (attempt.status === "studying") {
-    throw new ErrorHandler("Begin the quiz first", 409, "QUIZ_NOT_STARTED");
-  }
   if (attempt.status === "abandoned") {
     throw new ErrorHandler("This session was abandoned", 409, "SESSION_ABANDONED");
   }
 }
 
 /**
- * Quiz phase: the question the player is on. The first call starts its clock; a
- * repeat call (page refresh) returns the same question with the remaining time.
- * The payload carries no answer, no card id and no hint in the option order.
+ * The question the player is on. The first call starts its clock; a repeat call (page
+ * refresh) returns the same question with the remaining time. The payload carries no
+ * card id and no hint in the option order, and no answer either unless the session is
+ * in practice mode, where `correctOptionIndex` says which displayed option is right.
  */
 export async function getCurrentQuestion(player: Player, sessionId: string) {
   const now = new Date();
@@ -349,6 +324,9 @@ export async function getCurrentQuestion(player: Player, sessionId: string) {
         index: position,
         text: question.card.options[original],
       })),
+      ...(attempt.practice
+        ? { correctOptionIndex: question.optionOrder.indexOf(question.card.correctOptionIndex) }
+        : {}),
       timerSeconds: attempt.timerSeconds,
       servedAt: question.servedAt,
       deadlineAt: question.deadlineAt,

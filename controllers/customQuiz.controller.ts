@@ -15,7 +15,7 @@ import { ensureQuizLocks, syncQuizLocks } from "../services/customQuiz/quizLock.
 import {
   getCustomQuizFreeLimit,
   getCustomQuizMinCards,
-  getMatchDefaultTimerSeconds,
+  getDefaultTimerSeconds,
   getTimerRange,
   getTriviaCardBounds,
   isValidTimerSeconds,
@@ -100,7 +100,7 @@ export const createQuiz = CatchAsyncError(async (req: Request, res: Response) =>
     defaultTimerSeconds:
       body.defaultTimerSeconds !== undefined
         ? parseTimer(body.defaultTimerSeconds)
-        : await getMatchDefaultTimerSeconds(),
+        : await getDefaultTimerSeconds(),
     defaultCardCount:
       body.defaultCardCount !== undefined
         ? await parseDefaultCardCount(body.defaultCardCount)

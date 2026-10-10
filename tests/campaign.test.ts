@@ -283,8 +283,8 @@ describe("Brand campaigns", () => {
       // Starting or abandoning it is not enough.
       expect((await startTopic(player, topicId)).body.code).toBe("CAMPAIGN_REQUIRED");
 
-      const study = await api().get(`/api/v1/trivia/sessions/${session.body.session.id}/study`).set(player.auth);
-      expect(study.body.session.brand.websiteUrl).toBe("https://acme.example/");
+      const state = await api().get(`/api/v1/trivia/sessions/${session.body.session.id}`).set(player.auth);
+      expect(state.body.session.brand.websiteUrl).toBe("https://acme.example/");
       const result = await playSession(player, session.body.session.id, (i) => i !== 0);
       expect(result).toMatchObject({ correct: 4, total: 5, brand: { brandName: "Acme" } });
       expect(result.campaignGate).toMatchObject({ required: false, counter: 0 });
@@ -295,7 +295,7 @@ describe("Brand campaigns", () => {
       expect(play).toMatchObject({ completed: true, score: 4, total: 5 });
     });
 
-    it("counts only completed non-campaign trivias: not campaigns, Match or abandoned sessions", async () => {
+    it("counts only completed non-campaign trivias: not campaigns or abandoned sessions", async () => {
       const campaignId = await createCampaign(brand.id, liveWindow());
       const player = await createUser();
 
@@ -304,10 +304,6 @@ describe("Brand campaigns", () => {
       expect(await counterOf(player)).toBe(0);
 
       await completeTopicPlay(player, topicId);
-      expect(await counterOf(player)).toBe(1);
-
-      const match = await api().post("/api/v1/match/levels/1/attempts").set(player.auth).send({ timerSeconds: 5 });
-      expect(match.status).toBe(201);
       expect(await counterOf(player)).toBe(1);
 
       const campaign = await startCampaign(player, campaignId);
@@ -379,12 +375,11 @@ describe("Brand campaigns", () => {
   });
 
   describe("campaign sessions", () => {
-    it("hides answers during the quiz phase like any other trivia", async () => {
+    it("hides answers like any other trivia", async () => {
       const campaignId = await createCampaign(brand.id, liveWindow());
       const player = await createUser();
       const session = await startCampaign(player, campaignId);
       const id = session.body.session.id;
-      await api().post(`/api/v1/trivia/sessions/${id}/quiz/begin`).set(player.auth);
       const q = await api().get(`/api/v1/trivia/sessions/${id}/question`).set(player.auth);
       const keys = allKeys(q.body);
       expect(keys.has("correctOptionIndex")).toBe(false);
@@ -505,7 +500,7 @@ describe("Brand campaigns", () => {
       expect((await put("campaign.interruptionThreshold", 0)).status).toBe(400);
       expect((await put("game.timerMaxSeconds", 30)).status).toBe(400);
       expect((await put("game.timerMinSeconds", 0)).status).toBe(400);
-      expect((await put("match.defaultTimerSeconds", 9)).status).toBe(400);
+      expect((await put("trivia.defaultTimerSeconds", 9)).status).toBe(400);
       expect((await put("points.sessionCompletionPoints", 7)).status).toBe(400);
       const settings = await api().get("/api/v1/settings/game");
       expect(settings.body.settings.timer).toMatchObject({ minSeconds: 1, maxSeconds: 7 });

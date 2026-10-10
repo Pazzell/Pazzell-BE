@@ -15,7 +15,7 @@ import {
   getCustomQuizFreeLimit,
   getCustomQuizMinCards,
   getInterruptionThreshold,
-  getMatchDefaultTimerSeconds,
+  getDefaultTimerSeconds,
   getProPricing,
   getTimerRange,
   getTriviaCardBounds,
@@ -43,9 +43,9 @@ const publicPayment = (payment: any) => ({
 
 // GET /settings/game — public. Everything the client needs to build its setup screens.
 export const getGameSettings = CatchAsyncError(async (req: Request, res: Response) => {
-  const [defaultMatchTimer, cards, pro, campaign, threshold, freeLimit, minCardsToPublish] =
+  const [defaultTimer, cards, pro, campaign, threshold, freeLimit, minCardsToPublish] =
     await Promise.all([
-      getMatchDefaultTimerSeconds(),
+      getDefaultTimerSeconds(),
       getTriviaCardBounds(),
       getProPricing(),
       getCampaignPricing(),
@@ -56,7 +56,7 @@ export const getGameSettings = CatchAsyncError(async (req: Request, res: Respons
   res.status(200).json({
     success: true,
     settings: {
-      timer: { ...getTimerRange(), matchDefaultSeconds: defaultMatchTimer },
+      timer: { ...getTimerRange(), defaultSeconds: defaultTimer },
       trivia: { minCards: cards.minCards, maxCards: cards.maxCards },
       customQuiz: { freeLimit, minCardsToPublish },
       pro,

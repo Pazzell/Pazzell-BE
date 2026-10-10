@@ -8,13 +8,11 @@ import { resolveImage } from "../services/upload/image.service";
 import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
 import {
   abandonSession,
-  beginQuiz,
   cardCountBounds,
   getCurrentQuestion,
   getPlayStats,
   getResult,
   getSession,
-  getStudyCards,
   startSession,
   submitAnswer,
 } from "../services/trivia/session.service";
@@ -68,7 +66,7 @@ export const getTopic = CatchAsyncError(async (req: Request, res: Response, next
 
 // --- Player: sessions (shared by topics, custom quizzes and campaigns) -------------
 
-// POST /trivia/sessions  { sourceType, sourceId | slug, timerSeconds, cardCount }
+// POST /trivia/sessions  { sourceType, sourceId | slug, timerSeconds, cardCount, practice? }
 export const postStartSession = CatchAsyncError(async (req: Request, res: Response) => {
   const body = req.body || {};
   const result = await startSession(req.user!, {
@@ -77,6 +75,7 @@ export const postStartSession = CatchAsyncError(async (req: Request, res: Respon
     slug: body.slug,
     timerSeconds: body.timerSeconds,
     cardCount: body.cardCount,
+    practice: body.practice,
   });
   res.status(result.resumed ? 200 : 201).json({ success: true, ...result });
 });
@@ -88,23 +87,6 @@ export const getSessionState = CatchAsyncError(async (req: Request, res: Respons
   res.status(200).json({
     success: true,
     session: await getSession(String(req.user!._id), sessionId(req)),
-  });
-});
-
-// GET /trivia/sessions/:id/study
-export const getStudy = CatchAsyncError(async (req: Request, res: Response) => {
-  res.set("Cache-Control", "no-store");
-  res.status(200).json({
-    success: true,
-    ...(await getStudyCards(String(req.user!._id), sessionId(req))),
-  });
-});
-
-// POST /trivia/sessions/:id/quiz/begin
-export const postBeginQuiz = CatchAsyncError(async (req: Request, res: Response) => {
-  res.status(200).json({
-    success: true,
-    session: await beginQuiz(String(req.user!._id), sessionId(req)),
   });
 });
 

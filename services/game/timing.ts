@@ -1,4 +1,4 @@
-// Shared per-question clock rules for Match and Trivia.
+// Per-question clock rules.
 //
 // A question's clock starts when the server first serves it (servedAt) and runs for the
 // player's chosen timerSeconds (deadlineAt). A submission is accepted until

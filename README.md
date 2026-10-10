@@ -1,9 +1,9 @@
 # Pazzell API
 
-Backend for Pazzell: brain-training games that help develop IQ.
+Backend for Pazzell: image and short-definition trivia across many topics.
 
-- **Match** — a reasoning game for children aged 2 to 5, played in sequential levels.
-- **Trivia ("Study, then Quiz")** — topic based, for older children and adults.
+- **Trivia** — pick a topic, a timer and a number of cards; an optional practice mode points
+  at the correct option. Image cards can be imported from Wikimedia by an admin.
 - **Custom trivia** — quizzes users create and share by link.
 - **Brand campaigns** — sponsored trivia that freemium players play periodically.
 - **Freemium and Pro** player tiers.
@@ -31,7 +31,7 @@ image processing, `node-cron` for scheduled jobs, Jest + supertest + mongodb-mem
 ```bash
 npm install
 cp .env.example .env      # then fill it in
-npm run seed              # levels, example topics, settings, an admin and a sample brand
+npm run seed              # example topics, settings, an admin and a sample brand
 npm run dev               # http://localhost:4000
 ```
 
@@ -57,7 +57,6 @@ services/
   config/                Settings store (admin-editable, with code/env defaults)
   plan/                  getPlan(), Pro activation, and policy.ts (all Pro-gated rules)
   payment/               Paystack client and idempotent payment confirmation
-  match/                 Artifact library, SVG renderer, question generator, attempts
   trivia/                The session engine shared by topics, custom quizzes and campaigns
   customQuiz/            Freemium quiz locking
   campaign/              Activation, expiry, rotation and the interruption gate
@@ -82,11 +81,12 @@ tests/                   Jest suites
   idempotent: a webhook delivered twice never extends Pro twice or activates a campaign twice.
   The amount and currency reported by the gateway must match the record.
 - **Quiz integrity.** The server holds the correct answer and the deadline for every question.
-  The client never receives the answer during the quiz phase, and late submissions are timeouts.
+  The client never receives the answer before a question is settled (except in practice mode,
+  where the player asked for it to be marked), and late submissions are timeouts.
   Each question's clock starts when the server first serves it; a refresh resumes the same
   question with the time that is left.
 - **Timer.** One global range, 1 to 7 seconds, for every game. It is chosen by the player and is
-  not part of any level, topic or campaign.
+  not part of any topic or campaign.
 - **Campaign gate.** A freemium player who has completed N non-campaign trivias must complete a
   campaign trivia before starting another. Starting one while a campaign is owed returns
   `403 CAMPAIGN_REQUIRED` with the campaign to play.
@@ -102,7 +102,7 @@ tests/                   Jest suites
 | When | Job |
 | --- | --- |
 | Every 10 minutes and at startup | End campaigns past their window; lock the extra quizzes of expired Pro accounts |
-| Hourly | Close Match attempts and trivia sessions left open for more than 6 hours |
+| Hourly | Close trivia sessions left open for more than 6 hours |
 | 03:00 daily | Reconcile wallet balances against the ledger |
 
 All three are sweeps. The rules they apply are also enforced on read.

@@ -126,7 +126,7 @@ export async function resolveSource(
   throw new ErrorHandler('sourceType must be "topic", "custom" or "campaign"', 400, "INVALID_SOURCE");
 }
 
-/** Brand block for an existing campaign attempt (study cards and result screen). */
+/** Brand block for an existing campaign attempt (session and result screen). */
 export async function brandForAttempt(sourceType: string, sourceId: string) {
   if (sourceType !== "campaign") return null;
   const campaign = await CampaignModel.findById(sourceId).lean();

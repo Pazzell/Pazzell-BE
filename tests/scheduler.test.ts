@@ -4,7 +4,6 @@ import { createUser, createCampaign, liveWindow, resetState, DAY_MS } from "./he
 import userModel from "../models/user.model";
 import CampaignModel from "../models/campaign.model";
 import CustomQuizModel from "../models/customQuiz.model";
-import MatchAttemptModel from "../models/matchAttempt.model";
 import TriviaAttemptModel from "../models/triviaAttempt.model";
 import { creditWallet, getBalance } from "../services/wallet/wallet.service";
 import WalletModel from "../models/wallet.model";
@@ -68,12 +67,8 @@ describe("Scheduled jobs", () => {
     expect(await statuses(active.id)).toEqual(["live", "live", "live"]);
   });
 
-  it("closes attempts and sessions that were walked away from", async () => {
+  it("closes sessions that were walked away from", async () => {
     const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
-    await MatchAttemptModel.create([
-      { userId: "u1", level: 1, timerSeconds: 5, questionCount: 3, startedAt: old },
-      { userId: "u2", level: 1, timerSeconds: 5, questionCount: 3 },
-    ]);
     await TriviaAttemptModel.create([
       { userId: "u1", sourceType: "topic", sourceId: "t", sourceKey: "topic:t", timerSeconds: 5, cardCount: 5, startedAt: old },
       { userId: "u2", sourceType: "topic", sourceId: "t", sourceKey: "topic:t", timerSeconds: 5, cardCount: 5 },
@@ -81,10 +76,8 @@ describe("Scheduled jobs", () => {
 
     await runStaleAttemptSweep();
 
-    expect(await MatchAttemptModel.countDocuments({ status: "abandoned", active: false })).toBe(1);
-    expect(await MatchAttemptModel.countDocuments({ status: "in_progress", active: true })).toBe(1);
     expect(await TriviaAttemptModel.countDocuments({ status: "abandoned", active: false })).toBe(1);
-    expect(await TriviaAttemptModel.countDocuments({ status: "studying", active: true })).toBe(1);
+    expect(await TriviaAttemptModel.countDocuments({ status: "quiz", active: true })).toBe(1);
   });
 
   it("still reconciles wallet balances against the ledger", async () => {

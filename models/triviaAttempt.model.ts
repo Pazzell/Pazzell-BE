@@ -1,7 +1,7 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 export type TriviaSourceType = "topic" | "custom" | "campaign";
-export type TriviaAttemptStatus = "studying" | "quiz" | "completed" | "abandoned";
+export type TriviaAttemptStatus = "quiz" | "completed" | "abandoned";
 
 export interface ITriviaAttempt extends Document {
   userId: string;
@@ -10,16 +10,17 @@ export interface ITriviaAttempt extends Document {
   sourceKey: string; // `${sourceType}:${sourceId}` — backs the one-active-attempt index
   // Owner/brand test play: not gated, and never counted in stats or the campaign counter.
   isPreview: boolean;
+  // Practice mode: each question is served with its correct option marked.
+  practice: boolean;
   timerSeconds: number;
   cardCount: number;
   status: TriviaAttemptStatus;
-  active: boolean; // true while studying or in quiz
+  active: boolean; // true while the quiz is in progress
   currentIndex: number; // quiz question the player is on
   correctCount: number;
   // Guards the freemium counter update so a completed attempt is counted exactly once.
   counterApplied: boolean;
   startedAt: Date;
-  quizStartedAt?: Date;
   completedAt?: Date;
 }
 
@@ -30,19 +31,21 @@ const triviaAttemptSchema: Schema<ITriviaAttempt> = new mongoose.Schema(
     sourceId: { type: String, required: true },
     sourceKey: { type: String, required: true },
     isPreview: { type: Boolean, default: false },
+    practice: { type: Boolean, default: false },
     timerSeconds: { type: Number, required: true },
     cardCount: { type: Number, required: true },
     status: {
       type: String,
+      // "studying" is only on sessions started before the study step was removed;
+      // they are moved to "quiz" the next time their player opens them.
       enum: ["studying", "quiz", "completed", "abandoned"],
-      default: "studying",
+      default: "quiz",
     },
     active: { type: Boolean, default: true },
     currentIndex: { type: Number, default: 0 },
     correctCount: { type: Number, default: 0 },
     counterApplied: { type: Boolean, default: false },
     startedAt: { type: Date, default: Date.now },
-    quizStartedAt: { type: Date },
     completedAt: { type: Date },
   },
   { timestamps: true }

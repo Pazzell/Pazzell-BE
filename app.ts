@@ -5,7 +5,6 @@ import "dotenv/config";
 import authRouter from "./routes/auth.route";
 import userRouter from "./routes/user.route";
 import planRouter from "./routes/plan.route";
-import matchRouter from "./routes/match.route";
 import triviaRouter from "./routes/trivia.route";
 import customQuizRouter from "./routes/customQuiz.route";
 import campaignRouter from "./routes/campaign.route";
@@ -53,7 +52,6 @@ app.use(
   authRouter,
   userRouter,
   planRouter,
-  matchRouter,
   triviaRouter,
   customQuizRouter,
   campaignRouter,
@@ -100,7 +98,7 @@ app.get("/", (req: Request, res: Response) => {
     </head>
     <body>
       <h1>Welcome to the Pazzell API</h1>
-      <p>Brain-training games: Match and Trivia. The API lives under /api/v1.</p>
+      <p>Image and short-definition trivia across many topics. The API lives under /api/v1.</p>
     </body>
     </html>
   `);

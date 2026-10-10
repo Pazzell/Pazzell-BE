@@ -4,18 +4,16 @@ import { randomBytes } from "crypto";
 import userModel from "../models/user.model";
 import BrandModel from "../models/brand.model";
 import ConfigModel from "../models/config.model";
-import MatchLevelConfigModel from "../models/matchLevelConfig.model";
 import TriviaTopicModel from "../models/triviaTopic.model";
 import TriviaCardModel from "../models/triviaCard.model";
 import CampaignModel from "../models/campaign.model";
 import CampaignCardModel from "../models/campaignCard.model";
 import { CONFIG_DEFAULTS, READ_ONLY_CONFIG_KEYS } from "../services/config/config.service";
-import { DEFAULT_LEVELS } from "../services/match/levels";
 import { generateAvatar } from "../utils/userHelpers";
 import { SEED_CAMPAIGN_CARDS, SEED_TOPICS, SeedCard } from "./seedData";
 
 // Idempotent seed: safe to run repeatedly. It only ever inserts what is missing —
-// it never overwrites a setting, level, topic or account that already exists.
+// it never overwrites a setting, topic or account that already exists.
 //
 //   npm run seed
 //
@@ -24,7 +22,6 @@ import { SEED_CAMPAIGN_CARDS, SEED_TOPICS, SeedCard } from "./seedData";
 
 export interface SeedSummary {
   settings: number;
-  levels: number;
   topics: number;
   cards: number;
   admin: { email: string; created: boolean; password?: string };
@@ -67,18 +64,7 @@ export async function runSeed(): Promise<SeedSummary> {
     settings += result.upsertedCount;
   }
 
-  // 2. Match levels
-  let levels = 0;
-  for (const level of DEFAULT_LEVELS) {
-    const result = await MatchLevelConfigModel.updateOne(
-      { level: level.level },
-      { $setOnInsert: level },
-      { upsert: true }
-    );
-    levels += result.upsertedCount;
-  }
-
-  // 3. Admin account
+  // 2. Admin account
   const adminEmail = process.env.SEED_ADMIN_EMAIL || "admin@pazzell.local";
   const admin = await ensureAccount(adminEmail, process.env.SEED_ADMIN_PASSWORD, {
     firstName: "Pazzell",
@@ -152,7 +138,6 @@ export async function runSeed(): Promise<SeedSummary> {
 
   return {
     settings,
-    levels,
     topics,
     cards,
     admin: { email: adminEmail, created: admin.created, password: admin.password },
@@ -171,7 +156,7 @@ async function main() {
   console.log(`Seeding database "${mongoose.connection.name}" on ${mongoose.connection.host}`);
   const summary = await runSeed();
   console.log(
-    `Inserted: ${summary.settings} setting(s), ${summary.levels} level(s), ${summary.topics} topic(s), ${summary.cards} card(s)`
+    `Inserted: ${summary.settings} setting(s), ${summary.topics} topic(s), ${summary.cards} card(s)`
   );
   for (const account of [summary.admin, summary.brand]) {
     if (!account.created) console.log(`Account ${account.email} already exists — left unchanged`);

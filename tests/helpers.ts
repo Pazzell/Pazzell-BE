@@ -158,7 +158,6 @@ export async function playSession(
   sessionId: string,
   pick: (index: number) => boolean = () => true
 ) {
-  await api().post(`/api/v1/trivia/sessions/${sessionId}/quiz/begin`).set(user.auth);
   let last: any = null;
   for (let guard = 0; guard < 100; guard++) {
     const q = await api().get(`/api/v1/trivia/sessions/${sessionId}/question`).set(user.auth);

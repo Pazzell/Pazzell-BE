@@ -1,13 +1,13 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import { ICardContent, cardContentFields } from "./cardFields";
-import { QuestionOutcome } from "./matchQuestion.model";
+
+export type QuestionOutcome = "correct" | "wrong" | "timeout";
 
 // One row per selected card. The card content is snapshotted at session start, so
 // editing or deleting a card in a live quiz cannot corrupt an attempt in progress.
 export interface ITriviaAttemptQuestion extends Document {
   attemptId: string;
-  studyIndex: number; // position in the study feed (stable)
-  quizIndex: number; // position in the quiz (shuffled)
+  quizIndex: number; // position in the quiz
   cardId: string;
   card: ICardContent; // snapshot, including the correct answer — server-side only
   optionOrder: number[]; // display position -> original option index, e.g. [1, 0]
@@ -21,7 +21,6 @@ export interface ITriviaAttemptQuestion extends Document {
 const triviaAttemptQuestionSchema: Schema<ITriviaAttemptQuestion> = new mongoose.Schema(
   {
     attemptId: { type: String, required: true },
-    studyIndex: { type: Number, required: true },
     quizIndex: { type: Number, required: true },
     cardId: { type: String, required: true },
     card: { type: new Schema(cardContentFields, { _id: false }), required: true },
@@ -36,7 +35,6 @@ const triviaAttemptQuestionSchema: Schema<ITriviaAttemptQuestion> = new mongoose
 );
 
 triviaAttemptQuestionSchema.index({ attemptId: 1, quizIndex: 1 }, { unique: true });
-triviaAttemptQuestionSchema.index({ attemptId: 1, studyIndex: 1 });
 
 const TriviaAttemptQuestionModel: Model<ITriviaAttemptQuestion> = mongoose.model(
   "TriviaAttemptQuestion",

@@ -1,10 +1,5 @@
 import express from "express";
 import {
-  adminListLevels,
-  adminUpsertLevel,
-  adminDeleteLevel,
-} from "../controllers/match.controller";
-import {
   adminListTopics,
   adminCreateTopic,
   adminGetTopic,
@@ -36,11 +31,6 @@ const router = express.Router();
 router.use("/admin", isAuthenticated, authorizeRoles("admin"));
 
 const image = imageUpload.single("image");
-
-// Match level configs
-router.get("/admin/match/levels", adminListLevels);
-router.put("/admin/match/levels/:level", adminUpsertLevel);
-router.delete("/admin/match/levels/:level", adminDeleteLevel);
 
 // Trivia topics and cards
 router.get("/admin/trivia/topics", adminListTopics);

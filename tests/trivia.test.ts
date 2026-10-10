@@ -15,7 +15,6 @@ import TriviaAttemptModel from "../models/triviaAttempt.model";
 import TriviaCardModel from "../models/triviaCard.model";
 
 const base = "/api/v1/trivia/sessions";
-const begin = (u: TestUser, id: string) => api().post(`${base}/${id}/quiz/begin`).set(u.auth);
 const question = (u: TestUser, id: string) => api().get(`${base}/${id}/question`).set(u.auth);
 const answer = (u: TestUser, id: string, questionIndex: number, optionIndex: number) =>
   api().post(`${base}/${id}/answer`).set(u.auth).send({ questionIndex, optionIndex });
@@ -46,7 +45,7 @@ describe("Trivia (admin topics)", () => {
     it("exposes the single global timer range and card bounds", async () => {
       const res = await api().get("/api/v1/settings/game");
       expect(res.status).toBe(200);
-      expect(res.body.settings.timer).toEqual({ minSeconds: 1, maxSeconds: 7, matchDefaultSeconds: 5 });
+      expect(res.body.settings.timer).toEqual({ minSeconds: 1, maxSeconds: 7, defaultSeconds: 5 });
       expect(res.body.settings.trivia).toEqual({ minCards: 5, maxCards: 30 });
       expect(res.body.settings.pro).toEqual({ amount: 1500, currency: "NGN", durationDays: 30 });
       expect(res.body.settings.campaign).toMatchObject({ amount: 15000, durationDays: 30, interruptionThreshold: 10 });
@@ -81,42 +80,78 @@ describe("Trivia (admin topics)", () => {
     });
   });
 
-  describe("study phase", () => {
-    it("returns the selected cards in a stable order with the correct option marked", async () => {
+  describe("practice mode", () => {
+    it("starts straight in the quiz, with no study step", async () => {
       const started = await startDefault();
       const id = started.body.session.id;
-      const first = await api().get(`${base}/${id}/study`).set(user.auth);
-      const second = await api().get(`${base}/${id}/study`).set(user.auth);
-
-      expect(first.body.cards).toHaveLength(5);
-      expect(first.body.cards.map((c: any) => c.position)).toEqual([1, 2, 3, 4, 5]);
-      expect(second.body.cards).toEqual(first.body.cards);
-      for (const card of first.body.cards) {
-        expect(card.options).toHaveLength(2);
-        expect(card.options.filter((o: any) => o.isCorrect)).toHaveLength(1);
-      }
+      expect(started.body.session).toMatchObject({ status: "quiz", practice: false, currentIndex: 0 });
+      expect((await question(user, id)).body.question.index).toBe(0);
+      expect((await api().get(`${base}/${id}/study`).set(user.auth)).status).toBe(404);
+      expect((await api().post(`${base}/${id}/quiz/begin`).set(user.auth)).status).toBe(404);
     });
 
-    it("stops serving study cards once the quiz has begun", async () => {
+    it("marks the correct option on every question when practice is on", async () => {
+      const started = await startDefault({ practice: true });
+      const id = started.body.session.id;
+      expect(started.body.session.practice).toBe(true);
+
+      for (let index = 0; index < 5; index++) {
+        const q = await question(user, id);
+        expect(q.body.question.correctOptionIndex).toBe(await correctPosition(id, index));
+        // The options themselves are the same as without practice.
+        expect(Object.keys(q.body.question.options[0]).sort()).toEqual(["index", "text"]);
+        const res = await answer(user, id, index, q.body.question.correctOptionIndex);
+        expect(res.body.outcome).toBe("correct");
+      }
+      const result = await api().get(`${base}/${id}/result`).set(user.auth);
+      expect(result.body.result).toMatchObject({ correct: 5, total: 5 });
+    });
+
+    it("still scores a wrong pick or a timeout in practice", async () => {
+      const started = await startDefault({ practice: true });
+      const id = started.body.session.id;
+      const first = await question(user, id);
+      const wrong = await answer(user, id, 0, 1 - first.body.question.correctOptionIndex);
+      expect(wrong.body.outcome).toBe("wrong");
+
+      await question(user, id);
+      await TriviaAttemptQuestionModel.updateOne({ attemptId: id, quizIndex: 1 }, { deadlineAt: new Date(Date.now() - 5000) });
+      const late = await answer(user, id, 1, await correctPosition(id, 1));
+      expect(late.body.outcome).toBe("timeout");
+    });
+
+    it("keeps the practice setting of a session that is resumed", async () => {
+      const started = await startDefault({ practice: true });
+      const resumed = await startDefault({ practice: false });
+      expect(resumed.body.resumed).toBe(true);
+      expect(resumed.body.session.id).toBe(started.body.session.id);
+      expect(resumed.body.session.practice).toBe(true);
+    });
+
+    it("rejects a practice value that is not a boolean", async () => {
+      const res = await startDefault({ practice: "yes" });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("INVALID_PRACTICE");
+    });
+
+    it("carries on a session that was left in the old study step", async () => {
       const started = await startDefault();
       const id = started.body.session.id;
-      expect((await question(user, id)).body.code).toBe("QUIZ_NOT_STARTED");
-      await begin(user, id);
-      const study = await api().get(`${base}/${id}/study`).set(user.auth);
-      expect(study.status).toBe(409);
-      expect(study.body.code).toBe("STUDY_PHASE_OVER");
+      await TriviaAttemptModel.updateOne({ _id: id }, { status: "studying" });
+      const q = await question(user, id);
+      expect(q.status).toBe(200);
+      expect((await TriviaAttemptModel.findById(id).lean())!.status).toBe("quiz");
     });
   });
 
   describe("quiz phase", () => {
-    it("never leaks the answer in any quiz-phase response before it is settled", async () => {
+    it("never leaks the answer before it is settled when practice is off", async () => {
       const started = await startDefault();
       const id = started.body.session.id;
-      const begun = await begin(user, id);
       const q = await question(user, id);
       const state = await api().get(`${base}/${id}`).set(user.auth);
 
-      for (const body of [started.body, begun.body, q.body, state.body]) {
+      for (const body of [started.body, q.body, state.body]) {
         const keys = allKeys(body);
         for (const leaked of ["correctOptionIndex", "isCorrect", "correct", "optionOrder", "cardId", "card"]) {
           expect(keys.has(leaked)).toBe(false);
@@ -152,7 +187,6 @@ describe("Trivia (admin topics)", () => {
     it("fails a question whose time ran out, exactly like a wrong answer", async () => {
       const started = await startDefault();
       const id = started.body.session.id;
-      await begin(user, id);
       await question(user, id);
       await TriviaAttemptQuestionModel.updateOne({ attemptId: id, quizIndex: 0 }, { deadlineAt: new Date(Date.now() - 5000) });
 
@@ -172,7 +206,6 @@ describe("Trivia (admin topics)", () => {
     it("resumes after a refresh at the same question with the remaining time", async () => {
       const started = await startDefault();
       const id = started.body.session.id;
-      await begin(user, id);
       const first = await question(user, id);
       await new Promise((r) => setTimeout(r, 400));
 
@@ -195,7 +228,6 @@ describe("Trivia (admin topics)", () => {
     it("is forward-only: no skipping ahead, no changing a submitted answer", async () => {
       const started = await startDefault();
       const id = started.body.session.id;
-      await begin(user, id);
 
       const unserved = await answer(user, id, 0, 0);
       expect(unserved.body.code).toBe("QUESTION_NOT_SERVED");
@@ -244,8 +276,8 @@ describe("Trivia (admin topics)", () => {
 
       expect((await api().post(base).send({ sourceType: "topic", sourceId: topicId })).status).toBe(401);
       expect((await api().get("/api/v1/trivia/topics")).status).toBe(401);
-      expect((await api().get(`${base}/${id}/study`).set(other.auth)).status).toBe(404);
-      expect((await begin(other, id)).status).toBe(404);
+      expect((await api().get(`${base}/${id}`).set(other.auth)).status).toBe(404);
+      expect((await api().get(`${base}/${id}/question`).set(other.auth)).status).toBe(404);
       expect((await api().get(`${base}/${id}/result`).set(other.auth)).status).toBe(404);
     });
 
