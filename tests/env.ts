@@ -18,6 +18,7 @@ process.env.PAYSTACK_SECRET_KEY = "sk_test_unit_tests_only";
 process.env.FRONTEND_URL = "https://app.pazzell.test";
 process.env.AWS_ACCESS_KEY_ID = "";
 process.env.AWS_SECRET_ACCESS_KEY = "";
+process.env.ANTHROPIC_API_KEY = "";
 process.env.PAYMENT_CURRENCY = "NGN";
 process.env.PRO_PRICE_AMOUNT = "1500";
 process.env.PRO_DURATION_DAYS = "30";

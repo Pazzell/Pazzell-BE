@@ -26,6 +26,9 @@ export const CONFIG_DEFAULTS: Record<string, any> = {
   "trivia.imagePercent": envNumber("TRIVIA_IMAGE_PERCENT", 70),
   "customQuiz.freeLimit": 1,
   "customQuiz.minCardsToPublish": 5,
+  // Documents a player may turn into trivia per day (each one is a paid AI request).
+  "customQuiz.generateDailyLimitFree": envNumber("QUIZ_GENERATE_DAILY_LIMIT_FREE", 3),
+  "customQuiz.generateDailyLimitPro": envNumber("QUIZ_GENERATE_DAILY_LIMIT_PRO", 20),
   "campaign.minCardsToPublish": 5,
   "campaign.interruptionThreshold": envNumber("CAMPAIGN_INTERRUPTION_THRESHOLD", 10),
   "campaign.priceAmount": envNumber("CAMPAIGN_PRICE_AMOUNT", 15000),
@@ -229,6 +232,11 @@ export const getCustomQuizFreeLimit = async (): Promise<number> =>
 
 export const getCustomQuizMinCards = async (): Promise<number> =>
   getConfigValue<number>("customQuiz.minCardsToPublish");
+
+export const getGenerateDailyLimit = async (isPro: boolean): Promise<number> =>
+  getConfigValue<number>(
+    isPro ? "customQuiz.generateDailyLimitPro" : "customQuiz.generateDailyLimitFree"
+  );
 
 export const getCampaignMinCards = async (): Promise<number> =>
   getConfigValue<number>("campaign.minCardsToPublish");

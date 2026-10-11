@@ -40,5 +40,7 @@ export const checkoutLimiter = createRateLimiter({ windowMs: 10 * MINUTE, limit:
 export const clickLimiter = createRateLimiter({ windowMs: MINUTE, limit: 20 });
 // Image uploads
 export const uploadLimiter = createRateLimiter({ windowMs: 10 * MINUTE, limit: 60 });
+// Turning a document into trivia cards (the daily allowance is enforced separately)
+export const generateLimiter = createRateLimiter({ windowMs: 10 * MINUTE, limit: 10 });
 // Create/update of quizzes, campaigns and cards
 export const writeLimiter = createRateLimiter({ windowMs: MINUTE, limit: 120 });

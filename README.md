@@ -4,7 +4,8 @@ Backend for Pazzell: image and short-definition trivia across many topics.
 
 - **Trivia** — pick a topic, a timer and a number of cards; an optional practice mode points
   at the correct option. Image cards can be imported from Wikimedia by an admin.
-- **Custom trivia** — quizzes users create and share by link.
+- **Custom trivia** — quizzes users create and share by link. Cards can be written by hand or
+  drafted from an uploaded document (PDF, Word or text) with the Claude API, then reviewed.
 - **Brand campaigns** — sponsored trivia that freemium players play periodically.
 - **Freemium and Pro** player tiers.
 - **Wallet** — withdraw-only; holds rewards and pays them out to a bank account.
@@ -59,6 +60,7 @@ services/
   payment/               Paystack client and idempotent payment confirmation
   trivia/                The session engine shared by topics, custom quizzes and campaigns
   customQuiz/            Freemium quiz locking
+  quizGen/               Draft cards from an uploaded document (text extraction + Claude API)
   campaign/              Activation, expiry, rotation and the interruption gate
   wallet/, transfer/     Ledger and bank withdrawals
   upload/, storage/      Image validation/processing and storage providers

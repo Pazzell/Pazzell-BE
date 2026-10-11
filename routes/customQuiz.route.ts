@@ -16,10 +16,13 @@ import {
   getQuizStats,
   resolveShareLink,
   getShareLinkPlayInfo,
+  getGenerateInfo,
+  generateCards,
 } from "../controllers/customQuiz.controller";
 import { isAuthenticated } from "../utils/auth";
 import { imageUpload } from "../services/upload/image.service";
-import { linkResolveLimiter, writeLimiter } from "../middlewares/rateLimit";
+import { documentUploadMiddleware } from "../services/quizGen/extract";
+import { generateLimiter, linkResolveLimiter, writeLimiter } from "../middlewares/rateLimit";
 
 const router = express.Router();
 const image = imageUpload.single("image");
@@ -31,6 +34,16 @@ router.get(
   isAuthenticated,
   linkResolveLimiter,
   getShareLinkPlayInfo
+);
+
+// Draft cards written from an uploaded document; nothing is saved until the owner adds them
+router.get("/custom-quizzes/generate", isAuthenticated, getGenerateInfo);
+router.post(
+  "/custom-quizzes/generate",
+  isAuthenticated,
+  generateLimiter,
+  documentUploadMiddleware,
+  generateCards
 );
 
 // Owner-only from here on (ownership is enforced in the controller for every :id)

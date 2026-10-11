@@ -12,6 +12,7 @@ import { cardCountBounds, getPlayStats } from "../services/trivia/session.servic
 import { assertCanCreateCustomQuiz } from "../services/plan/policy";
 import { getPlan } from "../services/plan/plan.service";
 import { ensureQuizLocks, syncQuizLocks } from "../services/customQuiz/quizLock.service";
+import { generateDraftCards, getGenerateOptions } from "../services/quizGen/generate.service";
 import {
   getCustomQuizFreeLimit,
   getCustomQuizMinCards,
@@ -317,6 +318,26 @@ export const revokeShareLink = CatchAsyncError(async (req: Request, res: Respons
 export const getQuizStats = CatchAsyncError(async (req: Request, res: Response) => {
   const quiz = await loadOwnedQuiz(req);
   res.status(200).json({ success: true, stats: await getPlayStats("custom", String(quiz._id)) });
+});
+
+// --- Cards from a document ---------------------------------------------------------
+
+// GET /custom-quizzes/generate — what the upload screen needs: limits and today's allowance
+export const getGenerateInfo = CatchAsyncError(async (req: Request, res: Response) => {
+  res.status(200).json({ success: true, generate: await getGenerateOptions(req.user!) });
+});
+
+// POST /custom-quizzes/generate  (multipart "document", or JSON/multipart "text"; "count?")
+// Returns draft cards for review. Nothing is stored: the owner edits them and saves the
+// ones they keep through POST /custom-quizzes/:id/cards/bulk.
+export const generateCards = CatchAsyncError(async (req: Request, res: Response) => {
+  const body = req.body || {};
+  const result = await generateDraftCards(req.user!, {
+    file: req.file,
+    text: body.text,
+    count: body.count,
+  });
+  res.status(200).json({ success: true, ...result });
 });
 
 // GET /custom-quizzes/link/:slug — PUBLIC. Minimal landing info only; never the cards.
