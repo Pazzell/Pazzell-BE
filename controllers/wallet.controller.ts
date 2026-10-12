@@ -136,7 +136,13 @@ export const createWithdrawal = CatchAsyncError(
       const userId = String(req.user!._id);
       const { bankAccountId, amount, idempotencyKey } = req.body;
 
-      if (!bankAccountId || !amount || Number(amount) <= 0 || !idempotencyKey) {
+      if (
+        typeof bankAccountId !== "string" ||
+        !Number.isFinite(Number(amount)) ||
+        Number(amount) <= 0 ||
+        typeof idempotencyKey !== "string" ||
+        !idempotencyKey
+      ) {
         return next(
           new ErrorHandler(
             "bankAccountId, a positive amount, and idempotencyKey are required",
@@ -145,7 +151,8 @@ export const createWithdrawal = CatchAsyncError(
         );
       }
 
-      const existing = await WithdrawalModel.findOne({ idempotencyKey });
+      // Scoped to the caller: a key can only ever return the caller's own withdrawal.
+      const existing = await WithdrawalModel.findOne({ idempotencyKey, userId });
       if (existing) {
         return res.status(200).json({ success: true, withdrawal: existing });
       }
@@ -155,13 +162,21 @@ export const createWithdrawal = CatchAsyncError(
         return next(new ErrorHandler("Bank account not found", 404));
       }
 
-      const withdrawal = await WithdrawalModel.create({
-        userId,
-        bankAccountId,
-        amount: Number(amount),
-        status: "pending",
-        idempotencyKey,
-      });
+      let withdrawal;
+      try {
+        withdrawal = await WithdrawalModel.create({
+          userId,
+          bankAccountId,
+          amount: Number(amount),
+          status: "pending",
+          idempotencyKey,
+        });
+      } catch (e: any) {
+        if (e.code === 11000) {
+          return next(new ErrorHandler("This idempotencyKey has already been used", 409));
+        }
+        throw e;
+      }
 
       try {
         await debit({

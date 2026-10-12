@@ -1,15 +1,7 @@
 import { connectTestDB, clearTestDB, closeTestDB } from "./setup";
 import ForumThreadModel from "../models/forumThread.model";
 import ForumPostModel from "../models/forumPost.model";
-import WinnerShareSubmissionModel from "../models/winnerShareSubmission.model";
-import {
-  likePost,
-  unlikePost,
-  verifyWinnerShareSubmission,
-  rejectWinnerShareSubmission,
-  ForumError,
-} from "../services/forum.service";
-import { getUserLifetimePoints } from "../services/points/pointsLedger.service";
+import { likePost, unlikePost } from "../services/forum.service";
 
 async function createPost() {
   const thread = await ForumThreadModel.create({ title: "t", createdBy: "user-1" });
@@ -51,69 +43,6 @@ describe("Forum service", () => {
 
       const updated = await ForumPostModel.findById(post._id).lean();
       expect(updated!.likeCount).toBe(0);
-    });
-  });
-
-  describe("winner-share verification", () => {
-    it("credits 5 bonus points to the submitter on verification", async () => {
-      const submission = await WinnerShareSubmissionModel.create({
-        userId: "winner-1",
-        campaignId: "campaign-1",
-        postUrl: "https://example.com/post/1",
-        claimedLikeCount: 25,
-      });
-
-      const verified = await verifyWinnerShareSubmission(String(submission._id), "admin-1");
-      expect(verified.status).toBe("verified");
-      expect(verified.bonusPointsGranted).toBe(5);
-
-      const points = await getUserLifetimePoints("winner-1");
-      expect(points).toBe(5);
-    });
-
-    it("is idempotent — verifying an already-verified submission does not re-credit", async () => {
-      const submission = await WinnerShareSubmissionModel.create({
-        userId: "winner-2",
-        campaignId: "campaign-1",
-        postUrl: "https://example.com/post/2",
-      });
-
-      await verifyWinnerShareSubmission(String(submission._id), "admin-1");
-      await verifyWinnerShareSubmission(String(submission._id), "admin-1");
-
-      const points = await getUserLifetimePoints("winner-2");
-      expect(points).toBe(5);
-    });
-
-    it("rejects a submission and prevents later verification", async () => {
-      const submission = await WinnerShareSubmissionModel.create({
-        userId: "winner-3",
-        campaignId: "campaign-1",
-        postUrl: "https://example.com/post/3",
-      });
-
-      const rejected = await rejectWinnerShareSubmission(String(submission._id), "admin-1", "not enough likes");
-      expect(rejected.status).toBe("rejected");
-
-      await expect(
-        verifyWinnerShareSubmission(String(submission._id), "admin-1")
-      ).rejects.toBeInstanceOf(ForumError);
-
-      const points = await getUserLifetimePoints("winner-3");
-      expect(points).toBe(0);
-    });
-
-    it("cannot reject an already-verified submission", async () => {
-      const submission = await WinnerShareSubmissionModel.create({
-        userId: "winner-4",
-        campaignId: "campaign-1",
-        postUrl: "https://example.com/post/4",
-      });
-      await verifyWinnerShareSubmission(String(submission._id), "admin-1");
-
-      await expect(
-        rejectWinnerShareSubmission(String(submission._id), "admin-1")
-      ).rejects.toBeInstanceOf(ForumError);
     });
   });
 });

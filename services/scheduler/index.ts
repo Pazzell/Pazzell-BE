@@ -1,55 +1,40 @@
 import cron from "node-cron";
 import mongoose from "mongoose";
-import RaffleTicketModel from "../../models/raffleTicket.model";
-import { checkExpiredCampaigns, checkAbandonedSessions } from "../../utils/scheduler";
-import { calculateWeeklyPayouts } from "../prizePool.service";
-import { runDraw } from "../raffle.service";
 import { reconcileAllWallets } from "../wallet/wallet.service";
-import { getPreviousWeekKey } from "../../utils/weekBoundary";
+import { expireCampaigns } from "../campaign/campaign.service";
+import { lockQuizzesForExpiredPro } from "../customQuiz/quizLock.service";
+import { abandonStaleTriviaSessions } from "../trivia/session.service";
 
 /**
- * Consolidated node-cron scheduler — replaces the hand-rolled setInterval
- * jobs (utils/scheduler.ts's old startScheduler, and the monthly-leaderboard
- * setTimeout chain that used to live in server.ts) with discrete, legible
- * cron-scheduled jobs. No explicit "leaderboard reset" job is needed: the
- * weekly leaderboard is a live query bounded by the week range (see
- * services/leaderboard.service.ts), so the reset is implicit once the
- * boundary passes.
+ * node-cron scheduler. Every job here is a convenience sweep: the rules it applies
+ * (an ended campaign is never served, an expired Pro plan grants nothing, an over-limit
+ * quiz is locked) are also enforced on read, so a late or missed run is harmless.
  */
 
-export async function runWeeklyRollover(): Promise<void> {
+export async function runExpirySweep(): Promise<void> {
   if (mongoose.connection.readyState !== 1) return;
-  const weekKey = getPreviousWeekKey();
-
   try {
-    const result = await calculateWeeklyPayouts(weekKey);
-    console.log(
-      `Weekly payouts calculated for ${weekKey}: ${result.payouts?.length ?? 0} payout(s), revenue=${result.totalRevenue}`
-    );
+    const ended = await expireCampaigns();
+    if (ended > 0) console.log(`Marked ${ended} campaign(s) as ended`);
   } catch (err) {
-    console.error(`Weekly payout calculation failed for ${weekKey}:`, err);
+    console.error("Campaign expiry failed:", err);
   }
-
   try {
-    // Only campaigns that actually sold a ticket that week need a draw.
-    const campaignIds: string[] = await RaffleTicketModel.distinct("campaignId", { weekKey });
-    for (const campaignId of campaignIds) {
-      try {
-        await runDraw(campaignId, weekKey);
-      } catch (err) {
-        console.error(`Raffle draw failed for campaign ${campaignId}, week ${weekKey}:`, err);
-      }
-    }
-    console.log(`Weekly raffle draws completed for ${weekKey}: ${campaignIds.length} campaign(s)`);
+    const locked = await lockQuizzesForExpiredPro();
+    if (locked > 0) console.log(`Applied quiz locks for ${locked} expired Pro account(s)`);
   } catch (err) {
-    console.error(`Weekly raffle draw lookup failed for ${weekKey}:`, err);
+    console.error("Pro expiry sweep failed:", err);
   }
 }
 
-export async function runHourlyCampaignExpiry(): Promise<void> {
+export async function runStaleAttemptSweep(): Promise<void> {
   if (mongoose.connection.readyState !== 1) return;
-  await checkExpiredCampaigns();
-  await checkAbandonedSessions();
+  try {
+    const closed = await abandonStaleTriviaSessions();
+    if (closed > 0) console.log(`Closed ${closed} trivia session(s) as abandoned`);
+  } catch (err) {
+    console.error("Stale attempt sweep failed:", err);
+  }
 }
 
 export async function runNightlyWalletReconciliation(): Promise<void> {
@@ -70,14 +55,14 @@ export function startScheduler(): void {
   if (started) return;
   started = true;
 
-  // Monday 00:00 — weekly payout calculation + per-campaign raffle draws for the week that just ended
-  cron.schedule("0 0 * * 1", () => {
-    runWeeklyRollover().catch((err) => console.error("Weekly rollover error:", err));
+  // Every 10 minutes — campaign auto-end and Pro-expiry quiz locking
+  cron.schedule("*/10 * * * *", () => {
+    runExpirySweep().catch((err) => console.error("Expiry sweep error:", err));
   });
 
-  // Hourly — campaign auto-complete/expiry
+  // Hourly — close trivia sessions that were walked away from
   cron.schedule("0 * * * *", () => {
-    runHourlyCampaignExpiry().catch((err) => console.error("Campaign expiry check error:", err));
+    runStaleAttemptSweep().catch((err) => console.error("Stale attempt sweep error:", err));
   });
 
   // Nightly at 03:00 — wallet ledger reconciliation (defense-in-depth against the narrow
@@ -86,6 +71,6 @@ export function startScheduler(): void {
     runNightlyWalletReconciliation().catch((err) => console.error("Wallet reconciliation error:", err));
   });
 
-  // Run the expiry check immediately on startup, same as the old hand-rolled scheduler did.
-  runHourlyCampaignExpiry().catch((err) => console.error("Campaign expiry check error:", err));
+  // Run the expiry sweep immediately on startup.
+  runExpirySweep().catch((err) => console.error("Expiry sweep error:", err));
 }

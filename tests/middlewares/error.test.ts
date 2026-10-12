@@ -30,15 +30,38 @@ describe("Test ErrorMiddleware", () => {
   });
 
   it("should handle CastError", () => {
-    const error = { name: "CastError", path: "id" } as any;
+    const error = { name: "CastError", path: "id", value: "abc" } as any;
     ErrorMiddleware(error, mockReq as Request, mockRes as Response, mockNext);
 
     expect(mockRes.status).toHaveBeenCalledWith(400);
     expect(mockRes.json).toHaveBeenCalledWith({
       success: false,
-      message: "Resource not found. Invalid: id",
+      message: "Invalid id: abc. Please provide a valid ID.",
     });
   });
 
-  // Add more cases for JWT errors and duplicate keys.
+  it("should return the machine-readable code and details of an ErrorHandler", () => {
+    const error = new ErrorHandler("Play a sponsored trivia", 403, "CAMPAIGN_REQUIRED", {
+      campaign: { id: "c1" },
+    });
+    ErrorMiddleware(error, mockReq as Request, mockRes as Response, mockNext);
+
+    expect(mockRes.status).toHaveBeenCalledWith(403);
+    expect(mockRes.json).toHaveBeenCalledWith({
+      success: false,
+      message: "Play a sponsored trivia",
+      code: "CAMPAIGN_REQUIRED",
+      details: { campaign: { id: "c1" } },
+    });
+  });
+
+  it("should not expose driver or system error codes", () => {
+    const error = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    ErrorMiddleware(error, mockReq as Request, mockRes as Response, mockNext);
+
+    expect(mockRes.json).toHaveBeenCalledWith({
+      success: false,
+      message: "connect ECONNREFUSED",
+    });
+  });
 });

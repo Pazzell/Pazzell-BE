@@ -4,14 +4,7 @@ import ErrorHandler from "../utils/ErrorHandler";
 import ForumThreadModel from "../models/forumThread.model";
 import ForumPostModel from "../models/forumPost.model";
 import ForumFlagModel from "../models/forumFlag.model";
-import WinnerShareSubmissionModel from "../models/winnerShareSubmission.model";
-import {
-  likePost,
-  unlikePost,
-  verifyWinnerShareSubmission,
-  rejectWinnerShareSubmission,
-  ForumError,
-} from "../services/forum.service";
+import { likePost, unlikePost, ForumError } from "../services/forum.service";
 
 function handleForumError(error: any, next: NextFunction) {
   if (error instanceof ForumError) {
@@ -185,90 +178,6 @@ export const resolveFlag = CatchAsyncError(
       res.status(200).json({ success: true, flag });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
-    }
-  }
-);
-
-// POST /forum/winner-submissions  { campaignId, postUrl, claimedLikeCount? }
-export const createWinnerShareSubmission = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = String(req.user!._id);
-      const { campaignId, postUrl, claimedLikeCount } = req.body;
-      if (!campaignId || !postUrl) {
-        return next(new ErrorHandler("campaignId and postUrl are required", 400));
-      }
-
-      const submission = await WinnerShareSubmissionModel.create({
-        userId,
-        campaignId,
-        postUrl,
-        claimedLikeCount,
-      });
-      res.status(201).json({ success: true, submission });
-    } catch (error: any) {
-      return next(new ErrorHandler(error.message, 500));
-    }
-  }
-);
-
-// GET /forum/winner-submissions/mine
-export const getMyWinnerShareSubmissions = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = String(req.user!._id);
-      const submissions = await WinnerShareSubmissionModel.find({ userId })
-        .sort({ createdAt: -1 })
-        .lean();
-      res.status(200).json({ success: true, submissions });
-    } catch (error: any) {
-      return next(new ErrorHandler(error.message, 500));
-    }
-  }
-);
-
-// GET /forum/winner-submissions?status=submitted (admin)
-export const listWinnerShareSubmissions = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const status = req.query.status as string | undefined;
-      const filter = status ? { status } : {};
-      const submissions = await WinnerShareSubmissionModel.find(filter)
-        .sort({ createdAt: -1 })
-        .lean();
-      res.status(200).json({ success: true, submissions });
-    } catch (error: any) {
-      return next(new ErrorHandler(error.message, 500));
-    }
-  }
-);
-
-// POST /forum/winner-submissions/:id/verify  { adminNotes? } (admin)
-export const verifySubmission = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const adminId = String(req.user!._id);
-      const { id } = req.params;
-      const { adminNotes } = req.body;
-      const submission = await verifyWinnerShareSubmission(id, adminId, adminNotes);
-      res.status(200).json({ success: true, submission });
-    } catch (error: any) {
-      handleForumError(error, next);
-    }
-  }
-);
-
-// POST /forum/winner-submissions/:id/reject  { adminNotes? } (admin)
-export const rejectSubmission = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const adminId = String(req.user!._id);
-      const { id } = req.params;
-      const { adminNotes } = req.body;
-      const submission = await rejectWinnerShareSubmission(id, adminId, adminNotes);
-      res.status(200).json({ success: true, submission });
-    } catch (error: any) {
-      handleForumError(error, next);
     }
   }
 );

@@ -1,74 +1,46 @@
-import request from "supertest";
-import { app } from "../app";
-import { connectTestDB, clearTestDB, closeTestDB } from "./setup";
+import { connectTestDB, closeTestDB } from "./setup";
 import { closeRedisConnection } from "../utils/redis";
-import GameSessionModel from "../models/gameSession.model";
+import { api, resetState } from "./helpers";
+import TriviaAttemptModel from "../models/triviaAttempt.model";
 
-/** Minimal GameSession doc — only the fields getAppAnalytics cares about
- * (status, startedAt, completedAt) need to be meaningful. */
-function makeSession(overrides: Partial<any> = {}) {
-  return GameSessionModel.create({
-    userId: "user-1",
-    campaignId: "campaign-1",
-    status: "in_progress",
-    startedAt: new Date(),
-    games: [],
-    video: {},
-    quiz: { firstAttempt: null, attempts: [] },
-    pointsAwarded: 0,
-    raffleTicketAwarded: false,
-    anticheat: { flagged: false, flaggedReasons: [], voided: false },
+const trivia = (overrides: Record<string, any> = {}) =>
+  TriviaAttemptModel.create({
+    userId: `user-${Math.random()}`,
+    sourceType: "topic",
+    sourceId: "t1",
+    sourceKey: "topic:t1",
+    timerSeconds: 5,
+    cardCount: 5,
     ...overrides,
   });
-}
+const done = (at: Date) => ({ status: "completed", active: false, completedAt: at });
 
 describe("GET /api/v1/analytics/app — live stats", () => {
-  beforeAll(async () => {
-    await connectTestDB();
-  });
-  afterEach(async () => {
-    await clearTestDB();
-  });
+  beforeAll(connectTestDB);
+  afterEach(resetState);
   afterAll(async () => {
     await closeTestDB();
     await closeRedisConnection();
   });
 
-  it("does not count a session the instant it's started (no completedAt yet)", async () => {
-    await makeSession({ status: "in_progress", startedAt: new Date() });
+  it("does not count a game that is only started or was abandoned", async () => {
+    await trivia();
+    await trivia({ status: "abandoned", active: false, completedAt: new Date() });
 
-    const res = await request(app).get("/api/v1/analytics/app");
+    const res = await api().get("/api/v1/analytics/app");
     expect(res.status).toBe(200);
-    expect(res.body.analytics.totalGamesPlayed).toBe(0);
-    expect(res.body.analytics.gamesPlayedToday).toBe(0);
+    expect(res.body.analytics).toMatchObject({ totalGamesPlayed: 0, gamesPlayedToday: 0 });
   });
 
-  it("counts a session only once it's been submitted (status completed, completedAt set)", async () => {
+  it("counts finished trivia sessions, but not owner test plays", async () => {
     const now = new Date();
-    await makeSession({ status: "completed", startedAt: now, completedAt: now });
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    await trivia(done(now));
+    await trivia(done(yesterday));
+    await trivia({ ...done(now), isPreview: true });
 
-    const res = await request(app).get("/api/v1/analytics/app");
-    expect(res.body.analytics.totalGamesPlayed).toBe(1);
+    const res = await api().get("/api/v1/analytics/app");
+    expect(res.body.analytics.totalGamesPlayed).toBe(2);
     expect(res.body.analytics.gamesPlayedToday).toBe(1);
-  });
-
-  it("excludes abandoned and voided sessions from both counters", async () => {
-    const now = new Date();
-    await makeSession({ status: "abandoned", startedAt: now });
-    await makeSession({ status: "voided", startedAt: now, completedAt: now });
-
-    const res = await request(app).get("/api/v1/analytics/app");
-    expect(res.body.analytics.totalGamesPlayed).toBe(0);
-    expect(res.body.analytics.gamesPlayedToday).toBe(0);
-  });
-
-  it("excludes a session completed on a previous day from 'today', but still counts it in the total", async () => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    await makeSession({ status: "completed", startedAt: yesterday, completedAt: yesterday });
-
-    const res = await request(app).get("/api/v1/analytics/app");
-    expect(res.body.analytics.totalGamesPlayed).toBe(1);
-    expect(res.body.analytics.gamesPlayedToday).toBe(0);
   });
 });

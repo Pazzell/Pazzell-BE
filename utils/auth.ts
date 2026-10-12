@@ -3,6 +3,7 @@ import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "./ErrorHandler";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import { redis } from "./redis";
+import userModel from "../models/user.model";
 
 import 'dotenv/config';
 
@@ -19,39 +20,38 @@ declare module 'express' {
 export const isAuthenticated = CatchAsyncError(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-          // const access_token = req.cookies.access_token;
-
-          // if(!access_token){
-          //     return next(new ErrorHandler("Please login to access this resource", 400));
-          // }
-
           // Access the authorization header to validate the request
           const authHeader = req.headers.authorization;
-        
-          // made changes to fit swagger api docs
-          if (!authHeader /*|| !authHeader.startsWith("Bearer ")*/) {
+
+          if (!authHeader) {
             return res.status(401).json({ error: "Authentication Failed" });
           }
 
-        
           // Extract the token from the authorization header
-          //const token = authHeader.split(" ")[1];
-          console.log("authHeader", authHeader);
           const token = authHeader.split(" ")[1];
-          //const token = authHeader;
- 
+
           //Verify token
           const decoded = jwt.verify(token, process.env.ACCESS_TOKEN as string) as JwtPayload;
           if(!decoded){
             return next(new ErrorHandler("Access token not valid", 400));
           }
 
-          //Get user
-          const user = await redis.get(decoded.id) as any;
+          // The Redis entry proves the session is still open (logout deletes it)...
+          const session = await redis.get(decoded.id);
+          if(!session){
+            return next(new ErrorHandler("User not found", 400));
+          }
+
+          // ...but role, plan and counters are always read fresh from MongoDB, so a
+          // cached session can never grant a stale role or an expired Pro plan.
+          const user = await userModel.findById(decoded.id).select("-password");
           if(!user){
             return next(new ErrorHandler("User not found", 400));
           }
-          req.user = JSON.parse(user);
+          // toObject() applies schema defaults (e.g. role "gamer" on old accounts that
+          // never stored one). _id stays a plain string, as it was when req.user came
+          // from the Redis JSON.
+          req.user = { ...user.toObject(), _id: String(user._id) } as unknown as IUser;
           next();
 
       } catch (error: any) {

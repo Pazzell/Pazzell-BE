@@ -3,25 +3,38 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
 import authRouter from "./routes/auth.route";
-import campaignRouter from "./routes/campaign.route";
-import brandRouter from "./routes/brand.route";
-import leaderboardRouter from "./routes/leaderboard.route";
 import userRouter from "./routes/user.route";
-import packageRouter from "./routes/package.route";
-import paymentRouter from "./routes/payment.route";
+import planRouter from "./routes/plan.route";
+import triviaRouter from "./routes/trivia.route";
+import customQuizRouter from "./routes/customQuiz.route";
+import campaignRouter from "./routes/campaign.route";
+import uploadRouter from "./routes/upload.route";
+import adminRouter from "./routes/admin.route";
 import analyticsRouter from "./routes/analytics.route";
-import referralRouter from "./routes/referral.route";
 import configRouter from "./routes/config.route";
-import sessionRouter from "./routes/session.route";
 import walletRouter from "./routes/wallet.route";
-import raffleRouter from "./routes/raffle.route";
 import forumRouter from "./routes/forum.route";
 import { ErrorMiddleware } from "./middlewares/error";
 
 const app = express();
 
-//body parser
-app.use(express.json({ limit: "50mb" }));
+// Behind a load balancer the client IP (used by the rate limiters) is in X-Forwarded-For.
+// Set TRUST_PROXY to the number of proxy hops in front of the app (e.g. 1).
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY);
+  app.set("trust proxy", Number.isNaN(hops) ? process.env.TRUST_PROXY : hops);
+}
+
+//body parser — keeps the raw bytes so webhook signatures are verified against
+//exactly what the gateway sent
+app.use(
+  express.json({
+    limit: "1mb",
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf;
+    },
+  })
+);
 
 //cookie parser
 app.use(cookieParser());
@@ -37,19 +50,17 @@ app.use(
 app.use(
   "/api/v1",
   authRouter,
-  campaignRouter,
-  brandRouter,
-  referralRouter,
-  leaderboardRouter,
   userRouter,
-  packageRouter,
-  paymentRouter,
+  planRouter,
+  triviaRouter,
+  customQuizRouter,
+  campaignRouter,
+  uploadRouter,
   analyticsRouter,
   configRouter,
-  sessionRouter,
   walletRouter,
-  raffleRouter,
-  forumRouter
+  forumRouter,
+  adminRouter
 );
 
 //testing api
@@ -61,14 +72,14 @@ app.use("/test", (req: Request, res: Response) => {
 });
 
 //Simple welcome page
-app.use("/", (req: Request, res: Response) => {
+app.get("/", (req: Request, res: Response) => {
   res.send(`
     <!DOCTYPE html>
     <html lang="en">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>TexResolve API</title>
+      <title>Pazzell API</title>
       <style>
         body {
           font-family: Arial, sans-serif;
@@ -83,25 +94,11 @@ app.use("/", (req: Request, res: Response) => {
           font-size: 18px;
           color: #555;
         }
-        a {
-          display: inline-block;
-          margin-top: 20px;
-          padding: 10px 20px;
-          font-size: 18px;
-          text-decoration: none;
-          color: white;
-          background-color: #007bff;
-          border-radius: 5px;
-        }
-        a:hover {
-          background-color: #0056b3;
-        }
       </style>
     </head>
     <body>
-      <h1>Welcome to TexResolve API</h1>
-      <p>Explore the API documentation to integrate and use TexResolve effectively.</p>
-      <a href="https://backend-api-docs.onrender.com/" target="_blank">View API Documentation</a>
+      <h1>Welcome to the Pazzell API</h1>
+      <p>Image and short-definition trivia across many topics. The API lives under /api/v1.</p>
     </body>
     </html>
   `);

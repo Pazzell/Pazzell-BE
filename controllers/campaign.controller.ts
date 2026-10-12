@@ -1,641 +1,385 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import PuzzleCampaignModel from "../models/puzzleCampaign.model";
-import UserModel from "../models/user.model";
-import PackageModel from "../models/package.model";
+import CampaignModel, { ICampaign } from "../models/campaign.model";
+import CampaignCardModel from "../models/campaignCard.model";
 import BrandModel from "../models/brand.model";
-import { getStorageService } from "../services/storage/storageFactory";
-import { hasFirstCompletion } from "../services/session/gameSession.service";
-import axios from "axios";
+import PaymentModel from "../models/payment.model";
+import {
+  assertObjectId,
+  cleanString,
+  parseHttpUrl,
+  requireString,
+} from "../utils/validators";
+import { resolveImage } from "../services/upload/image.service";
+import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
+import { cardCountBounds } from "../services/trivia/session.service";
+import { startCheckout } from "../services/payment/payment.service";
+import { getCampaignMinCards, getCampaignPricing } from "../services/config/config.service";
+import {
+  getCampaignGateState,
+  getCampaignStats,
+  isServable,
+  pickCampaignForPlayer,
+  publicCampaign,
+  recordUrlClick,
+} from "../services/campaign/campaign.service";
 
-// Helper function to check and update expired campaigns
-const updateExpiredCampaigns = async () => {
-  const now = new Date();
-  await PuzzleCampaignModel.updateMany(
-    {
-      status: "active",
-      paymentStatus: "paid",
-      endDate: { $lt: now },
-    },
-    {
-      $set: { status: "ended" },
-    }
-  );
-};
+// A pending checkout younger than this is handed back instead of opening a second one,
+// so an impatient double click cannot charge a brand twice for the same campaign.
+const CHECKOUT_REUSE_MS = 30 * 60 * 1000;
 
-const CAMPAIGN_LIST_FIELDS =
-  "_id brandId packageId gameTypes title description brandUrl campaignUrl videoUrl videoDurationSeconds videoSizeBytes videoMimeType puzzleImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId prizeDescription prizeUnitsAvailable durationWeeks weeklyPrice startDate endDate createdAt";
+const brandCampaign = (campaign: any, cardCount: number) => ({
+  id: String(campaign._id),
+  brandName: campaign.brandName,
+  logoUrl: campaign.logoUrl,
+  websiteUrl: campaign.websiteUrl,
+  ctaText: campaign.ctaText || null,
+  title: campaign.title,
+  description: campaign.description || null,
+  coverImageUrl: campaign.coverImageUrl || null,
+  tags: campaign.tags || [],
+  // A live campaign past its end date reads as ended even before the scheduler runs.
+  status:
+    campaign.status === "live" && !isServable(campaign) ? "ended" : campaign.status,
+  startsAt: campaign.startsAt || null,
+  endsAt: campaign.endsAt || null,
+  moderationReason: campaign.moderationReason || null,
+  cardCount,
+  createdAt: campaign.createdAt,
+  updatedAt: campaign.updatedAt,
+});
 
-function mapCampaignListItem(
-  campaign: any,
-  extra: { packageName: string | null; brandName: string }
-) {
-  return {
-    _id: campaign._id,
-    brandId: campaign.brandId,
-    packageId: campaign.packageId,
-    packageName: extra.packageName,
-    brandName: extra.brandName,
-    gameTypes: campaign.gameTypes,
-    title: campaign.title,
-    description: campaign.description,
-    brandUrl: campaign.brandUrl,
-    campaignUrl: campaign.campaignUrl,
-    videoUrl: campaign.videoUrl || null,
-    videoDurationSeconds: campaign.videoDurationSeconds || null,
-    videoSizeBytes: campaign.videoSizeBytes || null,
-    videoMimeType: campaign.videoMimeType || null,
-    puzzleImageUrl: campaign.puzzleImageUrl,
-    timeLimit: campaign.timeLimit,
-    questions: campaign.questions,
-    words: campaign.words,
-    status: campaign.status,
-    paymentStatus: campaign.paymentStatus || "unpaid",
-    packageType: campaign.packageType || null,
-    totalBudget: campaign.totalBudget || 0,
-    dailyAllocation: campaign.dailyAllocation || 0,
-    budgetRemaining: campaign.budgetRemaining || 0,
-    budgetUsed: campaign.budgetUsed || 0,
-    transactionId: campaign.transactionId || null,
-    prizeDescription: campaign.prizeDescription || null,
-    prizeUnitsAvailable: campaign.prizeUnitsAvailable || 1,
-    durationWeeks: campaign.durationWeeks || null,
-    weeklyPrice: campaign.weeklyPrice || null,
-    startDate: campaign.startDate,
-    endDate: campaign.endDate,
-    createdAt: campaign.createdAt,
-  };
+/** Loads a campaign owned by the calling brand. 404 for any other brand. */
+async function loadOwnedCampaign(req: Request): Promise<ICampaign> {
+  const campaign = await CampaignModel.findOne({
+    _id: assertObjectId(req.params.id, "campaign id"),
+    brandId: String(req.user!._id),
+  });
+  if (!campaign) throw new ErrorHandler("Campaign not found", 404, "CAMPAIGN_NOT_FOUND");
+  return campaign;
 }
 
-// Get active campaigns only (with brand name included)
-export const getActiveCampaigns = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
+function assertDraft(campaign: ICampaign) {
+  if (campaign.status !== "draft") {
+    throw new ErrorHandler(
+      "A campaign can only be edited while it is a draft",
+      409,
+      "CAMPAIGN_NOT_EDITABLE",
+      { status: campaign.status }
+    );
+  }
+}
+
+function parseTags(raw: any): string[] | undefined {
+  if (raw === undefined) return undefined;
+  let value = raw;
+  if (typeof value === "string") {
     try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
-
-      const { gameType } = req.query;
-
-      // Build filter for active campaigns only
-      const filter: any = { status: "active" };
-      const validGameTypes = [
-        "sliding_puzzle",
-        "card_matching",
-        "spot_the_difference",
-        "word_hunt",
-      ];
-      if (gameType && validGameTypes.includes(gameType as string)) {
-        filter.gameTypes = gameType;
-      }
-
-      const campaigns = await PuzzleCampaignModel.find(filter)
-        .select(CAMPAIGN_LIST_FIELDS)
-        .lean();
-
-      // Fetch brand names and package names for all campaigns
-      const campaignsWithBrand = await Promise.all(
-        campaigns.map(async (campaign) => {
-          const brand = await UserModel.findById(campaign.brandId)
-            .select("name companyName")
-            .lean();
-          const packageData = await PackageModel.findById(campaign.packageId)
-            .select("name")
-            .lean();
-          return mapCampaignListItem(campaign, {
-            packageName: packageData?.name || null,
-            brandName: brand?.companyName || brand?.name || "Unknown Brand",
-          });
-        })
-      );
-
-      res.status(200).json({ success: true, campaigns: campaignsWithBrand });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to fetch active campaigns: ${error.message}`,
-          500
-        )
-      );
+      value = JSON.parse(value);
+    } catch {
+      value = value.split(",");
     }
   }
-);
-
-// Get all campaigns (with brand name included)
-export const getAllCampaigns = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
-
-      const { gameType, status, paymentStatus } = req.query;
-
-      // Build filter
-      const filter: any = {};
-      const validGameTypes = [
-        "sliding_puzzle",
-        "card_matching",
-        "spot_the_difference",
-        "word_hunt",
-      ];
-      if (gameType && validGameTypes.includes(gameType as string)) {
-        filter.gameTypes = gameType;
-      }
-
-      // Filter by status if provided
-      const validStatuses = ["active", "ended", "draft"];
-      if (status && validStatuses.includes(status as string)) {
-        filter.status = status;
-      }
-
-      // Filter by paymentStatus if provided
-      const validPaymentStatuses = ["unpaid", "paid", "partial"];
-      if (
-        paymentStatus &&
-        validPaymentStatuses.includes(paymentStatus as string)
-      ) {
-        filter.paymentStatus = paymentStatus;
-      }
-
-      const campaigns = await PuzzleCampaignModel.find(filter)
-        .select(CAMPAIGN_LIST_FIELDS)
-        .lean();
-
-      // Fetch brand names and package names for all campaigns
-      const campaignsWithBrand = await Promise.all(
-        campaigns.map(async (campaign) => {
-          const brand = await UserModel.findById(campaign.brandId)
-            .select("name companyName")
-            .lean();
-          const packageData = await PackageModel.findById(campaign.packageId)
-            .select("name")
-            .lean();
-          return mapCampaignListItem(campaign, {
-            packageName: packageData?.name || null,
-            brandName: brand?.companyName || brand?.name || "Unknown Brand",
-          });
-        })
-      );
-
-      res.status(200).json({ success: true, campaigns: campaignsWithBrand });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to fetch campaigns: ${error.message}`, 500)
-      );
-    }
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new ErrorHandler("tags must be a list of at most 8 short labels", 400);
   }
-);
-
-// Get campaigns by brandId
-export const getCampaignsByBrand = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
-
-      const { brandId } = req.params;
-
-      const campaigns = await PuzzleCampaignModel.find({ brandId })
-        .select(CAMPAIGN_LIST_FIELDS)
-        .lean();
-
-      if (!campaigns || campaigns.length === 0) {
-        return res.status(200).json({ success: true, campaigns: [] });
-      }
-
-      // Fetch brand name
-      const brand = await UserModel.findById(brandId)
-        .select("name companyName")
-        .lean();
-      const brandName = brand?.companyName || brand?.name || "Unknown Brand";
-
-      // Fetch package names for all campaigns
-      const campaignsWithBrand = await Promise.all(
-        campaigns.map(async (campaign) => {
-          const packageData = await PackageModel.findById(campaign.packageId)
-            .select("name")
-            .lean();
-          return mapCampaignListItem(campaign, {
-            packageName: packageData?.name || null,
-            brandName,
-          });
-        })
-      );
-
-      res.status(200).json({ success: true, campaigns: campaignsWithBrand });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to fetch campaigns for brand: ${error.message}`,
-          500
-        )
-      );
-    }
+  const tags = value
+    .map((t: any) => (typeof t === "string" ? t.trim().toLowerCase() : ""))
+    .filter(Boolean);
+  if (tags.some((t: string) => t.length > 24)) {
+    throw new ErrorHandler("Each tag must be at most 24 characters", 400);
   }
-);
+  return Array.from(new Set<string>(tags));
+}
 
-// Get single campaign by campaignId (with brand name)
-export const getCampaignById = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
+const fileOf = (req: Request, field: string) =>
+  ((req.files as Record<string, Express.Multer.File[]> | undefined) || {})[field]?.[0];
 
-      const { campaignId } = req.params;
-      const campaign = await PuzzleCampaignModel.findById(campaignId).lean();
+// GET /brand/campaigns/pricing — the flat price and duration
+export const getPricing = CatchAsyncError(async (req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    pricing: await getCampaignPricing(),
+    minCardsToPublish: await getCampaignMinCards(),
+  });
+});
 
-      if (!campaign) {
-        return next(new ErrorHandler("Campaign not found", 404));
-      }
+// POST /brand/campaigns  (multipart with optional "logo" and "cover" files, or JSON)
+// Brand name, logo and website default to the brand profile when omitted.
+export const createCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const brandId = String(req.user!._id);
+  const body = req.body || {};
+  const profile = await BrandModel.findOne({ userId: brandId }).lean();
 
-      // Fetch brand name and package name
-      const brand = await UserModel.findById(campaign.brandId)
-        .select("name companyName")
-        .lean();
-      const brandName = brand?.companyName || brand?.name || "Unknown Brand";
-      const packageData = await PackageModel.findById(campaign.packageId)
-        .select("name")
-        .lean();
+  const logoUrl =
+    (await resolveImage(fileOf(req, "logo"), body.logoUrl, brandId, "logos")) || profile?.logoUrl;
+  if (!logoUrl) throw new ErrorHandler("A brand logo is required", 400, "IMAGE_REQUIRED");
 
-      res.status(200).json({
-        success: true,
-        campaign: {
-          ...mapCampaignListItem(campaign, {
-            packageName: packageData?.name || null,
-            brandName,
-          }),
-          questions: campaign.questions.map((q: any) => ({
-            question: q.question,
-            choices: q.choices,
-            correctIndex: q.correctIndex,
-          })),
+  const website = body.websiteUrl || profile?.websiteUrl;
+  const campaign = await CampaignModel.create({
+    brandId,
+    brandName: requireString(body.brandName || profile?.companyName, "brandName", 80),
+    logoUrl,
+    websiteUrl: parseHttpUrl(website, "websiteUrl"),
+    ctaText: cleanString(body.ctaText, 40),
+    title: requireString(body.title, "title", 80),
+    description: cleanString(body.description, 300),
+    coverImageUrl: await resolveImage(fileOf(req, "cover"), body.coverImageUrl, brandId, "covers"),
+    tags: parseTags(body.tags) || [],
+  });
+  res.status(201).json({ success: true, campaign: brandCampaign(campaign, 0) });
+});
+
+// GET /brand/campaigns
+export const listMyCampaigns = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaigns = await CampaignModel.find({ brandId: String(req.user!._id) })
+    .sort({ createdAt: -1 })
+    .lean();
+  const counts = await CampaignCardModel.aggregate([
+    { $match: { campaignId: { $in: campaigns.map((c) => String(c._id)) } } },
+    { $group: { _id: "$campaignId", count: { $sum: 1 } } },
+  ]);
+  const countOf = new Map(counts.map((c) => [c._id, c.count]));
+  res.status(200).json({
+    success: true,
+    campaigns: campaigns.map((c) => brandCampaign(c, countOf.get(String(c._id)) || 0)),
+  });
+});
+
+// GET /brand/campaigns/:id  and  /brand/campaigns/:id/preview — everything, answers included
+export const getMyCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  const cards = await CampaignCardModel.find({ campaignId: String(campaign._id) })
+    .sort({ createdAt: 1 })
+    .lean();
+  res.status(200).json({
+    success: true,
+    campaign: brandCampaign(campaign, cards.length),
+    cards: cards.map(editorCard),
+    pricing: await getCampaignPricing(),
+    minCardsToPublish: await getCampaignMinCards(),
+    cardCountBounds: await cardCountBounds(cards.length),
+  });
+});
+
+// PATCH /brand/campaigns/:id — draft only
+export const updateCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const brandId = campaign.brandId;
+  const body = req.body || {};
+
+  if (body.brandName !== undefined) campaign.brandName = requireString(body.brandName, "brandName", 80);
+  if (body.title !== undefined) campaign.title = requireString(body.title, "title", 80);
+  if (body.websiteUrl !== undefined) campaign.websiteUrl = parseHttpUrl(body.websiteUrl, "websiteUrl");
+  if (body.ctaText !== undefined) campaign.ctaText = cleanString(body.ctaText, 40);
+  if (body.description !== undefined) campaign.description = cleanString(body.description, 300);
+  const tags = parseTags(body.tags);
+  if (tags) campaign.tags = tags;
+  const logo = await resolveImage(fileOf(req, "logo"), body.logoUrl, brandId, "logos");
+  if (logo) campaign.logoUrl = logo;
+  const cover = await resolveImage(fileOf(req, "cover"), body.coverImageUrl, brandId, "covers");
+  if (cover) campaign.coverImageUrl = cover;
+
+  await campaign.save();
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  res.status(200).json({ success: true, campaign: brandCampaign(campaign, count) });
+});
+
+// DELETE /brand/campaigns/:id — draft only
+export const deleteCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  await CampaignCardModel.deleteMany({ campaignId: String(campaign._id) });
+  await campaign.deleteOne();
+  res.status(200).json({ success: true });
+});
+
+// --- Cards (draft only) -------------------------------------------------------------
+
+// POST /brand/campaigns/:id/cards  (multipart with "image", or JSON)
+export const createCard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const content = await buildCardContent(req.body, req.file, campaign.brandId, "cards");
+  const card = await CampaignCardModel.create({ campaignId: String(campaign._id), ...content });
+  res.status(201).json({ success: true, card: editorCard(card) });
+});
+
+// POST /brand/campaigns/:id/cards/bulk  { cards: [...] }
+export const bulkCreateCards = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const contents = await buildBulkCards(req.body, campaign.brandId, "cards");
+  const cards = await CampaignCardModel.insertMany(
+    contents.map((content) => ({ campaignId: String(campaign._id), ...content }))
+  );
+  res.status(201).json({ success: true, created: cards.length, cards: cards.map(editorCard) });
+});
+
+async function loadCampaignCard(campaign: ICampaign, cardId: string) {
+  const card = await CampaignCardModel.findOne({
+    _id: assertObjectId(cardId, "card id"),
+    campaignId: String(campaign._id),
+  });
+  if (!card) throw new ErrorHandler("Card not found", 404, "CARD_NOT_FOUND");
+  return card;
+}
+
+// PATCH /brand/campaigns/:id/cards/:cardId
+export const updateCard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const card = await loadCampaignCard(campaign, req.params.cardId);
+  const content = await buildCardContent(req.body, req.file, campaign.brandId, "cards", card);
+  card.set(content);
+  if (content.type === "definition") card.imageUrl = undefined;
+  await card.save();
+  res.status(200).json({ success: true, card: editorCard(card) });
+});
+
+// DELETE /brand/campaigns/:id/cards/:cardId
+export const deleteCard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const card = await loadCampaignCard(campaign, req.params.cardId);
+  await card.deleteOne();
+  res.status(200).json({ success: true });
+});
+
+// --- Payment --------------------------------------------------------------------------
+
+// POST /brand/campaigns/:id/checkout  { idempotencyKey? }
+// draft -> awaiting_payment. The campaign goes live only when the payment is confirmed
+// by the gateway (webhook or server-side verification) — never from this response.
+export const startCampaignCheckout = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  if (campaign.status !== "draft" && campaign.status !== "awaiting_payment") {
+    throw new ErrorHandler(
+      "This campaign has already been paid for or is not payable",
+      409,
+      "CAMPAIGN_NOT_PAYABLE",
+      { status: campaign.status }
+    );
+  }
+
+  const min = await getCampaignMinCards();
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  if (count < min) {
+    throw new ErrorHandler(
+      `A campaign needs at least ${min} cards before it can be published.`,
+      400,
+      "MIN_CARDS_REQUIRED",
+      { minCards: min, cardCount: count }
+    );
+  }
+
+  const respond = (payment: any, authorizationUrl: string, created: boolean) =>
+    res.status(created ? 201 : 200).json({
+      success: true,
+      checkout: {
+        authorizationUrl,
+        reference: payment.reference,
+        payment: {
+          id: String(payment._id),
+          purpose: payment.purpose,
+          campaignId: payment.campaignId,
+          amount: payment.amount,
+          currency: payment.currency,
+          durationDays: payment.durationDays,
+          status: payment.status,
         },
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to fetch campaign details: ${error.message}`,
-          500
-        )
-      );
-    }
-  }
-);
-
-// Check if current user has completed a campaign. Also drives the "replay is
-// just for fun" client-side warning, based on the GameSession
-// first-completion guard.
-export const checkCampaignCompletion = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { campaignId } = req.params;
-      const user = req.user as any;
-      const userId = user && user._id ? String(user._id) : undefined;
-
-      if (!userId) {
-        return next(new ErrorHandler("User not authenticated", 401));
-      }
-
-      const hasCompletedByCurrentUser = await hasFirstCompletion(userId, campaignId);
-
-      res.status(200).json({
-        success: true,
-        hasCompletedByCurrentUser,
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to check campaign completion status: ${error.message}`,
-          500
-        )
-      );
-    }
-  }
-);
-
-// ---------------------------------------------------------------------------
-// AI provider helper — controlled by .env
-//
-//  To use OpenAI (ChatGPT):
-//    AI_PROVIDER=openai
-//    OPENAI_API_KEY=sk-...
-//
-//  To use Anthropic (Claude):
-//    AI_PROVIDER=claude
-//    ANTHROPIC_API_KEY=sk-ant-...
-//
-//  To use Google Gemini:
-//    AI_PROVIDER=gemini
-//    GEMINI_API_KEY=AIza...
-//
-//  When AI_PROVIDER is not set it defaults to "openai".
-// ---------------------------------------------------------------------------
-
-const AI_PROMPT = (passage: string) =>
-  `Generate exactly 5 multiple-choice quiz questions based on the following short passage about a brand:\n\n"${passage}"\n\nRules:\n- Each question must have exactly 4 answer choices\n- Only one choice is correct per question\n- All questions must be answerable directly from the passage\n- Keep questions clear and concise\n- correctIndex must be the 0-based index (0, 1, 2, or 3) of the correct choice\n\nReturn ONLY a valid JSON array with no extra text, in this exact structure:\n[\n  {\n    "question": "Question text?",\n    "choices": ["Choice A", "Choice B", "Choice C", "Choice D"],\n    "correctIndex": 0\n  }\n]`;
-
-async function callOpenAI(prompt: string): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-
-  const response = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: "gpt-4o-mini",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
       },
-    }
+      campaign: { id: String(campaign._id), status: "awaiting_payment" },
+    });
+
+  const idempotencyKey = cleanString(req.body?.idempotencyKey, 100);
+  if (!idempotencyKey) {
+    const recent = await PaymentModel.findOne({
+      campaignId: String(campaign._id),
+      userId: campaign.brandId,
+      status: "pending",
+      authorizationUrl: { $exists: true },
+      createdAt: { $gt: new Date(Date.now() - CHECKOUT_REUSE_MS) },
+    }).sort({ createdAt: -1 });
+    if (recent) return respond(recent, recent.authorizationUrl!, false);
+  }
+
+  const checkout = await startCheckout({
+    user: { _id: req.user!._id, email: req.user!.email },
+    purpose: "campaign",
+    campaignId: String(campaign._id),
+    idempotencyKey,
+  });
+  await CampaignModel.updateOne(
+    { _id: campaign._id, status: "draft" },
+    { $set: { status: "awaiting_payment" } }
   );
+  respond(checkout.payment, checkout.authorizationUrl, !checkout.reused);
+});
 
-  const data = response.data as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  return data?.choices?.[0]?.message?.content || "";
-}
-
-async function callClaude(prompt: string): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
-
-  const response = await axios.post(
-    "https://api.anthropic.com/v1/messages",
-    {
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }],
-    },
-    {
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-      },
-    }
+// POST /brand/campaigns/:id/cancel-checkout — awaiting_payment -> draft, to edit again
+export const cancelCampaignCheckout = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  await CampaignModel.updateOne(
+    { _id: campaign._id, status: "awaiting_payment" },
+    { $set: { status: "draft" } }
   );
+  const fresh = (await CampaignModel.findById(campaign._id).lean())!;
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  res.status(200).json({ success: true, campaign: brandCampaign(fresh, count) });
+});
 
-  const data = response.data as { content?: Array<{ text?: string }> };
-  return data?.content?.[0]?.text || "";
-}
+// GET /brand/campaigns/:id/dashboard
+export const getDashboard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  res.status(200).json({
+    success: true,
+    campaign: brandCampaign(campaign, count),
+    dashboard: await getCampaignStats(campaign),
+  });
+});
 
-async function callGemini(prompt: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+// --- Players --------------------------------------------------------------------------
 
-  const response = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 1024 },
-    },
-    { headers: { "Content-Type": "application/json" } }
-  );
+// GET /campaigns/next — whether a campaign is owed, and which campaign to play next
+export const getNextCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const gate = await getCampaignGateState(req.user!);
+  const suggestion =
+    gate.campaign ||
+    (await pickCampaignForPlayer(String(req.user!._id)).then((c) => (c ? publicCampaign(c) : null)));
+  res.status(200).json({
+    success: true,
+    required: gate.required,
+    counter: gate.counter,
+    threshold: gate.threshold,
+    campaign: suggestion,
+  });
+});
 
-  const data = response.data as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-}
-
-// Generate 5 quiz questions from a brand passage using the configured AI provider
-export const generateCampaignQuestions = CatchAsyncError(
+// GET /campaigns/:id — brand info for a running campaign (no cards)
+export const getCampaignInfo = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const user = req.user as any;
-      if (!user || user.role !== "brand") {
-        return next(
-          new ErrorHandler("Only brands can generate quiz questions", 403)
-        );
-      }
-
-      const { passage } = req.body;
-      if (!passage || typeof passage !== "string" || passage.trim() === "") {
-        return next(new ErrorHandler("passage is required", 400));
-      }
-      const trimmedPassage = passage.trim();
-      if (trimmedPassage.length > 1000) {
-        return next(
-          new ErrorHandler("passage must be 1000 characters or less", 400)
-        );
-      }
-
-      // Switch between AI providers based on AI_PROVIDER env var (defaults to openai)
-      const provider = (process.env.AI_PROVIDER || "openai").toLowerCase();
-      let rawText: string;
-
-      if (provider === "claude") {
-        rawText = await callClaude(AI_PROMPT(trimmedPassage));
-      } else if (provider === "gemini") {
-        rawText = await callGemini(AI_PROMPT(trimmedPassage));
-      } else {
-        rawText = await callOpenAI(AI_PROMPT(trimmedPassage));
-      }
-
-      // Extract the JSON array from the response text
-      const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        return next(
-          new ErrorHandler(
-            "AI returned an unexpected response. Please try again.",
-            500
-          )
-        );
-      }
-
-      let questions: any[];
-      try {
-        questions = JSON.parse(jsonMatch[0]);
-      } catch {
-        return next(
-          new ErrorHandler("AI returned malformed JSON. Please try again.", 500)
-        );
-      }
-
-      if (!Array.isArray(questions) || questions.length === 0) {
-        return next(
-          new ErrorHandler("AI did not return any questions. Please try again.", 500)
-        );
-      }
-
-      // Validate and normalise each question
-      const validated = questions.slice(0, 5).map((q: any, idx: number) => {
-        if (
-          typeof q.question !== "string" ||
-          !Array.isArray(q.choices) ||
-          q.choices.length < 2 ||
-          typeof q.correctIndex !== "number"
-        ) {
-          throw new Error(`Question ${idx + 1} has an invalid format`);
-        }
-        return {
-          question: q.question,
-          choices: q.choices.slice(0, 4).map(String),
-          correctIndex: Math.max(0, Math.min(q.correctIndex, q.choices.length - 1)),
-        };
-      });
-
-      res.status(200).json({ success: true, questions: validated, provider });
-    } catch (error: any) {
-      const provider = (process.env.AI_PROVIDER || "openai").toLowerCase();
-      if (error.response?.status === 401) {
-        return next(new ErrorHandler(`AI service (${provider}) authentication failed — check your API key`, 500));
-      }
-      if (error.response?.status === 429) {
-        const providerMsg =
-          error.response?.data?.error?.message ||
-          error.response?.data?.error?.code ||
-          error.response?.data?.message ||
-          "rate limit exceeded";
-        return next(
-          new ErrorHandler(
-            `AI service (${provider}) rate limited: ${providerMsg}`,
-            429
-          )
-        );
-      }
-      return next(
-        new ErrorHandler(`Failed to generate questions (${provider}): ${error.message}`, 500)
-      );
+    const campaign = await CampaignModel.findById(assertObjectId(req.params.id, "campaign id"));
+    if (!campaign || !isServable(campaign)) {
+      return next(new ErrorHandler("This campaign is not running", 404, "CAMPAIGN_NOT_AVAILABLE"));
     }
+    const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+    res.status(200).json({
+      success: true,
+      campaign: publicCampaign(campaign),
+      cardCountBounds: await cardCountBounds(count),
+    });
   }
 );
 
-// Update a campaign (brands can edit their own campaigns)
-export const updateCampaign = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { campaignId } = req.params;
-      const user = req.user as any;
-
-      if (!user) return next(new ErrorHandler("User not authenticated", 401));
-
-      const campaign = await PuzzleCampaignModel.findById(campaignId);
-      if (!campaign) return next(new ErrorHandler("Campaign not found", 404));
-
-      // Only the owning brand or admins can update
-      if (user.role === "brand") {
-        if (String(campaign.brandId) !== String(user._id)) {
-          return next(
-            new ErrorHandler("Not authorized to edit this campaign", 403)
-          );
-        }
-      } else if (user.role !== "admin") {
-        return next(
-          new ErrorHandler("Not authorized to edit this campaign", 403)
-        );
-      }
-
-      // Multipart fields arrive as strings — coerce before using
-      const body = req.body as any;
-      const updates: any = {};
-
-      const stringFields = ["title", "description", "startDate", "endDate", "status", "paymentStatus", "brandUrl", "campaignUrl", "videoUrl"];
-      for (const key of stringFields) {
-        if (body[key] !== undefined) updates[key] = body[key];
-      }
-
-      if (body.timeLimit !== undefined) updates.timeLimit = Number(body.timeLimit);
-      if (body.totalBudget !== undefined) updates.totalBudget = Number(body.totalBudget);
-      if (body.dailyAllocation !== undefined) updates.dailyAllocation = Number(body.dailyAllocation);
-      if (body.budgetRemaining !== undefined) updates.budgetRemaining = Number(body.budgetRemaining);
-      if (body.budgetUsed !== undefined) updates.budgetUsed = Number(body.budgetUsed);
-
-      if (body.questions !== undefined) {
-        updates.questions = typeof body.questions === "string" ? JSON.parse(body.questions) : body.questions;
-      }
-      if (body.words !== undefined) {
-        updates.words = typeof body.words === "string" ? JSON.parse(body.words) : body.words;
-      }
-
-      // Handle optional image replacement
-      const uploadedFile = (req as any).file;
-      if (uploadedFile) {
-        const storage = getStorageService();
-        const now = Date.now();
-        const fileName = `${now}-${uploadedFile.originalname}`;
-        const result = await storage.uploadFile({
-          buffer: uploadedFile.buffer,
-          mimetype: uploadedFile.mimetype,
-          originalname: fileName,
-          folder: "puzzles",
-          fileName,
-        });
-        updates.puzzleImageUrl = result.url;
-      }
-
-      const updated = await PuzzleCampaignModel.findByIdAndUpdate(
-        campaignId,
-        { $set: updates },
-        { new: true }
-      ).lean();
-
-      if (!updated) return next(new ErrorHandler("Campaign not found", 404));
-
-      // Enrich response with brandName/packageName, matching the shape
-      // returned by the other campaign endpoints (get/list).
-      const brand = await UserModel.findById(updated.brandId)
-        .select("name companyName")
-        .lean();
-      const packageData = await PackageModel.findById(updated.packageId)
-        .select("name")
-        .lean();
-
-      res.status(200).json({
-        success: true,
-        campaign: {
-          ...updated,
-          brandName: brand?.companyName || brand?.name || "Unknown Brand",
-          packageName: packageData?.name || null,
-        },
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to update campaign: ${error.message}`, 500)
-      );
-    }
-  }
-);
-
-// Delete a campaign (brands can delete their own campaigns)
-export const deleteCampaign = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { campaignId } = req.params;
-      const user = req.user as any;
-
-      if (!user) return next(new ErrorHandler("User not authenticated", 401));
-
-      const campaign = await PuzzleCampaignModel.findById(campaignId);
-      if (!campaign) return next(new ErrorHandler("Campaign not found", 404));
-
-      // Only the owning brand or admins can delete
-      if (
-        user.role === "brand" &&
-        String(campaign.brandId) !== String(user._id)
-      ) {
-        return next(
-          new ErrorHandler("Not authorized to delete this campaign", 403)
-        );
-      }
-
-      await PuzzleCampaignModel.findByIdAndDelete(campaignId);
-
-      // remove reference from BrandModel if present
-      await BrandModel.findOneAndUpdate(
-        { userId: campaign.brandId },
-        { $pull: { campaigns: campaign._id } }
-      );
-
-      res.status(200).json({ success: true, message: "Campaign deleted" });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to delete campaign: ${error.message}`, 500)
-      );
-    }
-  }
-);
+// POST /campaigns/:id/click — counts the click and returns the URL to open in a new tab
+export const postUrlClick = CatchAsyncError(async (req: Request, res: Response) => {
+  const url = await recordUrlClick(
+    assertObjectId(req.params.id, "campaign id"),
+    String(req.user!._id)
+  );
+  res.status(200).json({ success: true, url });
+});

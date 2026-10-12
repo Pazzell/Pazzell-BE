@@ -2,8 +2,7 @@ import { app } from "./app";
 import "dotenv/config";
 import connectDB from "./utils/db";
 import { startScheduler } from "./services/scheduler";
-import { initializePackages } from "./controllers/package.controller";
-import { initConfigCache } from "./services/config/config.service";
+import { initConfigCache, migrateRetiredPricing } from "./services/config/config.service";
 
 //create server
 const PORT = process.env.PORT || 4000;
@@ -16,15 +15,16 @@ const PORT = process.env.PORT || 4000;
 // every cold start.
 async function start() {
   await connectDB();
-  // Initialize packages after database connection
-  await initializePackages();
+  // Stored dollar prices from an earlier seed become the naira prices
+  const repriced = await migrateRetiredPricing();
+  if (repriced.length > 0) console.log(`Updated stored pricing to naira: ${repriced.join(", ")}`);
   // Warm the Config cache (falls back to CONFIG_DEFAULTS for any unseeded key)
   await initConfigCache();
 
   app.listen(PORT, () => {
-    console.log(`Server is connected http://localhost:${process.env.PORT}`);
-    // node-cron scheduler: hourly campaign-expiry, Monday weekly payout/raffle
-    // rollover, nightly wallet reconciliation (see services/scheduler/index.ts)
+    console.log(`Server is connected http://localhost:${PORT}`);
+    // node-cron scheduler: campaign auto-end, Pro-expiry quiz locking, stale attempt
+    // cleanup, nightly wallet reconciliation (see services/scheduler/index.ts)
     startScheduler();
   });
 }

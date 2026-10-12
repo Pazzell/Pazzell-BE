@@ -2,6 +2,11 @@ import { Request, Response, NextFunction } from "express";
 import ErrorHandler from "../utils/ErrorHandler";
 
 export const ErrorMiddleware = (err: any, req: Request, res: Response, next: NextFunction) => {
+    // Machine-readable code (CAMPAIGN_REQUIRED, UPGRADE_REQUIRED, ...) — captured before the
+    // branches below replace `err`. Only our own errors carry one; driver/system codes stay private.
+    const isCoded = err instanceof ErrorHandler || err.name === "MulterError";
+    const code: string | undefined = isCoded && typeof err.code === "string" ? err.code : undefined;
+    const details: Record<string, any> | undefined = isCoded ? err.details : undefined;
     err.statusCode = err.statusCode || 500;
     err.message = err.message || "Internal server error";
 
@@ -41,7 +46,7 @@ export const ErrorMiddleware = (err: any, req: Request, res: Response, next: Nex
     if (err.name === "MulterError") {
         let message = "File upload error";
         if (err.code === "LIMIT_FILE_SIZE") {
-            message = "File size is too large. Maximum file size is 20MB.";
+            message = "File size is too large. Maximum image size is 5MB.";
         } else if (err.code === "LIMIT_UNEXPECTED_FILE") {
             message = "Unexpected file field. Please check the file upload field name.";
         }
@@ -72,6 +77,8 @@ export const ErrorMiddleware = (err: any, req: Request, res: Response, next: Nex
     res.status(Number(err.statusCode)).json({
         success: false,
         message: err.message,
+        ...(code && { code }),
+        ...(details && { details }),
         ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
     });
 };

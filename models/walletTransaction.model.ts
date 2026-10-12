@@ -1,7 +1,10 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 export type WalletTransactionType = "credit" | "debit";
+// "weekly_payout" is retained for ledger rows written by the retired leaderboard
+// payouts; new credits use "reward".
 export type WalletTransactionReason =
+  | "reward"
   | "weekly_payout"
   | "withdrawal"
   | "withdrawal_reversal"
@@ -26,7 +29,7 @@ const walletTransactionSchema: Schema<IWalletTransaction> = new mongoose.Schema(
     balanceAfter: { type: Number, required: true },
     reason: {
       type: String,
-      enum: ["weekly_payout", "withdrawal", "withdrawal_reversal", "admin_adjustment"],
+      enum: ["reward", "weekly_payout", "withdrawal", "withdrawal_reversal", "admin_adjustment"],
       required: true,
     },
     referenceId: { type: String },
