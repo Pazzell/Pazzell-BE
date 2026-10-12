@@ -11,6 +11,10 @@ import {
   adminDeleteCard,
   adminListImportCategories,
   adminImportImageCards,
+  adminListStarterTopics,
+  adminLoadStarterTopics,
+  adminGetGenerateInfo,
+  adminGenerateCards,
 } from "../controllers/trivia.controller";
 import {
   listCampaigns,
@@ -23,6 +27,8 @@ import {
 } from "../controllers/admin.controller";
 import { isAuthenticated, authorizeRoles } from "../utils/auth";
 import { imageUpload } from "../services/upload/image.service";
+import { documentUploadMiddleware } from "../services/quizGen/extract";
+import { generateLimiter } from "../middlewares/rateLimit";
 
 const router = express.Router();
 
@@ -45,6 +51,12 @@ router.delete("/admin/trivia/topics/:id/cards/:cardId", adminDeleteCard);
 // Image cards fetched from Wikidata / Wikimedia Commons
 router.get("/admin/trivia/import/categories", adminListImportCategories);
 router.post("/admin/trivia/import", adminImportImageCards);
+// Built-in definition questions (scripts/seedData.ts)
+router.get("/admin/trivia/starter", adminListStarterTopics);
+router.post("/admin/trivia/starter", adminLoadStarterTopics);
+// Draft definition cards written from an uploaded document; saved through the bulk endpoint
+router.get("/admin/trivia/generate", adminGetGenerateInfo);
+router.post("/admin/trivia/generate", generateLimiter, documentUploadMiddleware, adminGenerateCards);
 
 // Campaign moderation
 router.get("/admin/campaigns", listCampaigns);

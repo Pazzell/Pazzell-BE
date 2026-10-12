@@ -5,3 +5,4 @@ credentials.txt
 firebase.txt
 secrets.txt
 paystack-recovery-codes.txt
+.env.local

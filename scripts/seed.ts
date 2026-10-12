@@ -10,7 +10,8 @@ import CampaignModel from "../models/campaign.model";
 import CampaignCardModel from "../models/campaignCard.model";
 import { CONFIG_DEFAULTS, READ_ONLY_CONFIG_KEYS } from "../services/config/config.service";
 import { generateAvatar } from "../utils/userHelpers";
-import { SEED_CAMPAIGN_CARDS, SEED_TOPICS, SeedCard } from "./seedData";
+import { starterCard as toCard } from "../services/trivia/starter.service";
+import { SEED_CAMPAIGN_CARDS, SEED_TOPICS } from "./seedData";
 
 // Idempotent seed: safe to run repeatedly. It only ever inserts what is missing —
 // it never overwrites a setting, topic or account that already exists.
@@ -27,17 +28,6 @@ export interface SeedSummary {
   admin: { email: string; created: boolean; password?: string };
   brand: { email: string; created: boolean; password?: string };
 }
-
-const toCard = ([text, correct, wrong]: SeedCard, index: number) => {
-  // Alternate which side holds the right answer so position is never a clue.
-  const correctFirst = index % 2 === 0;
-  return {
-    type: "definition" as const,
-    text,
-    options: correctFirst ? [correct, wrong] : [wrong, correct],
-    correctOptionIndex: correctFirst ? 0 : 1,
-  };
-};
 
 async function ensureAccount(
   email: string,

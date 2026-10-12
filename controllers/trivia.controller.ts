@@ -17,6 +17,12 @@ import {
   submitAnswer,
 } from "../services/trivia/session.service";
 import { importImageCards, IMPORT_MAX_COUNT } from "../services/trivia/imageImport.service";
+import { listStarterTopics, loadStarterTopics } from "../services/trivia/starter.service";
+import {
+  GENERATE_AVOID_MAX,
+  generateDraftCards,
+  getGenerateOptions,
+} from "../services/quizGen/generate.service";
 import {
   COUNTRY_MIXED,
   COUNTRY_WORLDWIDE,
@@ -271,6 +277,51 @@ export const adminListImportCategories = CatchAsyncError(async (_req: Request, r
 export const adminImportImageCards = CatchAsyncError(async (req: Request, res: Response) => {
   const result = await importImageCards(String(req.user!._id), req.body || {});
   res.status(201).json({ success: true, import: result });
+});
+
+// GET /admin/trivia/starter — the built-in topics and how many of their questions are not loaded
+export const adminListStarterTopics = CatchAsyncError(async (_req: Request, res: Response) => {
+  res.status(200).json({ success: true, topics: await listStarterTopics() });
+});
+
+// POST /admin/trivia/starter  { slugs? } — adds the built-in questions a topic does not have yet
+export const adminLoadStarterTopics = CatchAsyncError(async (req: Request, res: Response) => {
+  const loaded = await loadStarterTopics(String(req.user!._id), req.body?.slugs);
+  res.status(201).json({ success: true, loaded });
+});
+
+// GET /admin/trivia/generate — what the upload screen needs (admins have no daily allowance)
+export const adminGetGenerateInfo = CatchAsyncError(async (req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    generate: await getGenerateOptions(req.user!, { unlimited: true }),
+  });
+});
+
+// POST /admin/trivia/generate  (multipart "document", or JSON/multipart "text"; "count?", "topicId?")
+// Returns draft definition cards for review. Nothing is stored: the admin edits them and
+// saves the ones they keep through POST /admin/trivia/topics/:id/cards/bulk. With a
+// topicId, questions the topic already has are not written again.
+export const adminGenerateCards = CatchAsyncError(async (req: Request, res: Response) => {
+  const body = req.body || {};
+  let avoid: string[] = [];
+  if (body.topicId !== undefined && body.topicId !== null && body.topicId !== "") {
+    const topic = await loadTopic(body.topicId);
+    const held = await TriviaCardModel.find({ topicId: String(topic._id), type: "definition" })
+      .select("text")
+      .sort({ _id: -1 })
+      .limit(GENERATE_AVOID_MAX)
+      .lean();
+    avoid = held.map((card) => card.text || "").filter(Boolean);
+  }
+  const result = await generateDraftCards(req.user!, {
+    file: req.file,
+    text: body.text,
+    count: body.count,
+    unlimited: true,
+    avoid,
+  });
+  res.status(200).json({ success: true, ...result });
 });
 
 async function loadTopicCard(topicId: string, cardId: string) {

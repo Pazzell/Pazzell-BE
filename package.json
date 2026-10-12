@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc && cp -r mails dist/",
     "start": "node dist/server.js",
-    "dev": "ts-node-dev --respawn --transpile-only server.ts",
+    "dev": "ts-node-dev --respawn --transpile-only -r ./scripts/dev-env.js server.ts",
     "test": "jest",
     "lint": "eslint *.ts",
     "seed": "ts-node-dev --transpile-only scripts/seed.ts",

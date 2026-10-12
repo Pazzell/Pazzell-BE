@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import ErrorHandler from "../../utils/ErrorHandler";
 import { assertObjectId, toInt } from "../../utils/validators";
 import { CARD_OPTION_MAX } from "../../models/cardFields";
@@ -25,6 +26,16 @@ export function buildAttribution(image: CommonsImage): string {
   const artist =
     image.artist.length > ARTIST_MAX ? `${image.artist.slice(0, ARTIST_MAX - 1)}…` : image.artist;
   return [artist, image.license, "Wikimedia Commons"].filter(Boolean).join(" · ");
+}
+
+/**
+ * Symbols and logos are usually dark ink on a transparent background, which disappears
+ * on our dark screens: a picture with transparency is given a white background.
+ */
+export async function onWhite(buffer: Buffer): Promise<Buffer> {
+  const image = sharp(buffer);
+  if (!(await image.metadata()).hasAlpha) return buffer;
+  return image.flatten({ background: "#ffffff" }).png().toBuffer();
 }
 
 const displayLabel = (label: string) => label.charAt(0).toUpperCase() + label.slice(1);
@@ -177,14 +188,14 @@ export async function importImageCards(
       summary.skipped.unusableLicense++;
       return;
     }
-    const wrong = pickDistractor(entity, entities, category.people);
+    const wrong = entity.wrong ?? pickDistractor(entity, entities, category.people);
     if (!wrong) {
       summary.skipped.noWrongOption++;
       return;
     }
     let imageUrl: string;
     try {
-      const buffer = await wikimedia.downloadImage(image.url);
+      const buffer = await onWhite(await wikimedia.downloadImage(image.url));
       imageUrl = (await storeImage({ buffer }, adminId, "cards")).url;
     } catch {
       summary.skipped.imageFailed++;

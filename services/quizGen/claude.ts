@@ -68,8 +68,15 @@ const TOOL: Anthropic.Tool = {
 
 const asString = (value: any): string => (typeof value === "string" ? value.trim() : "");
 
-/** Asks Claude for `count` cards written from `text`. */
-export async function requestCards(text: string, count: number): Promise<GeneratedCards> {
+/**
+ * Asks Claude for `count` cards written from `text`. `avoid` lists questions that
+ * already exist, so a second run over the same document brings new ones.
+ */
+export async function requestCards(
+  text: string,
+  count: number,
+  avoid: string[] = []
+): Promise<GeneratedCards> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new ErrorHandler(
@@ -91,7 +98,13 @@ export async function requestCards(text: string, count: number): Promise<Generat
       messages: [
         {
           role: "user",
-          content: `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document.`,
+          content:
+            `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document.` +
+            (avoid.length
+              ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
+                  .map((question) => `- ${question}`)
+                  .join("\n")}`
+              : ""),
         },
       ],
     });

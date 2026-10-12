@@ -367,6 +367,81 @@ describe("Trivia from a document (HTTP)", () => {
     expect(info.body.generate).toMatchObject({ usedToday: 0, remaining: 3 });
   });
 
+  describe("for admins (/admin/trivia/generate)", () => {
+    const adminBase = "/api/v1/admin/trivia";
+    const generate = (user: TestUser, body: Record<string, any> = {}) =>
+      api().post(`${adminBase}/generate`).set(user.auth).send({ text: MATERIAL, ...body });
+
+    it("is admin-only", async () => {
+      const gamer = await createUser();
+      expect((await generate(gamer)).status).toBe(403);
+      expect((await api().get(`${adminBase}/generate`).set(gamer.auth)).status).toBe(403);
+      expect(requestCards).not.toHaveBeenCalled();
+    });
+
+    it("has no daily allowance", async () => {
+      const admin = await createUser({ role: "admin" });
+      const info = await api().get(`${adminBase}/generate`).set(admin.auth);
+      expect(info.body.generate).toMatchObject({ enabled: true, count: { default: 10, min: 1, max: 30 } });
+      expect(info.body.generate).not.toHaveProperty("dailyLimit");
+
+      // One more than a freemium player gets in a day.
+      for (let i = 0; i < 4; i++) {
+        const res = await generate(admin, { count: 2 });
+        expect(res.status).toBe(200);
+        expect(res.body.cards).toHaveLength(2);
+        expect(res.body).not.toHaveProperty("usage");
+      }
+      // And none of it counts against the admin's own player allowance.
+      expect((await api().get(`${base}/generate`).set(admin.auth)).body.generate.usedToday).toBe(0);
+    });
+
+    it("gives drafts that the topic's bulk endpoint saves as they are", async () => {
+      const admin = await createUser({ role: "admin" });
+      const topic = await api().post(`${adminBase}/topics`).set(admin.auth).send({ name: "Accounting" });
+      const topicId = topic.body.topic.id;
+      const drafts = (
+        await api()
+          .post(`${adminBase}/generate`)
+          .set(admin.auth)
+          .attach("document", makePdf(FACTS), "notes.pdf")
+          .field("count", "3")
+          .field("topicId", topicId)
+      ).body;
+      expect(drafts.document.kind).toBe("pdf");
+      expect(drafts.cards).toHaveLength(3);
+
+      const saved = await api()
+        .post(`${adminBase}/topics/${topicId}/cards/bulk`)
+        .set(admin.auth)
+        .send({ cards: drafts.cards });
+      expect(saved.status).toBe(201);
+      expect(saved.body.created).toBe(3);
+    });
+
+    it("does not write a question the topic already has", async () => {
+      const admin = await createUser({ role: "admin" });
+      const topic = await api().post(`${adminBase}/topics`).set(admin.auth).send({ name: "Accounting" });
+      const topicId = topic.body.topic.id;
+      await api()
+        .post(`${adminBase}/topics/${topicId}/cards/bulk`)
+        .set(admin.auth)
+        .send({
+          cards: [{ type: "definition", text: "Question 0?", options: ["A", "B"], correctOptionIndex: 0 }],
+        });
+
+      const res = await generate(admin, { count: 3, topicId });
+      expect(res.status).toBe(200);
+      expect(res.body.cards.map((c: any) => c.text)).toEqual(["Question 1?", "Question 2?", "Question 3?"]);
+      // The model is told what exists, as well as being checked afterwards.
+      expect(requestCards).toHaveBeenCalledWith(MATERIAL, 4, ["Question 0?"]);
+
+      const missing = await generate(admin, { topicId: "64b000000000000000000000" });
+      expect(missing.status).toBe(404);
+      expect(missing.body.code).toBe("TOPIC_NOT_FOUND");
+    });
+  });
+
   it("does not shadow the quiz routes", async () => {
     const user = await createUser();
     const quiz = await api().post(base).set(user.auth).send({ title: "Mine" });

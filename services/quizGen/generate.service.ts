@@ -28,6 +28,8 @@ const PROMPT_WINDOWS = 6;
 const QUOTE_MIN_LETTERS = 15;
 const QUOTE_MAX_CHARS = 400;
 const TITLE_MAX = 80;
+// Existing questions of a topic that an admin run is told not to repeat.
+export const GENERATE_AVOID_MAX = 300;
 
 type PlanUser = { _id: any; proUntil?: Date | string | null };
 
@@ -62,16 +64,18 @@ export function excerptForPrompt(text: string, maxChars = PROMPT_MAX_CHARS): str
 
 /**
  * Keeps only the cards that are well formed and whose quote really is in the document.
- * A card the model cannot back with the student's own material is dropped.
+ * A card the model cannot back with the student's own material is dropped, and so is
+ * one that repeats a question in `taken`.
  */
 export async function verifyCandidates(
   candidates: claude.CardCandidate[],
   documentText: string,
   ownerId: string,
-  limit: number
+  limit: number,
+  taken: string[] = []
 ): Promise<DraftCard[]> {
   const haystack = fingerprint(documentText);
-  const seen = new Set<string>();
+  const seen = new Set<string>(taken.map(fingerprint));
   const drafts: DraftCard[] = [];
 
   for (const candidate of candidates) {
@@ -130,15 +134,18 @@ async function allowance(user: PlanUser) {
   };
 }
 
-/** GET /custom-quizzes/generate: everything the upload screen needs. */
-export async function getGenerateOptions(user: PlanUser) {
+/**
+ * GET /custom-quizzes/generate: everything the upload screen needs. Admins writing cards
+ * for a topic are `unlimited`: they have no daily allowance, so none is reported.
+ */
+export async function getGenerateOptions(user: PlanUser, { unlimited = false } = {}) {
   return {
     enabled: claude.isAiConfigured(),
     fileTypes: DOCUMENT_TYPES,
     maxFileBytes: DOCUMENT_MAX_BYTES,
     minCharacters: DOCUMENT_MIN_CHARS,
     count: { default: GENERATE_DEFAULT_COUNT, min: 1, max: GENERATE_MAX_COUNT },
-    ...(await allowance(user)),
+    ...(unlimited ? {} : await allowance(user)),
   };
 }
 
@@ -159,6 +166,10 @@ export interface GenerateInput {
   file?: { buffer: Buffer; originalname?: string };
   text?: any;
   count?: any;
+  // Admin runs: no daily allowance is checked or used.
+  unlimited?: boolean;
+  // Questions that already exist where the cards are going; they are not written again.
+  avoid?: string[];
 }
 
 export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
@@ -198,27 +209,33 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
   }
 
   // Take today's slot before the paid request, so parallel uploads cannot exceed the limit.
-  const dailyLimit = await getGenerateDailyLimit(getPlan(user).isPro);
-  const key = usageKey(userId);
-  const used = await redis.incr(key);
-  if (used === 1) await redis.expire(key, 2 * 24 * 60 * 60);
-  if (used > dailyLimit) {
-    await redis.decr(key);
-    throw new ErrorHandler(
-      `You have used today's ${dailyLimit} document${dailyLimit === 1 ? "" : "s"}. Try again tomorrow.`,
-      429,
-      "GENERATION_LIMIT_REACHED",
-      { dailyLimit, resetsAt: nextResetAt(), isPro: getPlan(user).isPro }
-    );
+  const key = input.unlimited ? null : usageKey(userId);
+  if (key) {
+    const dailyLimit = await getGenerateDailyLimit(getPlan(user).isPro);
+    const used = await redis.incr(key);
+    if (used === 1) await redis.expire(key, 2 * 24 * 60 * 60);
+    if (used > dailyLimit) {
+      await redis.decr(key);
+      throw new ErrorHandler(
+        `You have used today's ${dailyLimit} document${dailyLimit === 1 ? "" : "s"}. Try again tomorrow.`,
+        429,
+        "GENERATION_LIMIT_REACHED",
+        { dailyLimit, resetsAt: nextResetAt(), isPro: getPlan(user).isPro }
+      );
+    }
   }
+  const avoid = input.avoid || [];
 
   let drafts: DraftCard[];
   let title: string | undefined;
   const prompt = excerptForPrompt(text);
   try {
     // A few spare cards cover the ones the checks below throw away.
-    const generated = await claude.requestCards(prompt, count + Math.ceil(count / 4));
-    drafts = await verifyCandidates(generated.cards, text, userId, count);
+    const spare = count + Math.ceil(count / 4);
+    const generated = avoid.length
+      ? await claude.requestCards(prompt, spare, avoid)
+      : await claude.requestCards(prompt, spare);
+    drafts = await verifyCandidates(generated.cards, text, userId, count, avoid);
     title = generated.title?.slice(0, TITLE_MAX);
     if (drafts.length === 0) {
       throw new ErrorHandler(
@@ -229,7 +246,7 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
     }
   } catch (e) {
     // A failed attempt does not cost the player one of today's documents.
-    await redis.decr(key);
+    if (key) await redis.decr(key);
     throw e;
   }
 
@@ -244,6 +261,6 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
       // True when the document was longer than what is read in one go and was sampled.
       sampled: prompt.length < text.length,
     },
-    usage: await allowance(user),
+    ...(input.unlimited ? {} : { usage: await allowance(user) }),
   };
 }

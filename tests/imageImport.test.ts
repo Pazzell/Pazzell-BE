@@ -9,6 +9,7 @@ import {
   buildAttribution,
   interleaveEntities,
   isAllowedLicense,
+  onWhite,
   pickDistractor,
 } from "../services/trivia/imageImport.service";
 import * as wikimedia from "../services/trivia/wikimedia";
@@ -50,6 +51,23 @@ describe("Session card mix", () => {
 });
 
 describe("Image import rules", () => {
+  it("puts a transparent picture on a white background and leaves the others alone", async () => {
+    const transparent = await sharp({
+      create: { width: 8, height: 8, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    })
+      .png()
+      .toBuffer();
+    const flattened = await onWhite(transparent);
+    expect((await sharp(flattened).metadata()).hasAlpha).toBe(false);
+    const { data } = await sharp(flattened).raw().toBuffer({ resolveWithObject: true });
+    expect([data[0], data[1], data[2]]).toEqual([255, 255, 255]);
+
+    const photo = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#f59e0b" } })
+      .jpeg()
+      .toBuffer();
+    expect(await onWhite(photo)).toBe(photo);
+  });
+
   it("accepts only free licences", () => {
     for (const ok of ["CC0", "CC BY 4.0", "CC BY-SA 3.0 de", "CC BY-SA 4.0", "Public domain", "PD-textlogo"]) {
       expect(isAllowedLicense(ok)).toBe(true);
@@ -211,6 +229,28 @@ describe("POST /admin/trivia/import", () => {
     expect(images).toHaveLength(3);
     for (const image of images) expect(image.attribution).toContain("Wikimedia Commons");
     expect(questions.find((q) => q.type === "definition").attribution).toBeNull();
+  });
+
+  it("imports music symbols from a fixed list, with the look-alike as the wrong option", async () => {
+    jest.restoreAllMocks();
+    const category = wikimedia.getImportCategory("music-symbols-beginner")!;
+    // No request is made: the list is in the code.
+    const listed = await wikimedia.fetchEntities(category, 3);
+    expect(listed.map((e) => e.label)).toEqual(["Staff (stave)", "Treble clef", "Bass clef"]);
+
+    const buffer = await png();
+    jest.spyOn(wikimedia, "fetchCommonsImages").mockResolvedValue(
+      new Map(listed.map((e) => [e.fileName, { url: "https://img.test/s", license: "Public domain", artist: "" }]))
+    );
+    jest.spyOn(wikimedia, "downloadImage").mockResolvedValue(buffer);
+
+    const admin = await createUser({ role: "admin" });
+    const res = await importCards(admin.auth, { category: "music-symbols-beginner", count: 3 });
+    expect(res.body.import).toMatchObject({ created: 3, topic: { slug: "music-theory-beginner" } });
+    const treble = (await TriviaCardModel.findOne({ sourceRef: "commons:Music-GClef.svg" }).lean())!;
+    expect(treble.text).toBe("Which music symbol is this?");
+    expect(treble.options[treble.correctOptionIndex]).toBe("Treble clef");
+    expect(treble.options[1 - treble.correctOptionIndex]).toBe("Bass clef");
   });
 
   it("mixes home-country and worldwide people unless a country is named", async () => {

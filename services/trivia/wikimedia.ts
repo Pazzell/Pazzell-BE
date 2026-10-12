@@ -21,6 +21,9 @@ export interface ImportCategory {
   people: boolean; // people can be narrowed to a country, and get same-gender wrong options
   imageProperty: "P18" | "P154"; // photo, or logo
   where: string; // SPARQL pattern binding ?item
+  // A fixed list of Commons pictures, for subjects Wikidata has no usable list of
+  // (music symbols). When set, nothing is asked of Wikidata and `where` is unused.
+  entries?: WikidataEntity[];
   // Without a country the people classes are huge; this keeps the query to famous entries.
   minSitelinks?: number;
 }
@@ -29,6 +32,26 @@ const occupation = (...ids: string[]) =>
   `VALUES ?occupation { ${ids.map((id) => `wd:${id}`).join(" ")} } ?item wdt:P106 ?occupation. ` +
   // Keeps historical figures who merely carry the occupation out of the results.
   `?item wdt:P569 ?born. FILTER(YEAR(?born) >= 1930)`;
+
+// A music symbol: a Commons file, its name, and the look-alike offered as the wrong option.
+const symbol = (label: string, fileName: string, wrong: string): WikidataEntity => ({
+  id: `commons:${fileName}`,
+  label,
+  fileName,
+  wrong,
+});
+
+const symbols = (level: string, entries: WikidataEntity[]): ImportCategory => ({
+  key: `music-symbols-${level.toLowerCase()}`,
+  topicName: `Music Theory: ${level}`,
+  topicSlug: `music-theory-${level.toLowerCase()}`,
+  topicDescription: `Music theory at ${level.toLowerCase()} level: symbols, terms and what they mean.`,
+  prompt: "Which music symbol is this?",
+  people: false,
+  imageProperty: "P18",
+  where: "",
+  entries,
+});
 
 // To add a category, add an entry here: `where` is any Wikidata pattern that binds ?item.
 export const IMPORT_CATEGORIES: ImportCategory[] = [
@@ -117,6 +140,98 @@ export const IMPORT_CATEGORIES: ImportCategory[] = [
     imageProperty: "P18",
     where: occupation("Q152002", "Q30107072"),
   },
+  {
+    key: "instruments",
+    topicName: "Musical Instruments",
+    topicSlug: "musical-instruments",
+    topicDescription: "Name the instrument and learn how each one is played.",
+    prompt: "Which instrument is this?",
+    people: false,
+    imageProperty: "P18",
+    // A chosen list: the class "musical instrument" on Wikidata also holds microphones,
+    // loudspeakers and whole families ("string instrument").
+    where: `VALUES ?item { ${[
+      "Q6607", "Q5994", "Q8355", "Q11404", "Q11405", "Q8338", "Q79838", "Q9798", "Q8343",
+      "Q8371", "Q47369", "Q281460", "Q51290", "Q81982", "Q80284", "Q8350", "Q8377", "Q78987",
+      "Q46185", "Q80019", "Q165666", "Q302497", "Q131168", "Q128309", "Q8347", "Q163829",
+      "Q159998", "Q180733", "Q61285", "Q258896", "Q193666", "Q201129", "Q189737", "Q190172",
+      "Q208320", "Q191000", "Q229205", "Q213100", "Q187851", "Q178389", "Q83509", "Q189388",
+      "Q201735", "Q83266", "Q537750", "Q1467960", "Q1043002", "Q220971", "Q270200", "Q6610630",
+      "Q626035", "Q208421", "Q183932", "Q206987", "Q789141", "Q185041", "Q218802", "Q726306",
+      "Q1500255",
+    ]
+      .map((id) => `wd:${id}`)
+      .join(" ")} }`,
+  },
+  symbols("Beginner", [
+    symbol("Staff (stave)", "Music-staff.svg", "Bar line"),
+    symbol("Treble clef", "Music-GClef.svg", "Bass clef"),
+    symbol("Bass clef", "Music-Fclef.svg", "Treble clef"),
+    symbol("Bar line", "Music-bar.svg", "Ledger line"),
+    symbol("Double bar line", "Music-doublebar.svg", "Repeat sign"),
+    symbol("Final bar line", "Music-endbar.svg", "Double bar line"),
+    symbol("Repeat sign", "Music-repeat.svg", "Final bar line"),
+    symbol("Whole note (semibreve)", "Music-wholenote.svg", "Half note (minim)"),
+    symbol("Half note (minim)", "Music-halfnote.svg", "Quarter note (crotchet)"),
+    symbol("Quarter note (crotchet)", "Music-quarternote.svg", "Eighth note (quaver)"),
+    symbol("Eighth note (quaver)", "Music-eighthnote.svg", "Sixteenth note (semiquaver)"),
+    symbol("Sixteenth note (semiquaver)", "Music-sixteenthnote.svg", "Eighth note (quaver)"),
+    symbol("Whole rest (semibreve rest)", "Music-wholerest.svg", "Half rest (minim rest)"),
+    symbol("Half rest (minim rest)", "Music-halfrest.svg", "Whole rest (semibreve rest)"),
+    symbol("Quarter rest (crotchet rest)", "Music-quarterrest.svg", "Eighth rest (quaver rest)"),
+    symbol("Eighth rest (quaver rest)", "Music-eighthrest.svg", "Quarter rest (crotchet rest)"),
+    symbol("Sharp", "Music-sharp.svg", "Natural"),
+    symbol("Flat", "Music-flat.svg", "Sharp"),
+    symbol("Natural", "Music-natural.svg", "Flat"),
+    symbol("Time signature", "Music-timesig.svg", "Key signature"),
+  ]),
+  symbols("Intermediate", [
+    symbol("Sixteenth rest (semiquaver rest)", "Music-sixteenthrest.svg", "Eighth rest (quaver rest)"),
+    symbol("Dotted note", "Music-dotnote.svg", "Staccato"),
+    symbol("Tie", "Music-tie.svg", "Slur"),
+    symbol("Slur", "Music-slur.svg", "Tie"),
+    symbol("Beam", "Music-beam.svg", "Tie"),
+    symbol("Ledger lines", "Music-ledger.svg", "Bar lines"),
+    symbol("Triplet", "Music-triplet.svg", "Slur"),
+    symbol("Common time", "Music-commontime.svg", "Cut time"),
+    symbol("Cut time", "Music-cuttime.svg", "Common time"),
+    symbol("Staccato", "Music-staccato.svg", "Tenuto"),
+    symbol("Tenuto", "Music-tenuto.svg", "Staccato"),
+    symbol("Accent", "Music-marcato.svg", "Tenuto"),
+    symbol("Fermata (pause)", "Music-fermata.svg", "Accent"),
+    symbol("Crescendo", "Music-crescendo.svg", "Diminuendo"),
+    symbol("Diminuendo", "Music-diminuendo.svg", "Crescendo"),
+    symbol("Piano (soft)", "Music dynamic piano.svg", "Forte (loud)"),
+    symbol("Forte (loud)", "Music dynamic forte.svg", "Piano (soft)"),
+    symbol("Mezzo piano (moderately soft)", "Music dynamic mezzo piano.svg", "Mezzo forte (moderately loud)"),
+    symbol("Mezzo forte (moderately loud)", "Music dynamic mezzo forte.svg", "Mezzo piano (moderately soft)"),
+    symbol("Pianissimo (very soft)", "Music dynamic pianissimo.svg", "Fortissimo (very loud)"),
+    symbol("Fortissimo (very loud)", "Music dynamic fortissimo.svg", "Pianissimo (very soft)"),
+    symbol("Breath mark", "Music-breath.svg", "Caesura"),
+  ]),
+  symbols("Advanced", [
+    symbol("Alto clef (C clef)", "Music-Cclef.svg", "Bass clef (F clef)"),
+    symbol("Percussion clef", "Music-neutralclef.svg", "Alto clef (C clef)"),
+    symbol("Double sharp", "Music-doublesharp.svg", "Double flat"),
+    symbol("Double flat", "Music-doubleflat.svg", "Double sharp"),
+    symbol("Thirty-second note (demisemiquaver)", "Music-thirtysecondnote.svg", "Sixteenth note (semiquaver)"),
+    symbol("Thirty-second rest (demisemiquaver rest)", "Music-thirtysecondrest.svg", "Sixteenth rest (semiquaver rest)"),
+    symbol("Double whole note (breve)", "Music-doublewholenote.svg", "Whole note (semibreve)"),
+    symbol("Trill", "Music-trill.svg", "Mordent"),
+    symbol("Mordent", "Music-mordent.svg", "Turn"),
+    symbol("Turn", "Music-turn.svg", "Trill"),
+    symbol("Tremolo", "Music-tremolo.svg", "Trill"),
+    symbol("Appoggiatura", "Music-appoggiatura.svg", "Acciaccatura"),
+    symbol("Acciaccatura", "Music-acciaccatura.svg", "Appoggiatura"),
+    symbol("Arpeggio (rolled chord)", "Music-arpeggio.svg", "Glissando"),
+    symbol("Glissando", "Music-glissando.svg", "Arpeggio (rolled chord)"),
+    symbol("Segno", "Music-segno.png", "Coda"),
+    symbol("Coda", "Coda sign.svg", "Segno"),
+    symbol("Da capo", "Music-dacapo.svg", "Dal segno"),
+    symbol("Dal segno", "Music-dalsegno.svg", "Da capo"),
+    symbol("Caesura", "Music-caesura.svg", "Breath mark"),
+    symbol("Simile mark", "Music-simile.svg", "Repeat sign"),
+  ]),
 ];
 
 export const getImportCategory = (key: any): ImportCategory | undefined =>
@@ -160,6 +275,8 @@ export interface WikidataEntity {
   label: string;
   fileName: string; // Commons file name, without the "File:" prefix
   gender?: string;
+  // The wrong option to show, when a random other entry would make the card too easy.
+  wrong?: string;
 }
 
 /** The best-known entries of a category that have a picture, most famous first. */
@@ -168,6 +285,7 @@ export async function fetchEntities(
   limit: number,
   countryId?: string
 ): Promise<WikidataEntity[]> {
+  if (category.entries) return category.entries.slice(0, limit);
   const narrowed = category.people && countryId;
   const query = `SELECT ?item ?itemLabel ?image ?gender ?links WHERE {
     ${category.where}

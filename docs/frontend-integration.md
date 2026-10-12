@@ -743,8 +743,10 @@ adds it to a topic as an image card with two options. No API key is needed.
 | GET | `/admin/trivia/import/categories` | `{ categories: [ { key, topicName, topicSlug, supportsCountry } ], countries, maxCount }` |
 | POST | `/admin/trivia/import` | `{ category, count?, topicId?, country? }` |
 
-- `category`: `animals`, `plants`, `food`, `tech`, `footballers`, `musicians`, `celebrities` or
-  `pastors`.
+- `category`: `animals`, `plants`, `food`, `tech`, `footballers`, `musicians`, `celebrities`,
+  `pastors`, `instruments`, `music-symbols-beginner`, `music-symbols-intermediate` or
+  `music-symbols-advanced`. The three music-symbol categories use a fixed list of about 20
+  symbols each and go to the `Music Theory: Beginner / Intermediate / Advanced` topics.
 - `count`: how many cards to add, 1 to 50 (default 20). Call it again for more: each call
   continues after the entries already imported, most famous first.
 - `topicId`: the topic to add to. Without it the cards go to the category's own topic
@@ -769,6 +771,55 @@ a free licence (public domain, CC0, CC BY, CC BY-SA) are taken; the credit is st
 card's `attribution`. Imported cards are ordinary cards afterwards: review, edit or delete them
 with the card endpoints above. Errors: `400 INVALID_IMPORT_CATEGORY`, `400 INVALID_IMPORT_COUNT`,
 `400 INVALID_IMPORT_COUNTRY`, `502 IMPORT_SOURCE_UNAVAILABLE`.
+
+### Loading the starter questions
+
+The server ships with built-in definition questions for a set of topics (football, biology,
+food, the three music theory levels and musical instruments). An admin can load them without
+the seed script.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/admin/trivia/starter` | `{ topics: [ { slug, name, description, topicId, total, missing } ] }` |
+| POST | `/admin/trivia/starter` | `{ slugs? }` |
+
+- `topicId` is `null` until the topic exists; `missing` is how many of its `total` built-in
+  questions are not in the topic yet.
+- `slugs`: which topics to load. Without it every topic is loaded. A topic that does not
+  exist is created.
+- Only the questions a topic does not already have are added (matched by their text), so the
+  call is safe to repeat. A built-in question an admin deleted comes back on the next load; one
+  an admin edited (options only) is left as it is.
+
+```json
+{ "success": true,
+  "loaded": { "created": 44,
+              "topics": [ { "slug": "music-theory-beginner", "name": "Music Theory: Beginner",
+                            "topicId": "6701…", "topicCreated": true, "created": 44 } ] } }
+```
+
+Error: `400 INVALID_STARTER_TOPIC`.
+
+### Writing cards from a document
+
+An admin can have definition cards written from a document, the same way players do for their
+own quizzes (section 7.4), and add them to a topic.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/admin/trivia/generate` | `{ generate: { enabled, fileTypes, maxFileBytes, minCharacters, count } }` |
+| POST | `/admin/trivia/generate` | `multipart/form-data` with the file in `document`, or JSON `{ text }`. Optional `count`, `topicId` |
+
+- Request and response are those of `POST /custom-quizzes/generate`, except that admins have no
+  daily allowance: there are no `dailyLimit` / `remaining` fields in the info and no `usage` in
+  the result, and `GENERATION_LIMIT_REACHED` is never returned. The 10 requests per 10 minutes
+  rate limit still applies.
+- `topicId`: the topic the cards are for. Its existing questions (the newest 300) are not
+  written again, so the same document can be run several times for more cards. An unknown topic
+  returns `404 TOPIC_NOT_FOUND`.
+- Nothing is saved. Show the drafts for review, then send the kept ones to
+  `POST /admin/trivia/topics/:id/cards/bulk`. They are live for players as soon as they are saved.
+- Only definition cards are written. The pictures in a document are not read.
 
 ### Campaigns and revenue
 

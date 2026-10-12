@@ -44,12 +44,14 @@ export const isAuthenticated = CatchAsyncError(
 
           // ...but role, plan and counters are always read fresh from MongoDB, so a
           // cached session can never grant a stale role or an expired Pro plan.
-          const user = await userModel.findById(decoded.id).select("-password").lean();
+          const user = await userModel.findById(decoded.id).select("-password");
           if(!user){
             return next(new ErrorHandler("User not found", 400));
           }
-          // _id stays a plain string, as it was when req.user came from the Redis JSON
-          req.user = { ...user, _id: String(user._id) } as unknown as IUser;
+          // toObject() applies schema defaults (e.g. role "gamer" on old accounts that
+          // never stored one). _id stays a plain string, as it was when req.user came
+          // from the Redis JSON.
+          req.user = { ...user.toObject(), _id: String(user._id) } as unknown as IUser;
           next();
 
       } catch (error: any) {
