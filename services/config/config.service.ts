@@ -15,7 +15,7 @@ const envNumber = (name: string, fallback: number): number => {
 export const CONFIG_DEFAULTS: Record<string, any> = {
   // Per-question countdown range, shared by topics, custom quizzes and campaigns.
   "game.timerMinSeconds": 1,
-  "game.timerMaxSeconds": 7,
+  "game.timerMaxSeconds": 15,
   // Network grace added to every question deadline before a submit counts as late.
   "game.submitGraceMs": envNumber("GAME_SUBMIT_GRACE_MS", 1000),
   // Timer a setup screen starts on, and a new custom quiz's default.

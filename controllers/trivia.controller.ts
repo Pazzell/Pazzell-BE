@@ -32,6 +32,9 @@ import {
 
 // --- Player: topics -------------------------------------------------------------
 
+// Topic lists are alphabetical, ignoring upper and lower case.
+const NAME_ORDER = { locale: "en", strength: 2 };
+
 async function cardCounts(topicIds: string[]): Promise<Map<string, number>> {
   const rows = await TriviaCardModel.aggregate([
     { $match: { topicId: { $in: topicIds } } },
@@ -52,7 +55,7 @@ const publicTopic = async (topic: any, count: number) => ({
 
 // GET /trivia/topics — active topics that have at least one card
 export const listTopics = CatchAsyncError(async (req: Request, res: Response) => {
-  const topics = await TriviaTopicModel.find({ isActive: true }).sort({ order: 1, name: 1 }).lean();
+  const topics = await TriviaTopicModel.find({ isActive: true }).sort({ name: 1 }).collation(NAME_ORDER).lean();
   const counts = await cardCounts(topics.map((t) => String(t._id)));
   const playable = topics.filter((t) => (counts.get(String(t._id)) || 0) > 0);
   res.status(200).json({
@@ -165,7 +168,7 @@ async function loadTopic(id: string) {
 
 // GET /admin/trivia/topics
 export const adminListTopics = CatchAsyncError(async (req: Request, res: Response) => {
-  const topics = await TriviaTopicModel.find({}).sort({ order: 1, name: 1 }).lean();
+  const topics = await TriviaTopicModel.find({}).sort({ name: 1 }).collation(NAME_ORDER).lean();
   const counts = await cardCounts(topics.map((t) => String(t._id)));
   res.status(200).json({
     success: true,

@@ -87,7 +87,7 @@ tests/                   Jest suites
   where the player asked for it to be marked), and late submissions are timeouts.
   Each question's clock starts when the server first serves it; a refresh resumes the same
   question with the time that is left.
-- **Timer.** One global range, 1 to 7 seconds, for every game. It is chosen by the player and is
+- **Timer.** One global range, 1 to 15 seconds, for every game. It is chosen by the player and is
   not part of any topic or campaign.
 - **Campaign gate.** A freemium player who has completed N non-campaign trivias must complete a
   campaign trivia before starting another. Starting one while a campaign is owed returns

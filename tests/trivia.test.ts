@@ -45,19 +45,19 @@ describe("Trivia (admin topics)", () => {
     it("exposes the single global timer range and card bounds", async () => {
       const res = await api().get("/api/v1/settings/game");
       expect(res.status).toBe(200);
-      expect(res.body.settings.timer).toEqual({ minSeconds: 1, maxSeconds: 7, defaultSeconds: 5 });
+      expect(res.body.settings.timer).toEqual({ minSeconds: 1, maxSeconds: 15, defaultSeconds: 5 });
       expect(res.body.settings.trivia).toEqual({ minCards: 5, maxCards: 30 });
       expect(res.body.settings.pro).toEqual({ amount: 1500, currency: "NGN", durationDays: 30 });
       expect(res.body.settings.campaign).toMatchObject({ amount: 15000, durationDays: 30, interruptionThreshold: 10 });
     });
 
-    it.each([0, 8, 3.5, "5"])("rejects timerSeconds=%p", async (timerSeconds) => {
+    it.each([0, 16, 3.5, "5"])("rejects timerSeconds=%p", async (timerSeconds) => {
       const res = await startDefault({ timerSeconds });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe("INVALID_TIMER");
     });
 
-    it.each([1, 7])("accepts timerSeconds=%p", async (timerSeconds) => {
+    it.each([1, 15])("accepts timerSeconds=%p", async (timerSeconds) => {
       const res = await startDefault({ timerSeconds });
       expect(res.status).toBe(201);
       expect(res.body.session.timerSeconds).toBe(timerSeconds);
@@ -330,6 +330,21 @@ describe("Trivia (admin topics)", () => {
       const music = listed.body.topics.find((t: any) => t.id === id);
       expect(music).toMatchObject({ name: "Music", cardCount: 6, cardCountBounds: { min: 5, max: 6 } });
       expect(allKeys(listed.body).has("correctOptionIndex")).toBe(false);
+    });
+  });
+
+  describe("topic lists", () => {
+    it("lists topics alphabetically, ignoring case", async () => {
+      const admin = await createUser({ role: "admin" });
+      await createTopic(3, "Zoology");
+      await createTopic(3, "biology");
+      await createTopic(3, "Art");
+      const expected = ["Art", "biology", "General", "Zoology"];
+
+      const listed = await api().get("/api/v1/trivia/topics").set(user.auth);
+      expect(listed.body.topics.map((t: any) => t.name)).toEqual(expected);
+      const managed = await api().get("/api/v1/admin/trivia/topics").set(admin.auth);
+      expect(managed.body.topics.map((t: any) => t.name)).toEqual(expected);
     });
   });
 });
