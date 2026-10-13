@@ -7,6 +7,8 @@ export interface ITriviaTopic extends Document {
   coverImageUrl?: string;
   isActive: boolean;
   order: number;
+  /** Share of a session's cards that are pictures; null uses the global setting. */
+  imagePercent?: number | null;
   createdBy: string;
 }
 
@@ -18,6 +20,7 @@ const triviaTopicSchema: Schema<ITriviaTopic> = new mongoose.Schema(
     coverImageUrl: { type: String },
     isActive: { type: Boolean, default: true },
     order: { type: Number, default: 0 },
+    imagePercent: { type: Number, min: 0, max: 100, default: null },
     createdBy: { type: String, required: true },
   },
   { timestamps: true }

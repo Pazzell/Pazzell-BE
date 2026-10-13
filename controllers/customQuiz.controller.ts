@@ -8,7 +8,7 @@ import userModel from "../models/user.model";
 import { assertObjectId, cleanString, requireString, toInt } from "../utils/validators";
 import { resolveImage } from "../services/upload/image.service";
 import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
-import { cardCountBounds, getPlayStats } from "../services/trivia/session.service";
+import { cardCountBounds, cardMix, getPlayStats } from "../services/trivia/session.service";
 import { assertCanCreateCustomQuiz } from "../services/plan/policy";
 import { getPlan } from "../services/plan/plan.service";
 import { ensureQuizLocks, syncQuizLocks } from "../services/customQuiz/quizLock.service";
@@ -149,6 +149,7 @@ export const getMyQuiz = CatchAsyncError(async (req: Request, res: Response) => 
     cards: cards.map(editorCard),
     minCardsToPublish: await getCustomQuizMinCards(),
     cardCountBounds: await cardCountBounds(cards.length),
+    cardMix: await cardMix(cards.filter((c) => c.type === "image").length, cards.length),
   });
 });
 
@@ -397,6 +398,10 @@ export const getShareLinkPlayInfo = CatchAsyncError(
     if (!live) return next(new ErrorHandler("This link is not available", 404, "QUIZ_NOT_FOUND"));
 
     const count = await CustomQuizCardModel.countDocuments({ quizId: String(live._id) });
+    const images = await CustomQuizCardModel.countDocuments({
+      quizId: String(live._id),
+      type: "image",
+    });
     res.status(200).json({
       success: true,
       quiz: {
@@ -407,6 +412,7 @@ export const getShareLinkPlayInfo = CatchAsyncError(
         defaultTimerSeconds: live.defaultTimerSeconds,
         defaultCardCount: live.defaultCardCount,
         cardCountBounds: await cardCountBounds(count),
+        cardMix: await cardMix(images, count),
         isOwner: live.ownerId === String(req.user!._id),
       },
     });

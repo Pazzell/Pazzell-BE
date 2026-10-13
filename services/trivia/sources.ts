@@ -22,6 +22,8 @@ export interface ResolvedSource {
   // Owner / brand / admin test play: never gated and never counted.
   isPreview: boolean;
   defaults: { timerSeconds?: number; cardCount?: number };
+  // The source's own share of picture cards; without it the global setting applies.
+  imagePercent?: number;
   brand: ReturnType<typeof publicCampaign> | null;
   cards: SourceCard[];
 }
@@ -66,6 +68,7 @@ export async function resolveSource(
       title: topic.name,
       isPreview: false,
       defaults: {},
+      imagePercent: topic.imagePercent ?? undefined,
       brand: null,
       cards: toCards(cards),
     };

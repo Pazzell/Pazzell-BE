@@ -14,6 +14,8 @@ export interface ITriviaAttempt extends Document {
   practice: boolean;
   timerSeconds: number;
   cardCount: number;
+  // Share of picture cards the player asked for; null when they left it to the default.
+  imagePercent?: number | null;
   status: TriviaAttemptStatus;
   active: boolean; // true while the quiz is in progress
   currentIndex: number; // quiz question the player is on
@@ -34,6 +36,7 @@ const triviaAttemptSchema: Schema<ITriviaAttempt> = new mongoose.Schema(
     practice: { type: Boolean, default: false },
     timerSeconds: { type: Number, required: true },
     cardCount: { type: Number, required: true },
+    imagePercent: { type: Number, default: null },
     status: {
       type: String,
       // "studying" is only on sessions started before the study step was removed;

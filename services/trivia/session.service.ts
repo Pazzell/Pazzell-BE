@@ -43,6 +43,18 @@ export async function cardCountBounds(available: number) {
   };
 }
 
+/**
+ * What the "picture questions" picker needs: how many cards of each kind there are, and
+ * the share a session gets when the player does not choose one.
+ */
+export async function cardMix(imageCards: number, total: number, ownPercent?: number | null) {
+  return {
+    imageCards,
+    definitionCards: total - imageCards,
+    defaultImagePercent: ownPercent ?? (await getTriviaImagePercent()),
+  };
+}
+
 async function publicSession(attempt: ITriviaAttempt) {
   return {
     id: String(attempt._id),
@@ -56,6 +68,7 @@ async function publicSession(attempt: ITriviaAttempt) {
     practice: !!attempt.practice,
     timerSeconds: attempt.timerSeconds,
     cardCount: attempt.cardCount,
+    imagePercent: attempt.imagePercent ?? null,
     currentIndex: Math.min(attempt.currentIndex, attempt.cardCount),
     brand: await brandForAttempt(attempt.sourceType, attempt.sourceId),
     startedAt: attempt.startedAt,
@@ -77,6 +90,7 @@ export async function startSession(
     slug?: any;
     timerSeconds?: any;
     cardCount?: any;
+    imagePercent?: any;
     practice?: any;
   }
 ) {
@@ -127,6 +141,18 @@ export async function startSession(
   }
   const cardCount: number = requested;
 
+  const chosenPercent = input.imagePercent ?? undefined;
+  if (
+    chosenPercent !== undefined &&
+    !(Number.isInteger(chosenPercent) && chosenPercent >= 0 && chosenPercent <= 100)
+  ) {
+    throw new ErrorHandler(
+      "imagePercent must be a whole number from 0 to 100",
+      400,
+      "INVALID_IMAGE_PERCENT"
+    );
+  }
+
   let attempt: ITriviaAttempt;
   try {
     attempt = await TriviaAttemptModel.create({
@@ -138,6 +164,7 @@ export async function startSession(
       practice: input.practice === true,
       timerSeconds,
       cardCount,
+      imagePercent: chosenPercent ?? null,
     });
   } catch (e: any) {
     if (e.code === 11000) {
@@ -147,9 +174,13 @@ export async function startSession(
     throw e;
   }
 
-  // Random card set in random order, weighted toward image cards; each card's two
-  // options are shuffled as well.
-  const selected = pickMixedCards(source.cards, cardCount, await getTriviaImagePercent());
+  // Random card set in random order, mixed as the player asked (or else the topic's own
+  // share, or else the global one); each card's two options are shuffled as well.
+  const selected = pickMixedCards(
+    source.cards,
+    cardCount,
+    chosenPercent ?? source.imagePercent ?? (await getTriviaImagePercent())
+  );
   await TriviaAttemptQuestionModel.insertMany(
     selected.map((card, quizIndex) => ({
       attemptId: String(attempt._id),

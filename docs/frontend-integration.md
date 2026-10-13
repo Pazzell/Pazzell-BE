@@ -308,9 +308,23 @@ Errors: `403 CAMPAIGN_REQUIRED` (see 8.3), `400 INVALID_TIMER`, `400 INVALID_PRA
 (`details: { available, min, max }`), `400 NO_CARDS`, `404 TOPIC_NOT_FOUND`,
 `404 QUIZ_NOT_FOUND`, `404 CAMPAIGN_NOT_AVAILABLE`, `400 INVALID_SOURCE`.
 
-**Card mix.** A session's cards are picked at random with about 70% image cards and 30%
-definitions (the `trivia.imagePercent` setting). When a topic has too few cards of one type, the
-other type fills the gap, so the session always has the number of cards asked for.
+**Card mix.** The player chooses the share of picture cards: send `imagePercent` (a whole
+number from 0, short definitions only, to 100, pictures only) when starting; anything else is
+`400 INVALID_IMAGE_PERCENT`. Without it the session uses the topic's own share if an admin set
+one (section 9), otherwise the `trivia.imagePercent` setting (70). When a source has too few
+cards of one type, the other type fills the gap, so the session always has the number of cards
+asked for. `session.imagePercent` is what the player sent (`null` if nothing), so "play again"
+can repeat it.
+
+Topics (`GET /trivia/topics`, `/trivia/topics/:id`), the owner's quiz view
+(`GET /custom-quizzes/:id`, `/preview`) and the share-link play info carry what the picker
+needs:
+
+```json
+"cardMix": { "imageCards": 20, "definitionCards": 44, "defaultImagePercent": 70 }
+```
+
+Show the picker only when both counts are above zero, and start it on `defaultImagePercent`.
 
 #### `GET /trivia/sessions/:id/question`
 
@@ -719,15 +733,20 @@ values they were created with.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/admin/trivia/topics` | All topics with `cardCount` and `isActive`, in alphabetical order |
-| POST | `/admin/trivia/topics` | `name`, `description?`, `isActive?`, file `image?` (cover) |
+| GET | `/admin/trivia/topics` | All topics with `cardCount`, `isActive` and `imagePercent`, in alphabetical order |
+| POST | `/admin/trivia/topics` | `name`, `description?`, `isActive?`, `imagePercent?`, file `image?` (cover) |
 | GET | `/admin/trivia/topics/:id` | Topic + every card with answers + play stats (preview) |
-| PATCH | `/admin/trivia/topics/:id` | Edit |
+| PATCH | `/admin/trivia/topics/:id` | Edit (same fields) |
 | DELETE | `/admin/trivia/topics/:id` | Delete the topic and its cards |
 | POST | `/admin/trivia/topics/:id/cards` | Add a card (see 7.3) |
 | POST | `/admin/trivia/topics/:id/cards/bulk` | `{ cards: [ … ] }`, up to 100, all or nothing |
 | PATCH | `/admin/trivia/topics/:id/cards/:cardId` | Edit a card |
 | DELETE | `/admin/trivia/topics/:id/cards/:cardId` | Remove a card |
+
+`imagePercent` is the share of picture cards in a session of that topic: a whole number from 0
+(short definitions only) to 100 (pictures only). Send it empty (`""` or `null`) to go back to
+the global `trivia.imagePercent` setting; a topic returns `"imagePercent": null` while it
+follows the setting. Anything else is `400 INVALID_IMAGE_PERCENT`.
 
 For bulk entry with images: upload each image with `POST /uploads/images`, then put the returned
 `url` in the card's `imageUrl`.

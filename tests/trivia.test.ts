@@ -333,6 +333,116 @@ describe("Trivia (admin topics)", () => {
     });
   });
 
+  describe("a topic's own picture share", () => {
+    const adminTopics = "/api/v1/admin/trivia/topics";
+    const typesServed = async (player: TestUser, id: string) => {
+      const started = await startTrivia(player, { sourceType: "topic", sourceId: id, timerSeconds: 5, cardCount: 10 });
+      const rows = await TriviaAttemptQuestionModel.find({ attemptId: started.body.session.id }).lean();
+      await api().post(`${base}/${started.body.session.id}/abandon`).set(player.auth);
+      return rows.map((r) => r.card.type);
+    };
+
+    it("replaces the global mix for that topic, and can be handed back to it", async () => {
+      const admin = await createUser({ role: "admin" });
+      const id = await createTopic(12, "Tech");
+      await TriviaCardModel.insertMany(
+        Array.from({ length: 12 }, (_, n) => ({
+          topicId: id,
+          type: "image",
+          imageUrl: `https://storage.pazzell.test/pazzell/cards/${n}.webp`,
+          text: "Which logo is this?",
+          options: [`Right ${n}`, `Wrong ${n}`],
+          correctOptionIndex: 0,
+        }))
+      );
+      const patch = (imagePercent: any) =>
+        api().patch(`${adminTopics}/${id}`).set(admin.auth).send({ imagePercent });
+      const images = (types: string[]) => types.filter((t) => t === "image").length;
+
+      // Global setting: 70% of 10.
+      expect(images(await typesServed(user, id))).toBe(7);
+
+      expect((await patch(0)).body.topic.imagePercent).toBe(0);
+      expect(images(await typesServed(user, id))).toBe(0);
+      expect((await patch("100")).body.topic.imagePercent).toBe(100);
+      expect(images(await typesServed(user, id))).toBe(10);
+      expect((await patch(30)).body.topic.imagePercent).toBe(30);
+      expect(images(await typesServed(user, id))).toBe(3);
+
+      // Another edit leaves it alone; an empty value returns the topic to the default.
+      const renamed = await api().patch(`${adminTopics}/${id}`).set(admin.auth).send({ description: "Logos" });
+      expect(renamed.body.topic.imagePercent).toBe(30);
+      expect((await patch("")).body.topic.imagePercent).toBeNull();
+      expect(images(await typesServed(user, id))).toBe(7);
+
+      for (const bad of [-1, 101, 2.5, "lots"]) {
+        const res = await patch(bad);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe("INVALID_IMAGE_PERCENT");
+      }
+    });
+
+    it("lets the player choose the share, over the topic's and the global one", async () => {
+      const admin = await createUser({ role: "admin" });
+      const id = await createTopic(12, "Mixed");
+      await TriviaCardModel.insertMany(
+        Array.from({ length: 8 }, (_, n) => ({
+          topicId: id,
+          type: "image",
+          imageUrl: `https://storage.pazzell.test/pazzell/cards/m${n}.webp`,
+          text: "What is this?",
+          options: [`Right ${n}`, `Wrong ${n}`],
+          correctOptionIndex: 0,
+        }))
+      );
+      const start = (imagePercent?: any) =>
+        startTrivia(user, { sourceType: "topic", sourceId: id, timerSeconds: 5, cardCount: 10, imagePercent });
+      const imagesServed = async (sessionId: string) => {
+        const rows = await TriviaAttemptQuestionModel.find({ attemptId: sessionId }).lean();
+        await api().post(`${base}/${sessionId}/abandon`).set(user.auth);
+        return rows.filter((r) => r.card.type === "image").length;
+      };
+
+      // What the setup screen needs to offer the choice.
+      const listed = await api().get("/api/v1/trivia/topics").set(user.auth);
+      expect(listed.body.topics.find((t: any) => t.id === id).cardMix).toEqual({
+        imageCards: 8,
+        definitionCards: 12,
+        defaultImagePercent: 70,
+      });
+      await api().patch(`${adminTopics}/${id}`).set(admin.auth).send({ imagePercent: 20 });
+      const one = await api().get(`/api/v1/trivia/topics/${id}`).set(user.auth);
+      expect(one.body.topic.cardMix.defaultImagePercent).toBe(20);
+
+      const none = await start(0);
+      expect(none.body.session.imagePercent).toBe(0);
+      expect(await imagesServed(none.body.session.id)).toBe(0);
+      const half = await start(50);
+      expect(await imagesServed(half.body.session.id)).toBe(5);
+      // 100% of 10 is more pictures than the topic has: definitions fill the gap.
+      const all = await start(100);
+      expect(await imagesServed(all.body.session.id)).toBe(8);
+      // Nothing chosen: the topic's own 20%.
+      const unset = await start();
+      expect(unset.body.session.imagePercent).toBeNull();
+      expect(await imagesServed(unset.body.session.id)).toBe(2);
+
+      for (const bad of [-10, 101, 33.3, "50"]) {
+        const res = await start(bad);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe("INVALID_IMAGE_PERCENT");
+      }
+    });
+
+    it("can be set when the topic is created", async () => {
+      const admin = await createUser({ role: "admin" });
+      const made = await api().post(adminTopics).set(admin.auth).send({ name: "Coding", imagePercent: 20 });
+      expect(made.body.topic.imagePercent).toBe(20);
+      const plain = await api().post(adminTopics).set(admin.auth).send({ name: "History" });
+      expect(plain.body.topic.imagePercent).toBeNull();
+    });
+  });
+
   describe("topic lists", () => {
     it("lists topics alphabetically, ignoring case", async () => {
       const admin = await createUser({ role: "admin" });

@@ -9,6 +9,7 @@ import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia
 import {
   abandonSession,
   cardCountBounds,
+  cardMix,
   getCurrentQuestion,
   getPlayStats,
   getResult,
@@ -35,15 +36,23 @@ import {
 // Topic lists are alphabetical, ignoring upper and lower case.
 const NAME_ORDER = { locale: "en", strength: 2 };
 
-async function cardCounts(topicIds: string[]): Promise<Map<string, number>> {
+type CardCount = { count: number; images: number };
+
+async function cardCounts(topicIds: string[]): Promise<Map<string, CardCount>> {
   const rows = await TriviaCardModel.aggregate([
     { $match: { topicId: { $in: topicIds } } },
-    { $group: { _id: "$topicId", count: { $sum: 1 } } },
+    {
+      $group: {
+        _id: "$topicId",
+        count: { $sum: 1 },
+        images: { $sum: { $cond: [{ $eq: ["$type", "image"] }, 1, 0] } },
+      },
+    },
   ]);
-  return new Map(rows.map((r) => [r._id, r.count]));
+  return new Map(rows.map((r) => [r._id, { count: r.count, images: r.images }]));
 }
 
-const publicTopic = async (topic: any, count: number) => ({
+const publicTopic = async (topic: any, { count, images }: CardCount) => ({
   id: String(topic._id),
   name: topic.name,
   slug: topic.slug,
@@ -51,13 +60,14 @@ const publicTopic = async (topic: any, count: number) => ({
   coverImageUrl: topic.coverImageUrl || null,
   cardCount: count,
   cardCountBounds: await cardCountBounds(count),
+  cardMix: await cardMix(images, count, topic.imagePercent),
 });
 
 // GET /trivia/topics — active topics that have at least one card
 export const listTopics = CatchAsyncError(async (req: Request, res: Response) => {
   const topics = await TriviaTopicModel.find({ isActive: true }).sort({ name: 1 }).collation(NAME_ORDER).lean();
   const counts = await cardCounts(topics.map((t) => String(t._id)));
-  const playable = topics.filter((t) => (counts.get(String(t._id)) || 0) > 0);
+  const playable = topics.filter((t) => counts.has(String(t._id)));
   res.status(200).json({
     success: true,
     topics: await Promise.all(playable.map((t) => publicTopic(t, counts.get(String(t._id))!))),
@@ -70,12 +80,13 @@ export const getTopic = CatchAsyncError(async (req: Request, res: Response, next
   const topic = await TriviaTopicModel.findOne({ _id: id, isActive: true }).lean();
   if (!topic) return next(new ErrorHandler("Topic not found", 404, "TOPIC_NOT_FOUND"));
   const count = await TriviaCardModel.countDocuments({ topicId: id });
-  res.status(200).json({ success: true, topic: await publicTopic(topic, count) });
+  const images = await TriviaCardModel.countDocuments({ topicId: id, type: "image" });
+  res.status(200).json({ success: true, topic: await publicTopic(topic, { count, images }) });
 });
 
 // --- Player: sessions (shared by topics, custom quizzes and campaigns) -------------
 
-// POST /trivia/sessions  { sourceType, sourceId | slug, timerSeconds, cardCount, practice? }
+// POST /trivia/sessions  { sourceType, sourceId | slug, timerSeconds, cardCount, imagePercent?, practice? }
 export const postStartSession = CatchAsyncError(async (req: Request, res: Response) => {
   const body = req.body || {};
   const result = await startSession(req.user!, {
@@ -84,6 +95,7 @@ export const postStartSession = CatchAsyncError(async (req: Request, res: Respon
     slug: body.slug,
     timerSeconds: body.timerSeconds,
     cardCount: body.cardCount,
+    imagePercent: body.imagePercent,
     practice: body.practice,
   });
   res.status(result.resumed ? 200 : 201).json({ success: true, ...result });
@@ -147,6 +159,21 @@ async function uniqueSlug(name: string, excludeId?: string): Promise<string> {
   return slug;
 }
 
+/** undefined: not sent. null: use the global setting. Otherwise a whole number from 0 to 100. */
+function parseImagePercent(value: any): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "" || value === "null") return null;
+  const percent = toInt(value);
+  if (percent === undefined || Number.isNaN(percent) || percent < 0 || percent > 100) {
+    throw new ErrorHandler(
+      "imagePercent must be a whole number from 0 to 100, or empty for the default",
+      400,
+      "INVALID_IMAGE_PERCENT"
+    );
+  }
+  return percent;
+}
+
 const adminTopic = (topic: any, cardCount: number) => ({
   id: String(topic._id),
   name: topic.name,
@@ -155,6 +182,7 @@ const adminTopic = (topic: any, cardCount: number) => ({
   coverImageUrl: topic.coverImageUrl || null,
   isActive: topic.isActive,
   order: topic.order,
+  imagePercent: topic.imagePercent ?? null,
   cardCount,
   createdAt: topic.createdAt,
   updatedAt: topic.updatedAt,
@@ -172,11 +200,11 @@ export const adminListTopics = CatchAsyncError(async (req: Request, res: Respons
   const counts = await cardCounts(topics.map((t) => String(t._id)));
   res.status(200).json({
     success: true,
-    topics: topics.map((t) => adminTopic(t, counts.get(String(t._id)) || 0)),
+    topics: topics.map((t) => adminTopic(t, counts.get(String(t._id))?.count || 0)),
   });
 });
 
-// POST /admin/trivia/topics  (multipart or JSON) { name, description?, order?, isActive?, image? }
+// POST /admin/trivia/topics  (multipart or JSON) { name, description?, order?, isActive?, imagePercent?, image? }
 export const adminCreateTopic = CatchAsyncError(async (req: Request, res: Response) => {
   const adminId = String(req.user!._id);
   const name = requireString(req.body?.name, "name", 60);
@@ -188,6 +216,7 @@ export const adminCreateTopic = CatchAsyncError(async (req: Request, res: Respon
     description: cleanString(req.body?.description, 300),
     coverImageUrl: await resolveImage(req.file, req.body?.coverImageUrl, adminId, "covers"),
     order: order ?? 0,
+    imagePercent: parseImagePercent(req.body?.imagePercent) ?? null,
     isActive: String(req.body?.isActive ?? "true") !== "false",
     createdBy: adminId,
   });
@@ -226,6 +255,8 @@ export const adminUpdateTopic = CatchAsyncError(async (req: Request, res: Respon
     topic.order = order;
   }
   if (body.isActive !== undefined) topic.isActive = String(body.isActive) !== "false";
+  const imagePercent = parseImagePercent(body.imagePercent);
+  if (imagePercent !== undefined) topic.imagePercent = imagePercent;
   const cover = await resolveImage(req.file, body.coverImageUrl, adminId, "covers");
   if (cover) topic.coverImageUrl = cover;
   await topic.save();
