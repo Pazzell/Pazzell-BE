@@ -63,7 +63,7 @@ are never read from the client. Sending them has no effect.
 {
   "success": true,
   "settings": {
-    "timer": { "minSeconds": 1, "maxSeconds": 7, "defaultSeconds": 5 },
+    "timer": { "minSeconds": 1, "maxSeconds": 15, "defaultSeconds": 5 },
     "trivia": { "minCards": 5, "maxCards": 30 },
     "customQuiz": { "freeLimit": 1, "minCardsToPublish": 5 },
     "pro": { "amount": 1500, "currency": "NGN", "durationDays": 30 },
@@ -77,11 +77,11 @@ Fetch this once at startup and build the setup screens from it. Do not hard-code
 
 ### The timer rule (applies to every game)
 
-- One global range: **1 to 7 seconds per question**, whole seconds only. It is the same for
+- One global range: **1 to 15 seconds per question**, whole seconds only. It is the same for
   every topic, every custom trivia and every campaign. There is no per-topic range and no
   "timer off".
 - The player (or parent) picks the value before starting. The server rejects anything else with
-  `400 INVALID_TIMER` and `details: { "minSeconds": 1, "maxSeconds": 7 }`. `0`, `8`, `2.5` and
+  `400 INVALID_TIMER` and `details: { "minSeconds": 1, "maxSeconds": 15 }`. `0`, `16`, `2.5` and
   `"5"` (a string) are all rejected.
 - The clock for a question starts on the **server** the first time that question is fetched.
   Every question response carries `deadlineAt`, `remainingMs` and `serverTime`. Drive the
@@ -252,7 +252,7 @@ modes: the player taps an option, the server scores it, and the result counts as
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| GET | `/trivia/topics` | Auth | Active topics that have cards |
+| GET | `/trivia/topics` | Auth | Active topics that have cards, in alphabetical order |
 | GET | `/trivia/topics/:id` | Auth | One topic |
 | POST | `/trivia/sessions` | Auth | Start (or resume) a session |
 | GET | `/trivia/sessions/:id` | Auth | Session state, for resuming |
@@ -415,7 +415,7 @@ Any logged-in user can create quizzes and share them by link.
 
 | Method | Path | Body | Purpose |
 | --- | --- | --- | --- |
-| POST | `/custom-quizzes` | `title`, `description?`, `defaultTimerSeconds?` (1–7), `defaultCardCount?`, file `image?` or `coverImageUrl?` | Create a draft |
+| POST | `/custom-quizzes` | `title`, `description?`, `defaultTimerSeconds?` (1–15), `defaultCardCount?`, file `image?` or `coverImageUrl?` | Create a draft |
 | GET | `/custom-quizzes` | | The caller's quizzes, with `plan` and `limit` (`null` for Pro) |
 | GET | `/custom-quizzes/:id` | | Quiz + all cards with answers (review screen) |
 | GET | `/custom-quizzes/:id/preview` | | Same as above |
@@ -664,7 +664,7 @@ No per-player data is exposed. **Brand test play:** start a session with
 
 ### 8.4 Campaign sessions and the brand link
 
-Campaign plays use the session engine in section 6 unchanged (timer 1 to 7, the practice
+Campaign plays use the session engine in section 6 unchanged (timer 1 to 15, the practice
 toggle, answers hidden unless practice is on). `session.brand` (on start and session state)
 and `result.brand` carry:
 
@@ -699,9 +699,9 @@ any other role).
 
 | Key | Default | Editable |
 | --- | --- | --- |
-| `game.timerMinSeconds` / `game.timerMaxSeconds` | 1 / 7 | No (global constants; `400` on edit) |
+| `game.timerMinSeconds` / `game.timerMaxSeconds` | 1 / 15 | No (global constants; `400` on edit) |
 | `game.submitGraceMs` | 1000 | Yes (0–5000) |
-| `trivia.defaultTimerSeconds` | 5 | Yes (1–7) |
+| `trivia.defaultTimerSeconds` | 5 | Yes (1–15) |
 | `trivia.minCards` / `trivia.maxCards` | 5 / 30 | Yes |
 | `trivia.imagePercent` | 70 | Yes (0–100) |
 | `customQuiz.freeLimit` / `customQuiz.minCardsToPublish` | 1 / 5 | Yes |
@@ -719,8 +719,8 @@ values they were created with.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/admin/trivia/topics` | All topics with `cardCount` and `isActive` |
-| POST | `/admin/trivia/topics` | `name`, `description?`, `order?`, `isActive?`, file `image?` (cover) |
+| GET | `/admin/trivia/topics` | All topics with `cardCount` and `isActive`, in alphabetical order |
+| POST | `/admin/trivia/topics` | `name`, `description?`, `isActive?`, file `image?` (cover) |
 | GET | `/admin/trivia/topics/:id` | Topic + every card with answers + play stats (preview) |
 | PATCH | `/admin/trivia/topics/:id` | Edit |
 | DELETE | `/admin/trivia/topics/:id` | Delete the topic and its cards |
@@ -904,7 +904,7 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | --- | --- | --- | --- |
 | `CAMPAIGN_REQUIRED` | 403 | start a topic/custom session | A campaign is owed. Play `details.campaign` first |
 | `UPGRADE_REQUIRED` | 403 | create/publish custom quiz | Freemium limit reached, or quiz locked. Show the Pro prompt |
-| `INVALID_TIMER` | 400 | start, quiz defaults | Timer outside 1–7 or not a whole number |
+| `INVALID_TIMER` | 400 | start, quiz defaults | Timer outside 1–15 or not a whole number |
 | `INVALID_PRACTICE` | 400 | start session | `practice` is not `true` or `false` |
 | `INVALID_CARD_COUNT` | 400 | start session, quiz defaults, generate from a document | Outside `details.min`–`details.max` |
 | `NO_CARDS` | 400 | start session | The source has no cards |

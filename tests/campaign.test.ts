@@ -385,10 +385,10 @@ describe("Brand campaigns", () => {
       expect(keys.has("correctOptionIndex")).toBe(false);
       expect(keys.has("isCorrect")).toBe(false);
 
-      const bad = await startTrivia(player, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 8, cardCount: 5 });
+      const bad = await startTrivia(player, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 16, cardCount: 5 });
       expect(bad.status).toBe(200); // already in progress: resumed, not restarted
       const other = await createUser();
-      const invalid = await startTrivia(other, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 8, cardCount: 5 });
+      const invalid = await startTrivia(other, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 16, cardCount: 5 });
       expect(invalid.body.code).toBe("INVALID_TIMER");
     });
 
@@ -500,10 +500,10 @@ describe("Brand campaigns", () => {
       expect((await put("campaign.interruptionThreshold", 0)).status).toBe(400);
       expect((await put("game.timerMaxSeconds", 30)).status).toBe(400);
       expect((await put("game.timerMinSeconds", 0)).status).toBe(400);
-      expect((await put("trivia.defaultTimerSeconds", 9)).status).toBe(400);
+      expect((await put("trivia.defaultTimerSeconds", 16)).status).toBe(400);
       expect((await put("points.sessionCompletionPoints", 7)).status).toBe(400);
       const settings = await api().get("/api/v1/settings/game");
-      expect(settings.body.settings.timer).toMatchObject({ minSeconds: 1, maxSeconds: 7 });
+      expect(settings.body.settings.timer).toMatchObject({ minSeconds: 1, maxSeconds: 15 });
     });
 
     it("summarises confirmed revenue for admins", async () => {
