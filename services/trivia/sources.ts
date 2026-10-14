@@ -98,7 +98,8 @@ export async function resolveSource(
       sourceType: "custom",
       sourceId: String(quiz._id),
       title: quiz.title,
-      isPreview: isOwner,
+      // An AI generated trivia has no other players: its owner's plays are real plays.
+      isPreview: isOwner && quiz.origin !== "ai",
       defaults: { timerSeconds: quiz.defaultTimerSeconds, cardCount: quiz.defaultCardCount },
       brand: null,
       cards: toCards(cards),

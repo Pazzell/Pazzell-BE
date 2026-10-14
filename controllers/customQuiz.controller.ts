@@ -119,7 +119,7 @@ export const createQuiz = CatchAsyncError(async (req: Request, res: Response) =>
 export const listMyQuizzes = CatchAsyncError(async (req: Request, res: Response) => {
   const ownerId = String(req.user!._id);
   await ensureQuizLocks(ownerId);
-  const quizzes = await CustomQuizModel.find({ ownerId, deletedAt: null })
+  const quizzes = await CustomQuizModel.find({ ownerId, deletedAt: null, origin: { $ne: "ai" } })
     .sort({ createdAt: 1 })
     .lean();
   const counts = await CustomQuizCardModel.aggregate([
@@ -263,6 +263,9 @@ export const publishQuiz = CatchAsyncError(async (req: Request, res: Response) =
   await ensureQuizLocks(String(req.user!._id));
   const quiz = await loadOwnedQuiz(req);
   assertNotLocked(quiz);
+  if (quiz.origin === "ai") {
+    throw new ErrorHandler("An AI generated trivia cannot be shared", 409, "AI_TRIVIA_NOT_SHAREABLE");
+  }
 
   const min = await getCustomQuizMinCards();
   const count = await CustomQuizCardModel.countDocuments({ quizId: String(quiz._id) });

@@ -29,6 +29,8 @@ export const CONFIG_DEFAULTS: Record<string, any> = {
   // Documents a player may turn into trivia per day (each one is a paid AI request).
   "customQuiz.generateDailyLimitFree": envNumber("QUIZ_GENERATE_DAILY_LIMIT_FREE", 3),
   "customQuiz.generateDailyLimitPro": envNumber("QUIZ_GENERATE_DAILY_LIMIT_PRO", 20),
+  // AI generated trivias a Pro player may have written per day (two paid AI requests each).
+  "aiTrivia.generateDailyLimit": envNumber("AI_TRIVIA_DAILY_LIMIT", 10),
   "campaign.minCardsToPublish": 5,
   "campaign.interruptionThreshold": envNumber("CAMPAIGN_INTERRUPTION_THRESHOLD", 10),
   "campaign.priceAmount": envNumber("CAMPAIGN_PRICE_AMOUNT", 15000),
@@ -237,6 +239,9 @@ export const getGenerateDailyLimit = async (isPro: boolean): Promise<number> =>
   getConfigValue<number>(
     isPro ? "customQuiz.generateDailyLimitPro" : "customQuiz.generateDailyLimitFree"
   );
+
+export const getAiTriviaDailyLimit = async (): Promise<number> =>
+  getConfigValue<number>("aiTrivia.generateDailyLimit");
 
 export const getCampaignMinCards = async (): Promise<number> =>
   getConfigValue<number>("campaign.minCardsToPublish");

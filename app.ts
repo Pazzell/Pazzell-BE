@@ -7,6 +7,7 @@ import userRouter from "./routes/user.route";
 import planRouter from "./routes/plan.route";
 import triviaRouter from "./routes/trivia.route";
 import customQuizRouter from "./routes/customQuiz.route";
+import aiTriviaRouter from "./routes/aiTrivia.route";
 import campaignRouter from "./routes/campaign.route";
 import uploadRouter from "./routes/upload.route";
 import adminRouter from "./routes/admin.route";
@@ -54,6 +55,7 @@ app.use(
   planRouter,
   triviaRouter,
   customQuizRouter,
+  aiTriviaRouter,
   campaignRouter,
   uploadRouter,
   analyticsRouter,

@@ -148,7 +148,8 @@ Presence endpoints (optional): `POST /analytics/user/online`, `POST /analytics/u
 - Pro costs the configured price (default 1,500 NGN) for the configured duration (default 30 days)
   starting from the payment time. Renewing while still Pro adds the duration to the current
   `proUntil`; renewing after expiry starts from the new payment time.
-- Pro benefits: never interrupted by campaign trivia, and unlimited custom trivias.
+- Pro benefits: never interrupted by campaign trivia, unlimited custom trivias, and AI
+  generated trivia (section 7.5).
 - Payment is made **only** through the payment gateway (Paystack). The wallet is never used to
   pay for anything.
 
@@ -247,6 +248,11 @@ modes: the player taps an option, the server scores it, and the result counts as
 | `topic` | `sourceId` (topic id) | Any logged-in user |
 | `custom` | `slug` (share link) — or `sourceId` for the owner | Anyone logged in with the link; the owner at any time |
 | `campaign` | `sourceId` (campaign id) | Any logged-in user while the campaign is running |
+
+**Naming on screen.** Topic trivia (`sourceType: "topic"`) is called **General Trivia**: any
+player picks a topic, the timer, the number of cards and the share of picture questions. Next to
+it is **AI generated trivia** (section 7.5), which a Pro player has written for a topic of their
+own; it is played with `sourceType: "custom"` and its id as `sourceId`.
 
 ### 6.1 Endpoints
 
@@ -562,6 +568,82 @@ day and Pro players from `customQuiz.generateDailyLimitPro` (20). A request that
 use up the allowance. Over the limit returns `429 GENERATION_LIMIT_REACHED` with
 `details: { dailyLimit, resetsAt, isPro }`; offer Pro when `isPro` is `false`.
 
+### 7.5 AI generated trivia (Pro)
+
+The second kind of trivia a player sees next to **General Trivia** (section 6). In General
+Trivia the questions are ours; here a Pro player gets questions on exactly the topic they want.
+They select one of our topics or type their own, describe the questions they want, and the
+server has Claude write them. The set is stored and is theirs to play as often as they like.
+
+- **Pro only to create.** A freemium player gets `403 UPGRADE_REQUIRED` with
+  `details: { feature: "ai_trivia", pro: { amount, currency, durationDays } }`.
+- **When Pro ends** nothing is taken away: the player still lists, plays and deletes the sets
+  they have. Only creating a new one is blocked.
+- **Text questions only.** There are no picture cards, so do not show the picture-percentage
+  picker for these.
+- **Private.** Only the owner can see or play a set, and it cannot be shared by link.
+- **It feeds General Trivia.** Every set goes to an admin, who may add its cards to a General
+  Trivia topic (section 9). Tell players this where they create one. `reviewStatus` is
+  `pending`, `approved` or `rejected`; the owner's own set is the same in all three.
+- These sets do not appear in `GET /custom-quizzes` and do not count toward the freemium
+  custom trivia limit.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/ai-trivia/options` | What the create screen needs |
+| POST | `/ai-trivia` | Write and store a new set (Pro) |
+| GET | `/ai-trivia` | The caller's sets, newest first |
+| GET | `/ai-trivia/:id` | One set |
+| DELETE | `/ai-trivia/:id` | Delete a set |
+
+All need Auth. An id that is not the caller's returns `404 AI_TRIVIA_NOT_FOUND`.
+
+`GET /ai-trivia/options`
+
+```json
+{ "success": true, "options": {
+  "enabled": true, "isPro": true, "pro": null,
+  "topics": [ { "id": "6702…", "name": "Football" } ],
+  "topicMaxLength": 60, "promptMaxLength": 500,
+  "count": { "default": 10, "min": 5, "max": 30 },
+  "dailyLimit": 10, "usedToday": 1, "remaining": 9, "resetsAt": "2026-10-15T00:00:00.000Z" } }
+```
+
+Hide the feature when `enabled` is `false`. When `isPro` is `false`, show the upgrade prompt
+from `pro` instead of the form. `topics` is every active General Trivia topic, for the picker.
+
+`POST /ai-trivia` — body `{ "topicId": "6702…" }` **or** `{ "topicName": "Roman emperors" }`,
+plus `"prompt"` (required, up to 500 characters) and optional `"count"` (5–30, default 10).
+A typed name that matches one of our topics is linked to it. Two AI requests run, so it can
+take a minute or more: show progress and do not retry automatically.
+
+```json
+{ "success": true,
+  "trivia": {
+    "id": "6710…", "title": "Emperors of Rome",
+    "topic": { "id": null, "name": "Roman emperors" },
+    "prompt": "Hard questions about the emperors of the first century",
+    "reviewStatus": "pending", "inGeneralTrivia": false,
+    "cardCount": 9, "cardCountBounds": { "available": 9, "min": 5, "max": 9 },
+    "defaultTimerSeconds": 5, "defaultCardCount": 9, "createdAt": "2026-10-14T09:12:00.000Z" },
+  "requested": 10,
+  "usage": { "dailyLimit": 10, "usedToday": 2, "remaining": 8, "resetsAt": "2026-10-15T00:00:00.000Z" } }
+```
+
+- `cardCount` may be lower than `requested`. Each card is answered a second time by the AI
+  without being told the marked answer, and a card is dropped when the two do not agree. When a
+  topic was selected, questions General Trivia already has on it are not written again.
+- The response carries no cards, so no answers reach the screen before the player plays.
+- Errors: `400 TOPIC_REQUIRED`, `404 TOPIC_NOT_FOUND`, `400 PROMPT_REQUIRED`,
+  `400 INVALID_CARD_COUNT`, `422 PROMPT_REJECTED` (show `message`: it says what to change),
+  `422 NO_CARDS_GENERATED`, `429 GENERATION_LIMIT_REACHED`, `502 AI_UNAVAILABLE`,
+  `503 AI_NOT_CONFIGURED`. A failed request does not use up the daily allowance.
+
+**Playing a set.** Use the session endpoints of section 6 with
+`{ "sourceType": "custom", "sourceId": "<trivia id>", "timerSeconds": …, "cardCount": … }`.
+Offer the timer and a card count within `cardCountBounds`; `practice` works as usual. For a
+freemium player these plays count toward the campaign interruption rule like General Trivia.
+
 ---
 
 ## 8. Brand campaigns
@@ -720,6 +802,7 @@ any other role).
 | `trivia.imagePercent` | 70 | Yes (0–100) |
 | `customQuiz.freeLimit` / `customQuiz.minCardsToPublish` | 1 / 5 | Yes |
 | `customQuiz.generateDailyLimitFree` / `customQuiz.generateDailyLimitPro` | 3 / 20 | Yes (documents turned into trivia per player per day) |
+| `aiTrivia.generateDailyLimit` | 10 | Yes (AI generated trivias a Pro player may create per day) |
 | `campaign.minCardsToPublish` | 5 | Yes |
 | `campaign.interruptionThreshold` | 10 | Yes (positive integer) |
 | `campaign.priceAmount` / `campaign.durationDays` | 15000 / 30 | Yes |
@@ -840,6 +923,42 @@ own quizzes (section 7.4), and add them to a topic.
   `POST /admin/trivia/topics/:id/cards/bulk`. They are live for players as soon as they are saved.
 - Only definition cards are written. The pictures in a document are not read.
 
+### Reviewing AI generated trivia
+
+Every AI generated trivia a Pro player creates (section 7.5) waits here. Approving one copies
+its cards into a General Trivia topic, where they are live for all players at once. Nothing
+reaches General Trivia without this step. The player's own set is never changed by a review.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/admin/trivia/ai` | `?status=pending` (default), `approved`, `rejected` or `all`. Oldest first |
+| GET | `/admin/trivia/ai/:id` | The set and every card, answers included |
+| POST | `/admin/trivia/ai/:id/approve` | Optional body `{ topicId, topicName, cardIds, note }` |
+| POST | `/admin/trivia/ai/:id/reject` | Optional body `{ note }` |
+
+A set in the list:
+
+```json
+{ "id": "6710…", "title": "Emperors of Rome",
+  "topic": { "id": null, "name": "Roman emperors" },
+  "prompt": "Hard questions about the emperors of the first century",
+  "reviewStatus": "pending", "reviewNote": null, "reviewedAt": null,
+  "publishedTopicId": null, "publishedCardCount": null,
+  "cardCount": 9, "owner": { "id": "66f0…", "name": "ada" }, "createdAt": "…" }
+```
+
+- Show the player's `prompt` and every card with its marked answer, so the admin can check
+  the facts before approving. The AI has checked them once; the admin is the last check.
+- **Which topic the cards go to:** `topicId` if sent; otherwise the topic the player selected
+  (`topic.id`); otherwise the topic named `topicName`, or by the player, which is created and
+  made active if no topic has that name. Send `topicId` to put a typed topic into an existing one.
+- `cardIds` approves only those cards, for when some are good and some are not.
+- The response is `{ trivia, topic, added, skipped }`. `skipped` counts cards left out because
+  the topic already asks the same question.
+- A set is reviewed once: a second approve or reject returns `409 ALREADY_REVIEWED`.
+  Approved cards are ordinary topic cards afterwards and are edited or removed with the topic
+  card endpoints above.
+
 ### Campaigns and revenue
 
 | Method | Path | Purpose |
@@ -922,7 +1041,7 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | Code | Status | Where | Meaning / what to do |
 | --- | --- | --- | --- |
 | `CAMPAIGN_REQUIRED` | 403 | start a topic/custom session | A campaign is owed. Play `details.campaign` first |
-| `UPGRADE_REQUIRED` | 403 | create/publish custom quiz | Freemium limit reached, or quiz locked. Show the Pro prompt |
+| `UPGRADE_REQUIRED` | 403 | create/publish custom quiz, create AI trivia | Freemium limit reached, quiz locked, or a Pro feature (`details.feature`). Show the Pro prompt |
 | `INVALID_TIMER` | 400 | start, quiz defaults | Timer outside 1–15 or not a whole number |
 | `INVALID_PRACTICE` | 400 | start session | `practice` is not `true` or `false` |
 | `INVALID_CARD_COUNT` | 400 | start session, quiz defaults, generate from a document | Outside `details.min`–`details.max` |
@@ -948,7 +1067,13 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | `DOCUMENT_UNREADABLE` | 400 | generate from a document | Scanned, password-protected or damaged PDF. Show the message |
 | `DOCUMENT_TOO_SHORT` | 400 | generate from a document | Under `details.minCharacters` characters of text |
 | `NO_CARDS_GENERATED` | 422 | generate from a document | No card could be backed by the document. Suggest another document |
-| `GENERATION_LIMIT_REACHED` | 429 | generate from a document | Daily allowance used; `details: { dailyLimit, resetsAt, isPro }` |
+| `GENERATION_LIMIT_REACHED` | 429 | generate from a document, create AI trivia | Daily allowance used; `details: { dailyLimit, resetsAt, isPro }` |
+| `TOPIC_REQUIRED` / `PROMPT_REQUIRED` | 400 | create AI trivia | No topic selected or typed; no description of the questions |
+| `PROMPT_REJECTED` | 422 | create AI trivia | Questions cannot be written for this request. Show `message` |
+| `AI_TRIVIA_NOT_FOUND` | 404 | AI trivia | Unknown or not yours |
+| `AI_TRIVIA_NOT_SHAREABLE` | 409 | publish | An AI generated trivia has no share link |
+| `ALREADY_REVIEWED` | 409 | admin AI trivia review | `details.reviewStatus` |
+| `INVALID_STATUS` | 400 | admin AI trivia list | Bad `status` filter |
 | `INVALID_IMAGE_TYPE` / `IMAGE_REQUIRED` / `IMAGE_TOO_LARGE` / `LIMIT_FILE_SIZE` / `INVALID_IMAGE_URL` | 400 | uploads | See section 10 |
 | `CAMPAIGN_NOT_EDITABLE` | 409 | brand edits | Only drafts are editable |
 | `CAMPAIGN_NOT_PAYABLE` | 409 | checkout | Already paid or not payable |
@@ -974,6 +1099,7 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 | Brand URL click | 20 / minute |
 | Image upload | 60 / 10 minutes |
 | Generate cards from a document | 10 / 10 minutes, plus the daily allowance in 7.4 |
+| Create an AI generated trivia | 10 / 10 minutes, plus the daily allowance in 7.5 |
 | Create/edit quizzes, campaigns and cards | 120 / minute |
 
 ---
@@ -998,6 +1124,7 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 | `WIKIMEDIA_CONTACT` | Contact email or URL sent to Wikimedia with image-import requests |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Claude API key for trivia from a document (without it the feature answers `503 AI_NOT_CONFIGURED`), and the model that writes the cards (default `claude-haiku-4-5-20251001`) |
 | `QUIZ_GENERATE_DAILY_LIMIT_FREE`, `QUIZ_GENERATE_DAILY_LIMIT_PRO` | Defaults for the daily document allowance (an admin override wins) |
+| `ANTHROPIC_TOPIC_MODEL`, `AI_TRIVIA_DAILY_LIMIT` | The model that writes and checks AI generated trivia (default `claude-opus-5-5`), and the default daily allowance per Pro player (an admin override wins) |
 | `STORAGE_PROVIDER` (`firebase` \| `aws` \| `memory`), `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`, `AWS_S3_PUBLIC_BASE_URL`, `FIREBASE_STORAGE_BUCKET` | Image storage |
 | `TYPE`, `PROJECT_ID`, `PRIVATE_KEY_ID`, `PRIVATE_KEY`, `CLIENT_EMAIL`, `CLIENT_ID`, `AUTH_URI`, `TOKEN_URI`, `AUTH_PROVIDER_CERT_URL`, `CLIENT_CERT_URL`, `UNIVERSE_DOMAIN` | Firebase service account (Google sign-in, Firebase storage) |
 | `EMAIL_PROVIDER`, `SMTP_*`, `SENDGRID_API_KEY`, `TWILIO_SMTP_*`, `AWS_SES_FROM_EMAIL` | Email |

@@ -19,7 +19,12 @@ export async function syncQuizLocks(userId: string, now: Date = new Date()): Pro
   const isPro = isProAt(user.proUntil, now);
   const freeLimit = await getCustomQuizFreeLimit();
 
-  const quizzes = await CustomQuizModel.find({ ownerId: userId, deletedAt: null })
+  // AI generated trivia is not part of the limit: its owner keeps playing it after Pro ends.
+  const quizzes = await CustomQuizModel.find({
+    ownerId: userId,
+    deletedAt: null,
+    origin: { $ne: "ai" },
+  })
     .sort({ createdAt: 1, _id: 1 })
     .select("status statusBeforeLock");
 

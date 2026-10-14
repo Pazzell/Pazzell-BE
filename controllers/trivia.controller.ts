@@ -3,6 +3,9 @@ import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
 import TriviaTopicModel from "../models/triviaTopic.model";
 import TriviaCardModel from "../models/triviaCard.model";
+import CustomQuizModel from "../models/customQuiz.model";
+import CustomQuizCardModel from "../models/customQuizCard.model";
+import userModel from "../models/user.model";
 import { assertObjectId, cleanString, requireString, toInt } from "../utils/validators";
 import { resolveImage } from "../services/upload/image.service";
 import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
@@ -21,6 +24,7 @@ import { importImageCards, IMPORT_MAX_COUNT } from "../services/trivia/imageImpo
 import { listStarterTopics, loadStarterTopics } from "../services/trivia/starter.service";
 import {
   GENERATE_AVOID_MAX,
+  fingerprint,
   generateDraftCards,
   getGenerateOptions,
 } from "../services/quizGen/generate.service";
@@ -384,4 +388,190 @@ export const adminDeleteCard = CatchAsyncError(async (req: Request, res: Respons
   const card = await loadTopicCard(req.params.id, req.params.cardId);
   await card.deleteOne();
   res.status(200).json({ success: true });
+});
+
+// --- Admin: AI generated trivia waiting to join General Trivia ----------------------------
+
+const REVIEW_STATUSES = ["pending", "approved", "rejected"];
+const OWNER_FIELDS = "username firstName name";
+
+const adminAiTrivia = (quiz: any, cardCount: number, owner?: any) => ({
+  id: String(quiz._id),
+  title: quiz.title,
+  topic: { id: quiz.aiTopicId || null, name: quiz.aiTopicName || null },
+  prompt: quiz.aiPrompt || null,
+  reviewStatus: quiz.reviewStatus || "pending",
+  reviewNote: quiz.reviewNote || null,
+  reviewedAt: quiz.reviewedAt || null,
+  publishedTopicId: quiz.publishedTopicId || null,
+  publishedCardCount: quiz.publishedCardCount ?? null,
+  cardCount,
+  owner: {
+    id: quiz.ownerId,
+    name: owner?.username || owner?.firstName || owner?.name || null,
+  },
+  createdAt: quiz.createdAt,
+});
+
+async function loadAiTrivia(id: string) {
+  const quiz = await CustomQuizModel.findOne({
+    _id: assertObjectId(id, "trivia id"),
+    origin: "ai",
+    deletedAt: null,
+  });
+  if (!quiz) throw new ErrorHandler("Trivia not found", 404, "AI_TRIVIA_NOT_FOUND");
+  return quiz;
+}
+
+function assertPendingReview(quiz: any) {
+  if ((quiz.reviewStatus || "pending") !== "pending") {
+    throw new ErrorHandler("This trivia has already been reviewed", 409, "ALREADY_REVIEWED", {
+      reviewStatus: quiz.reviewStatus,
+    });
+  }
+}
+
+// GET /admin/trivia/ai?status=pending|approved|rejected|all — oldest first
+export const adminListAiTrivias = CatchAsyncError(async (req: Request, res: Response) => {
+  const status = String(req.query.status || "pending");
+  if (status !== "all" && !REVIEW_STATUSES.includes(status)) {
+    throw new ErrorHandler(
+      'status must be "pending", "approved", "rejected" or "all"',
+      400,
+      "INVALID_STATUS"
+    );
+  }
+  const quizzes = await CustomQuizModel.find({
+    origin: "ai",
+    deletedAt: null,
+    ...(status === "all" ? {} : { reviewStatus: status }),
+  })
+    .sort({ createdAt: 1 })
+    .lean();
+  const counts = await CustomQuizCardModel.aggregate([
+    { $match: { quizId: { $in: quizzes.map((q) => String(q._id)) } } },
+    { $group: { _id: "$quizId", count: { $sum: 1 } } },
+  ]);
+  const countOf = new Map(counts.map((c) => [c._id, c.count]));
+  const owners = await userModel
+    .find({ _id: { $in: quizzes.map((q) => q.ownerId) } })
+    .select(OWNER_FIELDS)
+    .lean();
+  const ownerOf = new Map(owners.map((o) => [String(o._id), o]));
+  res.status(200).json({
+    success: true,
+    trivias: quizzes.map((q) =>
+      adminAiTrivia(q, countOf.get(String(q._id)) || 0, ownerOf.get(q.ownerId))
+    ),
+  });
+});
+
+// GET /admin/trivia/ai/:id — the trivia with every card, answers included
+export const adminGetAiTrivia = CatchAsyncError(async (req: Request, res: Response) => {
+  const quiz = await loadAiTrivia(req.params.id);
+  const cards = await CustomQuizCardModel.find({ quizId: String(quiz._id) })
+    .sort({ createdAt: 1 })
+    .lean();
+  const owner = await userModel.findById(quiz.ownerId).select(OWNER_FIELDS).lean();
+  res.status(200).json({
+    success: true,
+    trivia: adminAiTrivia(quiz, cards.length, owner),
+    cards: cards.map(editorCard),
+  });
+});
+
+// POST /admin/trivia/ai/:id/approve  { topicId?, topicName?, cardIds?, note? }
+// Copies the cards into a General Trivia topic, where they are live at once. The topic is
+// `topicId`, else the one the player chose, else the one named `topicName` (or by the
+// player), which is created if it does not exist. `cardIds` approves only some of the cards.
+// The player's own trivia is not changed.
+export const adminApproveAiTrivia = CatchAsyncError(async (req: Request, res: Response) => {
+  const adminId = String(req.user!._id);
+  const quiz = await loadAiTrivia(req.params.id);
+  assertPendingReview(quiz);
+  const body = req.body || {};
+
+  let cardIds: string[] | undefined;
+  if (body.cardIds !== undefined) {
+    if (!Array.isArray(body.cardIds) || body.cardIds.length === 0) {
+      throw new ErrorHandler("cardIds must be a list of card ids", 400, "INVALID_CARD");
+    }
+    cardIds = body.cardIds.map((id: any) => assertObjectId(id, "card id"));
+  }
+  const cards = await CustomQuizCardModel.find({
+    quizId: String(quiz._id),
+    ...(cardIds ? { _id: { $in: cardIds } } : {}),
+  })
+    .sort({ createdAt: 1 })
+    .lean();
+  if (cards.length === 0) throw new ErrorHandler("There are no cards to approve", 400, "NO_CARDS");
+
+  let topic = null;
+  if (body.topicId !== undefined && body.topicId !== null && body.topicId !== "") {
+    topic = await loadTopic(body.topicId);
+  } else if (body.topicName === undefined && quiz.aiTopicId) {
+    topic = await TriviaTopicModel.findById(quiz.aiTopicId);
+  }
+  if (!topic) {
+    const name = requireString(body.topicName ?? quiz.aiTopicName, "topicName", 60);
+    topic =
+      (await TriviaTopicModel.findOne({ name }).collation(NAME_ORDER)) ||
+      (await TriviaTopicModel.create({ name, slug: await uniqueSlug(name), createdBy: adminId }));
+  }
+  const topicId = String(topic._id);
+
+  // A card is copied once, and never on top of a question the topic already asks.
+  const held = await TriviaCardModel.find({ topicId }).select("text sourceRef").lean();
+  const copied = new Set(held.map((card) => card.sourceRef).filter(Boolean));
+  const asked = new Set(held.map((card) => fingerprint(card.text || "")));
+  const fresh = cards.filter((card) => {
+    const key = fingerprint(card.text || "");
+    if (copied.has(String(card._id)) || asked.has(key)) return false;
+    asked.add(key);
+    return true;
+  });
+  await TriviaCardModel.insertMany(
+    fresh.map((card) => ({
+      topicId,
+      type: card.type,
+      imageUrl: card.imageUrl,
+      text: card.text,
+      options: card.options,
+      correctOptionIndex: card.correctOptionIndex,
+      attribution: card.attribution,
+      source: "ai",
+      sourceRef: String(card._id),
+    }))
+  );
+
+  quiz.reviewStatus = "approved";
+  quiz.reviewedBy = adminId;
+  quiz.reviewedAt = new Date();
+  quiz.reviewNote = cleanString(body.note, 300);
+  quiz.publishedTopicId = topicId;
+  quiz.publishedCardCount = fresh.length;
+  await quiz.save();
+
+  const count = await CustomQuizCardModel.countDocuments({ quizId: String(quiz._id) });
+  const topicCards = await TriviaCardModel.countDocuments({ topicId });
+  res.status(200).json({
+    success: true,
+    trivia: adminAiTrivia(quiz, count),
+    topic: adminTopic(topic, topicCards),
+    added: fresh.length,
+    skipped: cards.length - fresh.length,
+  });
+});
+
+// POST /admin/trivia/ai/:id/reject  { note? } — the cards stay out of General Trivia
+export const adminRejectAiTrivia = CatchAsyncError(async (req: Request, res: Response) => {
+  const quiz = await loadAiTrivia(req.params.id);
+  assertPendingReview(quiz);
+  quiz.reviewStatus = "rejected";
+  quiz.reviewedBy = String(req.user!._id);
+  quiz.reviewedAt = new Date();
+  quiz.reviewNote = cleanString(req.body?.note, 300);
+  await quiz.save();
+  const count = await CustomQuizCardModel.countDocuments({ quizId: String(quiz._id) });
+  res.status(200).json({ success: true, trivia: adminAiTrivia(quiz, count) });
 });

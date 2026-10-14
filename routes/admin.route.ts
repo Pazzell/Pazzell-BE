@@ -15,6 +15,10 @@ import {
   adminLoadStarterTopics,
   adminGetGenerateInfo,
   adminGenerateCards,
+  adminListAiTrivias,
+  adminGetAiTrivia,
+  adminApproveAiTrivia,
+  adminRejectAiTrivia,
 } from "../controllers/trivia.controller";
 import {
   listCampaigns,
@@ -57,6 +61,11 @@ router.post("/admin/trivia/starter", adminLoadStarterTopics);
 // Draft definition cards written from an uploaded document; saved through the bulk endpoint
 router.get("/admin/trivia/generate", adminGetGenerateInfo);
 router.post("/admin/trivia/generate", generateLimiter, documentUploadMiddleware, adminGenerateCards);
+// AI generated trivia written by Pro players: approving one copies its cards into General Trivia
+router.get("/admin/trivia/ai", adminListAiTrivias);
+router.get("/admin/trivia/ai/:id", adminGetAiTrivia);
+router.post("/admin/trivia/ai/:id/approve", adminApproveAiTrivia);
+router.post("/admin/trivia/ai/:id/reject", adminRejectAiTrivia);
 
 // Campaign moderation
 router.get("/admin/campaigns", listCampaigns);

@@ -24,6 +24,7 @@ export async function assertCanCreateCustomQuiz(user: PlanUser): Promise<void> {
   const current = await CustomQuizModel.countDocuments({
     ownerId: String(user._id),
     deletedAt: null,
+    origin: { $ne: "ai" },
   });
   if (current >= limit) {
     const pro = await getProPricing();
@@ -34,4 +35,18 @@ export async function assertCanCreateCustomQuiz(user: PlanUser): Promise<void> {
       { feature: "custom_quiz", limit, current, pro }
     );
   }
+}
+
+/**
+ * Pro benefit (c): AI generated trivia. Only Pro players can have a new one written;
+ * the ones a player already has stay playable when Pro ends.
+ */
+export async function assertCanGenerateAiTrivia(user: PlanUser): Promise<void> {
+  if (getPlan(user).isPro) return;
+  throw new ErrorHandler(
+    "AI generated trivia is a Pro feature. Upgrade to Pro to create your own.",
+    403,
+    "UPGRADE_REQUIRED",
+    { feature: "ai_trivia", pro: await getProPricing() }
+  );
 }
