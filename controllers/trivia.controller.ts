@@ -90,7 +90,7 @@ export const getTopic = CatchAsyncError(async (req: Request, res: Response, next
 
 // --- Player: sessions (shared by topics, custom quizzes and campaigns) -------------
 
-// POST /trivia/sessions  { sourceType, sourceId | slug, timerSeconds, cardCount, imagePercent?, practice? }
+// POST /trivia/sessions  { sourceType, sourceId | slug, timerSeconds, cardCount, imagePercent?, practice?, replayOf? }
 export const postStartSession = CatchAsyncError(async (req: Request, res: Response) => {
   const body = req.body || {};
   const result = await startSession(req.user!, {
@@ -101,6 +101,7 @@ export const postStartSession = CatchAsyncError(async (req: Request, res: Respon
     cardCount: body.cardCount,
     imagePercent: body.imagePercent,
     practice: body.practice,
+    replayOf: body.replayOf,
   });
   res.status(result.resumed ? 200 : 201).json({ success: true, ...result });
 });

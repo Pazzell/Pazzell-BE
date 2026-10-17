@@ -104,12 +104,19 @@ Unchanged from the existing API. Roles are `gamer` (the player — the product's
 | POST | `/auth/user/activate` | – | `{ activation_token, activation_code }` → `{ user, accessToken, refreshToken }` |
 | POST | `/auth/user/resend-activation` | – | `{ email }` |
 | POST | `/auth/login` | – | `{ email, password }` → `{ user, accessToken, refreshToken }` |
-| POST | `/auth/google` | – | `{ idToken }` (Firebase ID token) → `{ user, accessToken, refreshToken }` |
+| POST | `/auth/google` | – | `{ googleAccessToken }` (the `access_token` from the Google OAuth popup) or `{ idToken }` (Firebase ID token) → `{ user, accessToken, refreshToken }`. Signs a new player up or an existing account in |
 | POST | `/auth/logout` | Auth | |
 | POST | `/auth/forgot-password` | – | `{ email }` |
 | POST | `/auth/reset-password` | – | `{ token, new_password }` |
 | POST | `/refresh` | cookie | Uses the `refresh_token` cookie → `{ accessToken }` |
 | GET | `/me` | Auth | `{ user, plan }` |
+
+**Google sign-in.** Send only the Google token. The server checks it with Google (it must have
+been issued to `GOOGLE_CLIENT_ID`) and reads the email and name from Google; a profile sent in
+the body (`email`, `googleId`, ...) is not accepted (`400 GOOGLE_TOKEN_REQUIRED`). A new email
+becomes a verified player; an existing account with the same email (any letter case) is
+linked and marked verified. Errors: `401 GOOGLE_TOKEN_INVALID` (expired, made up, or for
+another app), `400 GOOGLE_EMAIL_UNVERIFIED`, `503 GOOGLE_NOT_CONFIGURED`, `502 GOOGLE_UNAVAILABLE`.
 | GET | `/profile/gamer` | Auth (gamer) | `{ profile }` with `profile.plan` |
 | PUT | `/profile/gamer` | Auth (gamer) | multipart: `firstName`, `lastName`, `username`, file `avatar` |
 | GET | `/profile/brand` | Auth (brand) | `{ profile }` with `brandDetails { companyName, logoUrl, websiteUrl, verified, totalCampaigns }` |
@@ -289,6 +296,16 @@ a topic has fewer than 5), at most the cards available, capped globally at `triv
 `practice` is optional and defaults to `false`. It must be a boolean (`400 INVALID_PRACTICE`
 otherwise).
 
+**Replaying a practised set.** Play Now, Practise Again and Retry on the result screen send
+`replayOf` with the id of the session just finished. If that session was a practice, or itself
+replayed one, the new session gets the same cards in a new order (options reshuffled too), so
+the player is tested on what they practised; `cardCount` and `imagePercent` are then ignored
+and `session.cardCount` is the size of that set (cards deleted since are left out). A plain
+quiz that was not practised draws a fresh set as usual. `session.replayOf` is the session whose
+cards were reused, or `null`. Starting from the setup screen (no `replayOf`) always draws a
+fresh set. Errors: `400 INVALID_REPLAY` (not a session id), `404 SESSION_NOT_FOUND` (not the
+player's session of this same topic / quiz / campaign).
+
 For a shared custom quiz send `{ "sourceType": "custom", "slug": "…", … }`. `timerSeconds` and
 `cardCount` may be omitted for a custom quiz, in which case the creator's defaults are used.
 
@@ -297,7 +314,7 @@ For a shared custom quiz send `{ "sourceType": "custom", "slug": "…", … }`. 
   "session": {
     "id": "6703…", "status": "quiz",
     "source": { "type": "topic", "id": "6702…", "title": "Football" },
-    "isPreview": false, "practice": true, "timerSeconds": 5, "cardCount": 10, "currentIndex": 0,
+    "isPreview": false, "practice": true, "replayOf": null, "timerSeconds": 5, "cardCount": 10, "currentIndex": 0,
     "brand": null, "startedAt": "…", "completedAt": null } }
 ```
 
@@ -310,7 +327,7 @@ For a shared custom quiz send `{ "sourceType": "custom", "slug": "…", … }`. 
 - `session.brand` is filled for campaigns (see 8.4).
 - `isPreview: true` means an owner/brand test play: it is never counted anywhere.
 
-Errors: `403 CAMPAIGN_REQUIRED` (see 8.3), `400 INVALID_TIMER`, `400 INVALID_PRACTICE`, `400 INVALID_CARD_COUNT`
+Errors: `403 CAMPAIGN_REQUIRED` (see 8.3), `400 INVALID_TIMER`, `400 INVALID_PRACTICE`, `400 INVALID_REPLAY`, `404 SESSION_NOT_FOUND`, `400 INVALID_CARD_COUNT`
 (`details: { available, min, max }`), `400 NO_CARDS`, `404 TOPIC_NOT_FOUND`,
 `404 QUIZ_NOT_FOUND`, `404 CAMPAIGN_NOT_AVAILABLE`, `400 INVALID_SOURCE`.
 
@@ -1044,6 +1061,9 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | `UPGRADE_REQUIRED` | 403 | create/publish custom quiz, create AI trivia | Freemium limit reached, quiz locked, or a Pro feature (`details.feature`). Show the Pro prompt |
 | `INVALID_TIMER` | 400 | start, quiz defaults | Timer outside 1–15 or not a whole number |
 | `INVALID_PRACTICE` | 400 | start session | `practice` is not `true` or `false` |
+| `INVALID_REPLAY` | 400 | start session | `replayOf` is not a session id |
+| `GOOGLE_TOKEN_REQUIRED` / `GOOGLE_TOKEN_INVALID` | 400 / 401 | Google sign-in | No Google token sent, or Google rejected it. Ask the player to try again |
+| `GOOGLE_EMAIL_UNVERIFIED` | 400 | Google sign-in | The Google account has no verified email |
 | `INVALID_CARD_COUNT` | 400 | start session, quiz defaults, generate from a document | Outside `details.min`–`details.max` |
 | `NO_CARDS` | 400 | start session | The source has no cards |
 | `INVALID_SOURCE` | 400 | start session | Bad `sourceType` |
@@ -1126,7 +1146,8 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 | `QUIZ_GENERATE_DAILY_LIMIT_FREE`, `QUIZ_GENERATE_DAILY_LIMIT_PRO` | Defaults for the daily document allowance (an admin override wins) |
 | `ANTHROPIC_TOPIC_MODEL`, `AI_TRIVIA_DAILY_LIMIT` | The model that writes and checks AI generated trivia (default `claude-opus-5-5`), and the default daily allowance per Pro player (an admin override wins) |
 | `STORAGE_PROVIDER` (`firebase` \| `aws` \| `memory`), `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`, `AWS_S3_PUBLIC_BASE_URL`, `FIREBASE_STORAGE_BUCKET` | Image storage |
-| `TYPE`, `PROJECT_ID`, `PRIVATE_KEY_ID`, `PRIVATE_KEY`, `CLIENT_EMAIL`, `CLIENT_ID`, `AUTH_URI`, `TOKEN_URI`, `AUTH_PROVIDER_CERT_URL`, `CLIENT_CERT_URL`, `UNIVERSE_DOMAIN` | Firebase service account (Google sign-in, Firebase storage) |
+| `GOOGLE_CLIENT_ID` | Google OAuth web client id(s), comma separated, whose tokens `/auth/google` accepts: the same id as the frontend's `NEXT_PUBLIC_GOOGLE_CLIENT_ID` (which is also read as a fallback) |
+| `TYPE`, `PROJECT_ID`, `PRIVATE_KEY_ID`, `PRIVATE_KEY`, `CLIENT_EMAIL`, `CLIENT_ID`, `AUTH_URI`, `TOKEN_URI`, `AUTH_PROVIDER_CERT_URL`, `CLIENT_CERT_URL`, `UNIVERSE_DOMAIN` | Firebase service account (Firebase `idToken` sign-in, Firebase storage) |
 | `EMAIL_PROVIDER`, `SMTP_*`, `SENDGRID_API_KEY`, `TWILIO_SMTP_*`, `AWS_SES_FROM_EMAIL` | Email |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_BRAND_EMAIL`, `SEED_BRAND_PASSWORD`, `SEED_CONFIRM` | Seed script |
 

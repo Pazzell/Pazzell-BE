@@ -12,6 +12,11 @@ export interface ITriviaAttempt extends Document {
   isPreview: boolean;
   // Practice mode: each question is served with its correct option marked.
   practice: boolean;
+  // The session whose card set this one replays (Play Now / Practise Again / Retry).
+  replayOf?: string | null;
+  // True when the cards are a practised set: a practice session, or a replay of one.
+  // Replaying such a session hands out the same cards again, in a new order.
+  practiceSet: boolean;
   timerSeconds: number;
   cardCount: number;
   // Share of picture cards the player asked for; null when they left it to the default.
@@ -34,6 +39,8 @@ const triviaAttemptSchema: Schema<ITriviaAttempt> = new mongoose.Schema(
     sourceKey: { type: String, required: true },
     isPreview: { type: Boolean, default: false },
     practice: { type: Boolean, default: false },
+    replayOf: { type: String, default: null },
+    practiceSet: { type: Boolean, default: false },
     timerSeconds: { type: Number, required: true },
     cardCount: { type: Number, required: true },
     imagePercent: { type: Number, default: null },

@@ -6,7 +6,8 @@ import BrandModel from "../models/brand.model";
 import { sendToken } from "../utils/jwt";
 import admin from "firebase-admin";
 // ensure firebase admin is initialized (firebaseConfig reads env and calls initializeApp)
-import "../firebaseConfig";
+import { isFirebaseConfigured } from "../firebaseConfig";
+import { GoogleProfile, verifyGoogleAccessToken } from "../services/auth/googleToken";
 import jwt from "jsonwebtoken";
 import { Secret } from "jsonwebtoken";
 import path from "path";
@@ -31,84 +32,85 @@ const createResetToken = (userId: string): string => {
   return token;
 };
 
-// Google OAuth sign-in (client provides profile info or idToken)
+// Google sign-in, which also signs a new player up. The client sends the Google access
+// token from the OAuth popup (`googleAccessToken`) or a Firebase `idToken`; either is
+// verified server-side and the profile comes from Google, never from the request body.
 export const googleAuth = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Accept either a firebase idToken or a minimal profile payload
-      const { idToken, email, name, avatar, googleId, givenName, familyName } =
-        req.body;
+    const { googleAccessToken, idToken } = req.body || {};
 
-      let profile: {
-        email: string;
-        name?: string;
-        picture?: string;
-        uid?: string;
-      } | null = null;
-
-      if (idToken) {
-        // verify with firebase-admin
-        const decoded = await admin.auth().verifyIdToken(idToken);
-        profile = {
-          email: decoded.email || "",
-          name: decoded.name,
-          picture: decoded.picture,
-          uid: decoded.uid,
-        };
-      } else if (email && googleId) {
-        profile = { email, name, picture: avatar, uid: googleId };
-      } else {
-        return next(new ErrorHandler("Invalid Google payload", 400));
+    let profile: GoogleProfile;
+    if (typeof googleAccessToken === "string" && googleAccessToken) {
+      profile = await verifyGoogleAccessToken(googleAccessToken);
+    } else if (typeof idToken === "string" && idToken) {
+      if (!isFirebaseConfigured()) {
+        return next(new ErrorHandler("Google sign-in is not configured", 503, "GOOGLE_NOT_CONFIGURED"));
       }
-
-      let user = await UserModel.findOne({ email: profile.email });
-      if (!user) {
-        // Prefer explicit givenName/familyName if provided by client
-        let firstName = givenName || "";
-        let lastName = familyName || "";
-
-        if (!firstName) {
-          const fullName = profile.name || profile.email.split("@")[0];
-          const nameParts = fullName.split(" ");
-          firstName = nameParts[0] || fullName;
-          lastName = nameParts.slice(1).join(" ") || "";
-        }
-
-        const username = await generateUsername(profile.email);
-        const avatar =
-          profile.picture ||
-          generateAvatar(`${firstName} ${lastName}`.trim() || profile.email);
-
-        user = await UserModel.create({
-          firstName,
-          lastName,
-          username,
-          email: profile.email,
-          avatar,
-          googleId: profile.uid,
-          role: "gamer",
-          isVerified: true,
-        });
-      } else {
-        // ensure googleId is stored
-        if (!user.googleId && profile.uid) {
-          user.googleId = profile.uid;
-          await user.save();
-        }
+      let decoded: admin.auth.DecodedIdToken;
+      try {
+        decoded = await admin.auth().verifyIdToken(idToken);
+      } catch {
+        return next(
+          new ErrorHandler("Google sign-in could not be verified. Please try again.", 401, "GOOGLE_TOKEN_INVALID")
+        );
       }
-
-      // Mark user as online after successful Google login
-      const redis = require("../utils/redis").redis;
-      await redis.sadd("users:online", String(user._id));
-      await redis.expire("users:online", 300); // 5 minutes expiry
-      await redis.set(`user:${user._id}:last_active`, Date.now(), "EX", 300);
-
-      sendToken(user, 200, res);
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Google authentication failed: ${error.message}`, 500)
-      );
+      if (!decoded.email || !decoded.email_verified) {
+        return next(
+          new ErrorHandler("Your Google account has no verified email address", 400, "GOOGLE_EMAIL_UNVERIFIED")
+        );
+      }
+      profile = {
+        googleId: decoded.uid,
+        email: decoded.email.toLowerCase(),
+        name: decoded.name,
+        picture: decoded.picture,
+      };
+    } else {
+      return next(new ErrorHandler("googleAccessToken is required", 400, "GOOGLE_TOKEN_REQUIRED"));
     }
+
+    // Emails were stored as typed, so match an existing account regardless of case.
+    let user = await UserModel.findOne({ email: profile.email }).collation({ locale: "en", strength: 2 });
+    if (!user) {
+      let firstName = profile.givenName || "";
+      let lastName = profile.familyName || "";
+
+      if (!firstName) {
+        const fullName = profile.name || profile.email.split("@")[0];
+        const nameParts = fullName.split(" ");
+        firstName = nameParts[0] || fullName;
+        lastName = nameParts.slice(1).join(" ") || "";
+      }
+
+      const username = await generateUsername(profile.email);
+      const avatar =
+        profile.picture ||
+        generateAvatar(`${firstName} ${lastName}`.trim() || profile.email);
+
+      user = await UserModel.create({
+        firstName,
+        lastName,
+        username,
+        email: profile.email,
+        avatar,
+        googleId: profile.googleId,
+        role: "gamer",
+        isVerified: true,
+      });
+    } else if (!user.googleId || !user.isVerified) {
+      // Google has confirmed the address, so the account is linked and verified.
+      user.googleId = user.googleId || profile.googleId;
+      user.isVerified = true;
+      await user.save();
+    }
+
+    // Mark user as online after successful Google login
+    const redis = require("../utils/redis").redis;
+    await redis.sadd("users:online", String(user._id));
+    await redis.expire("users:online", 300); // 5 minutes expiry
+    await redis.set(`user:${user._id}:last_active`, Date.now(), "EX", 300);
+
+    sendToken(user, 200, res);
   }
 );
 

@@ -80,6 +80,74 @@ describe("Trivia (admin topics)", () => {
     });
   });
 
+  describe("replaying a practice", () => {
+    const cardIds = async (id: string) =>
+      (await TriviaAttemptQuestionModel.find({ attemptId: id }).sort({ quizIndex: 1 }).lean()).map((q) => q.cardId);
+    const practise = async () => {
+      const id = (await startDefault({ practice: true })).body.session.id;
+      await playSession(user, id);
+      return id;
+    };
+
+    it("Play Now brings back the practised cards, without the pointer", async () => {
+      const practiceId = await practise();
+      const real = await startDefault({ practice: false, replayOf: practiceId, cardCount: 12 });
+      expect(real.status).toBe(201);
+      expect(real.body.session).toMatchObject({ practice: false, replayOf: practiceId, cardCount: 5 });
+
+      const realId = real.body.session.id;
+      expect((await cardIds(realId)).sort()).toEqual((await cardIds(practiceId)).sort());
+      expect((await question(user, realId)).body.question).not.toHaveProperty("correctOptionIndex");
+    });
+
+    it("keeps the practised set through Retry and Practise Again", async () => {
+      const practiceId = await practise();
+      const practised = (await cardIds(practiceId)).sort();
+
+      const realId = (await startDefault({ replayOf: practiceId })).body.session.id;
+      await playSession(user, realId);
+      const retryId = (await startDefault({ replayOf: realId })).body.session.id;
+      expect((await cardIds(retryId)).sort()).toEqual(practised);
+      await playSession(user, retryId);
+
+      const againId = (await startDefault({ practice: true, replayOf: retryId })).body.session.id;
+      expect((await cardIds(againId)).sort()).toEqual(practised);
+    });
+
+    it("draws a fresh set when retrying a quiz that was not practised", async () => {
+      const plainId = (await startDefault()).body.session.id;
+      await playSession(user, plainId);
+      const retry = await startDefault({ replayOf: plainId, cardCount: 12 });
+      expect(retry.status).toBe(201);
+      expect(retry.body.session).toMatchObject({ cardCount: 12, replayOf: null });
+    });
+
+    it("leaves out practised cards that were deleted since", async () => {
+      const practiceId = await practise();
+      const [gone, ...kept] = await cardIds(practiceId);
+      await TriviaCardModel.deleteOne({ _id: gone });
+      const real = await startDefault({ replayOf: practiceId });
+      expect(real.body.session.cardCount).toBe(4);
+      expect((await cardIds(real.body.session.id)).sort()).toEqual(kept.sort());
+    });
+
+    it("only replays the player's own session of the same trivia", async () => {
+      const practiceId = await practise();
+      const other = await createUser();
+      const stranger = await startTrivia(other, {
+        sourceType: "topic", sourceId: topicId, timerSeconds: 5, cardCount: 5, replayOf: practiceId,
+      });
+      expect(stranger.status).toBe(404);
+
+      const elsewhere = await createTopic(12, "Elsewhere");
+      const wrongTopic = await startTrivia(user, {
+        sourceType: "topic", sourceId: elsewhere, timerSeconds: 5, cardCount: 5, replayOf: practiceId,
+      });
+      expect(wrongTopic.status).toBe(404);
+      expect((await startDefault({ replayOf: "nope" })).body.code).toBe("INVALID_REPLAY");
+    });
+  });
+
   describe("practice mode", () => {
     it("starts straight in the quiz, with no study step", async () => {
       const started = await startDefault();

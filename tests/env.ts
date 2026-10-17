@@ -29,6 +29,8 @@ process.env.GAME_SUBMIT_GRACE_MS = "1000";
 process.env.PROJECT_ID = "";
 process.env.PRIVATE_KEY = "";
 process.env.CLIENT_EMAIL = "";
+process.env.GOOGLE_CLIENT_ID = "pazzell-test.apps.googleusercontent.com";
+process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID = "";
 
 // Models start building their indexes as soon as they are imported and buffer until
 // the in-memory MongoDB is up. On a slow machine that can take longer than Mongoose's

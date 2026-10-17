@@ -19,8 +19,9 @@ import {
   recordCampaignPlayStart,
   resetCampaignCounter,
 } from "../campaign/campaign.service";
-import { brandForAttempt, resolveSource, titleForAttempt } from "./sources";
-import { pickMixedCards } from "./mix";
+import { brandForAttempt, resolveSource, SourceCard, titleForAttempt } from "./sources";
+import { pickMixedCards, shuffle } from "./mix";
+import { isObjectId } from "../../utils/validators";
 
 // One session engine for every kind of trivia (admin topics, custom quizzes, brand
 // campaigns):  quiz -> completed  (or abandoned). There is no separate study step: a
@@ -66,6 +67,7 @@ async function publicSession(attempt: ITriviaAttempt) {
     },
     isPreview: attempt.isPreview,
     practice: !!attempt.practice,
+    replayOf: attempt.replayOf ?? null,
     timerSeconds: attempt.timerSeconds,
     cardCount: attempt.cardCount,
     imagePercent: attempt.imagePercent ?? null,
@@ -77,10 +79,42 @@ async function publicSession(attempt: ITriviaAttempt) {
 }
 
 /**
+ * The cards of a practised set that is being replayed, as they are in the source now
+ * (cards deleted since are left out). Null when there is nothing to replay: no
+ * `replayOf`, or it names a plain quiz, whose retry draws a fresh set.
+ */
+async function practisedCards(
+  userId: string,
+  sourceKey: string,
+  replayOf: any,
+  cards: SourceCard[]
+): Promise<SourceCard[] | null> {
+  if (replayOf === undefined || replayOf === null) return null;
+  if (!isObjectId(replayOf)) {
+    throw new ErrorHandler("replayOf must be a session id", 400, "INVALID_REPLAY");
+  }
+  const previous = await TriviaAttemptModel.findOne({ _id: replayOf, userId, sourceKey }).lean();
+  if (!previous) throw new ErrorHandler("Session not found", 404, "SESSION_NOT_FOUND");
+  if (!previous.practice && !previous.practiceSet) return null;
+
+  const rows = await TriviaAttemptQuestionModel.find({ attemptId: String(previous._id) })
+    .select("cardId")
+    .lean();
+  const ids = new Set(rows.map((row) => row.cardId));
+  const kept = cards.filter((card) => ids.has(card.id));
+  return kept.length ? kept : null;
+}
+
+/**
  * Starts a session, which goes straight into the quiz. If the player already has one in
  * progress for this topic / quiz / campaign it is returned as-is (its own timer, card
  * count and practice setting included), so a refresh or a second tab can never produce
  * a new card set. Starting a non-campaign session is refused while a campaign is owed.
+ *
+ * `replayOf` names the session the player is restarting from (Play Now / Practise Again
+ * / Retry). If that session was a practice, or itself replayed one, the new session gets
+ * the same cards in a new order, so the player is tested on what they practised; its
+ * `cardCount` and `imagePercent` are then ignored. Otherwise a fresh set is drawn.
  */
 export async function startSession(
   player: Player,
@@ -92,6 +126,7 @@ export async function startSession(
     cardCount?: any;
     imagePercent?: any;
     practice?: any;
+    replayOf?: any;
   }
 ) {
   const userId = String(player._id);
@@ -125,23 +160,30 @@ export async function startSession(
   if (source.cards.length === 0) {
     throw new ErrorHandler("This trivia has no cards yet", 400, "NO_CARDS");
   }
-  const bounds = await cardCountBounds(source.cards.length);
-  const requested =
-    input.cardCount ??
-    (source.defaults.cardCount
-      ? Math.max(bounds.min, Math.min(bounds.max, source.defaults.cardCount))
-      : undefined);
-  if (!Number.isInteger(requested) || requested < bounds.min || requested > bounds.max) {
-    throw new ErrorHandler(
-      `cardCount must be a whole number from ${bounds.min} to ${bounds.max}`,
-      400,
-      "INVALID_CARD_COUNT",
-      bounds
-    );
-  }
-  const cardCount: number = requested;
+  const practised = await practisedCards(userId, sourceKey, input.replayOf, source.cards);
 
-  const chosenPercent = input.imagePercent ?? undefined;
+  let cardCount: number;
+  if (practised) {
+    cardCount = practised.length;
+  } else {
+    const bounds = await cardCountBounds(source.cards.length);
+    const requested =
+      input.cardCount ??
+      (source.defaults.cardCount
+        ? Math.max(bounds.min, Math.min(bounds.max, source.defaults.cardCount))
+        : undefined);
+    if (!Number.isInteger(requested) || requested < bounds.min || requested > bounds.max) {
+      throw new ErrorHandler(
+        `cardCount must be a whole number from ${bounds.min} to ${bounds.max}`,
+        400,
+        "INVALID_CARD_COUNT",
+        bounds
+      );
+    }
+    cardCount = requested;
+  }
+
+  const chosenPercent = practised ? undefined : input.imagePercent ?? undefined;
   if (
     chosenPercent !== undefined &&
     !(Number.isInteger(chosenPercent) && chosenPercent >= 0 && chosenPercent <= 100)
@@ -162,6 +204,8 @@ export async function startSession(
       sourceKey,
       isPreview: source.isPreview,
       practice: input.practice === true,
+      replayOf: practised ? String(input.replayOf) : null,
+      practiceSet: input.practice === true || !!practised,
       timerSeconds,
       cardCount,
       imagePercent: chosenPercent ?? null,
@@ -174,13 +218,16 @@ export async function startSession(
     throw e;
   }
 
-  // Random card set in random order, mixed as the player asked (or else the topic's own
-  // share, or else the global one); each card's two options are shuffled as well.
-  const selected = pickMixedCards(
-    source.cards,
-    cardCount,
-    chosenPercent ?? source.imagePercent ?? (await getTriviaImagePercent())
-  );
+  // A replayed practice set in a new order, or else a random card set in random order,
+  // mixed as the player asked (or else the topic's own share, or else the global one).
+  // Each card's two options are shuffled as well.
+  const selected = practised
+    ? shuffle(practised)
+    : pickMixedCards(
+        source.cards,
+        cardCount,
+        chosenPercent ?? source.imagePercent ?? (await getTriviaImagePercent())
+      );
   await TriviaAttemptQuestionModel.insertMany(
     selected.map((card, quizIndex) => ({
       attemptId: String(attempt._id),

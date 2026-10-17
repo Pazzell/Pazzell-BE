@@ -4,6 +4,7 @@ import { closeRedisConnection } from "../utils/redis";
 import { api, createUser, resetState } from "./helpers";
 import userModel from "../models/user.model";
 import BrandModel from "../models/brand.model";
+import axios from "axios";
 
 // No real mail is sent from the test suite.
 const sendMail = jest.fn(async () => undefined);
@@ -115,5 +116,94 @@ describe("Auth flows", () => {
       expect(res.status).toBe(404);
     }
     expect((await api().post("/api/v1/sessions/start").set(user.auth).send({})).status).toBe(404);
+  });
+
+  describe("Google sign-in", () => {
+    const clientId = "pazzell-test.apps.googleusercontent.com";
+    const google = (overrides: { aud?: string; email?: string; email_verified?: boolean } = {}) =>
+      jest.spyOn(axios, "get").mockImplementation((async (url: string) => {
+        if (url.includes("tokeninfo")) {
+          return { data: { aud: overrides.aud ?? clientId, azp: overrides.aud ?? clientId, sub: "g-123" } };
+        }
+        return {
+          data: {
+            sub: "g-123",
+            email: overrides.email ?? "chidi@gmail.com",
+            email_verified: overrides.email_verified ?? true,
+            name: "Chidi Okafor",
+            given_name: "Chidi",
+            family_name: "Okafor",
+            picture: "https://lh3.googleusercontent.com/a/chidi",
+          },
+        };
+      }) as any);
+    const signIn = () => api().post("/api/v1/auth/google").send({ googleAccessToken: "ya29.token" });
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it("signs a new player up from a verified Google token, and signs them in again", async () => {
+      google();
+      const first = await signIn();
+      expect(first.status).toBe(200);
+      expect(first.body.user).toMatchObject({
+        email: "chidi@gmail.com",
+        firstName: "Chidi",
+        lastName: "Okafor",
+        role: "gamer",
+        isVerified: true,
+        googleId: "g-123",
+      });
+      expect(first.body).toHaveProperty("accessToken");
+
+      const me = await api().get("/api/v1/me").set("Authorization", `Bearer ${first.body.accessToken}`);
+      expect(me.status).toBe(200);
+
+      const second = await signIn();
+      expect(second.status).toBe(200);
+      expect(second.body.user._id).toBe(first.body.user._id);
+      expect(await userModel.countDocuments({ email: "chidi@gmail.com" })).toBe(1);
+    });
+
+    it("links an existing account with the same email, whatever its case", async () => {
+      const existing = await createUser({ role: "brand", email: "Chidi@Gmail.com" });
+      google();
+      const res = await signIn();
+      expect(res.status).toBe(200);
+      expect(res.body.user).toMatchObject({ _id: existing.id, role: "brand", googleId: "g-123" });
+    });
+
+    it("never trusts a profile sent by the client", async () => {
+      await createUser({ role: "admin", email: "admin@pazzell.test" });
+      const spy = google();
+      const res = await api()
+        .post("/api/v1/auth/google")
+        .send({ email: "admin@pazzell.test", googleId: "made-up" });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("GOOGLE_TOKEN_REQUIRED");
+      expect(res.body).not.toHaveProperty("accessToken");
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("rejects a token issued to another app", async () => {
+      google({ aud: "someone-else.apps.googleusercontent.com" });
+      const res = await signIn();
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("GOOGLE_TOKEN_INVALID");
+      expect(await userModel.countDocuments({})).toBe(0);
+    });
+
+    it("rejects a token Google does not recognise", async () => {
+      jest.spyOn(axios, "get").mockRejectedValue({ response: { status: 400 } });
+      const res = await signIn();
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("GOOGLE_TOKEN_INVALID");
+    });
+
+    it("refuses a Google account without a verified email", async () => {
+      google({ email_verified: false });
+      const res = await signIn();
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("GOOGLE_EMAIL_UNVERIFIED");
+    });
   });
 });
