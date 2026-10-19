@@ -32,6 +32,16 @@ export interface IUser extends Document {
   quizLocksSyncedAsPro: boolean;
   // Non-campaign trivias completed since the last completed campaign trivia.
   nonCampaignPlaysSinceCampaign: number;
+  // Perfect-quiz points (see services/points/points.service.ts). `monthly` belongs to
+  // `month` ("YYYY-MM") and `today` to `day` ("YYYY-MM-DD"), both Lagos time;
+  // `lifetime` counts every point ever earned.
+  points: {
+    month: string | null;
+    monthly: number;
+    lifetime: number;
+    day: string | null;
+    today: number;
+  };
   comparePassword?: (password: string) => Promise<boolean>;
   SignAccessToken: () => string;
   SignRefreshToken: () => string;
@@ -58,12 +68,21 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     proUntil: { type: Date, default: null },
     quizLocksSyncedAsPro: { type: Boolean, default: false },
     nonCampaignPlaysSinceCampaign: { type: Number, default: 0, min: 0 },
+    points: {
+      month: { type: String, default: null },
+      monthly: { type: Number, default: 0, min: 0 },
+      lifetime: { type: Number, default: 0, min: 0 },
+      day: { type: String, default: null },
+      today: { type: Number, default: 0, min: 0 },
+    },
   },
   { timestamps: true }
 );
 
 // Pro-expiry sweep: users whose plan lapsed but whose quizzes are still unlocked
 userSchema.index({ quizLocksSyncedAsPro: 1, proUntil: 1 });
+// Month-end points sweep: players whose monthly score belongs to an ended month
+userSchema.index({ "points.month": 1 });
 
 userSchema.methods.SignAccessToken = function () {
   // Normalize ACCESS_TOKEN_EXPIRE: allow numeric (hours) or string like '1d'/'24h'

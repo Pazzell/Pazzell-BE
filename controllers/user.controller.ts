@@ -7,6 +7,7 @@ import BrandModel from "../models/brand.model";
 import CampaignModel from "../models/campaign.model";
 import { storeImage } from "../services/upload/image.service";
 import { getPlan } from "../services/plan/plan.service";
+import { readPoints } from "../services/points/points.service";
 import { parseHttpUrl } from "../utils/validators";
 
 import ejs from "ejs";
@@ -275,6 +276,7 @@ export const getUserInfo = CatchAsyncError(
         success: true,
         user: req.user,
         plan: getPlan(req.user),
+        points: await readPoints(req.user),
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
@@ -310,6 +312,7 @@ export const getGamerProfile = CatchAsyncError(
           role: user.role,
           isVerified: user.isVerified,
           plan: getPlan(user),
+          points: await readPoints(user),
           notifications: (user as any).notifications || {
             emailNotifications: true,
             newCampaignAlerts: true,
