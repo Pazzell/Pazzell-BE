@@ -248,7 +248,7 @@ describe("POST /admin/trivia/import", () => {
     const res = await importCards(admin.auth, { category: "music-symbols-beginner", count: 3 });
     expect(res.body.import).toMatchObject({ created: 3, topic: { slug: "music-theory-beginner" } });
     const treble = (await TriviaCardModel.findOne({ sourceRef: "commons:Music-GClef.svg" }).lean())!;
-    expect(treble.text).toBe("Which music symbol is this?");
+    expect(treble.text).toBe("What is this?");
     expect(treble.options[treble.correctOptionIndex]).toBe("Treble clef");
     expect(treble.options[1 - treble.correctOptionIndex]).toBe("Bass clef");
   });
