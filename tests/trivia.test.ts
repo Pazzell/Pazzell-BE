@@ -450,7 +450,7 @@ describe("Trivia (admin topics)", () => {
           topicId: id,
           type: "image",
           imageUrl: `https://storage.pazzell.test/pazzell/cards/${n}.webp`,
-          text: "Which logo is this?",
+          text: "What is this?",
           options: [`Right ${n}`, `Wrong ${n}`],
           correctOptionIndex: 0,
         }))

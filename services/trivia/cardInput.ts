@@ -2,6 +2,7 @@ import ErrorHandler from "../../utils/ErrorHandler";
 import { CARD_OPTION_MAX, CARD_TEXT_MAX, ICardContent } from "../../models/cardFields";
 import { ImageFolder, resolveImage } from "../upload/image.service";
 import { toInt } from "../../utils/validators";
+import { genericImagePrompt } from "./imagePrompt";
 
 // One validator for every kind of trivia card (admin topic, custom quiz, campaign):
 // an image or a short definition, exactly two options, one of them marked correct.
@@ -85,6 +86,9 @@ export async function buildCardContent(
   if (correctOptionIndex !== 0 && correctOptionIndex !== 1) {
     throw new ErrorHandler("correctOptionIndex must be 0 or 1", 400, "INVALID_CARD");
   }
+
+  // A picture question asks "Who is this?" or "What is this?", never a narrower version.
+  if (type === "image") text = genericImagePrompt(text);
 
   return { type, imageUrl, text, options: [...options], correctOptionIndex };
 }

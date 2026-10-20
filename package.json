@@ -10,6 +10,7 @@
     "test": "jest",
     "lint": "eslint *.ts",
     "seed": "ts-node-dev --transpile-only scripts/seed.ts",
+    "migrate:image-prompts": "ts-node-dev --transpile-only scripts/genericImagePrompts.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],

@@ -358,7 +358,7 @@ Show the picker only when both counts are above zero, and start it on `defaultIm
 { "success": true, "completed": false,
   "question": {
     "index": 0, "total": 10, "type": "image", "imageUrl": "https://…/a1b2.webp",
-    "text": "Which animal is this?",
+    "text": "What is this?",
     "attribution": "Markus Trienke · CC BY-SA 2.0 · Wikimedia Commons",
     "options": [ { "index": 0, "text": "Monkey" }, { "index": 1, "text": "Dog" } ],
     "correctOptionIndex": 1,
@@ -526,7 +526,7 @@ The campaign gate applies to it, and a completed play counts toward the player's
 | Field | Rule |
 | --- | --- |
 | `type` | `"image"` or `"definition"` |
-| `text` | Required for `definition`; optional caption for `image`. Max 300 characters |
+| `text` | Required for `definition`; optional caption for `image`. Max 300 characters. An image caption asking "Which animal is this?", "Who is this footballer?" and the like is saved as the generic "What is this?" or "Who is this?"; other captions are kept |
 | image | Required for `image`: a multipart file field named `image`, or `imageUrl` returned by `POST /uploads/images` for the same user |
 | `options` | Exactly 2 non-empty, different strings, max 80 characters each. In multipart send it as a JSON string: `["Nigeria","Ghana"]` |
 | `correctOptionIndex` | `0` or `1` |
