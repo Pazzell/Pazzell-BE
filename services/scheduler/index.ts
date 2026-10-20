@@ -4,7 +4,6 @@ import { reconcileAllWallets } from "../wallet/wallet.service";
 import { expireCampaigns } from "../campaign/campaign.service";
 import { lockQuizzesForExpiredPro } from "../customQuiz/quizLock.service";
 import { abandonStaleTriviaSessions } from "../trivia/session.service";
-import { POINTS_TIMEZONE, rollOverMonthlyPoints } from "../points/points.service";
 
 /**
  * node-cron scheduler. Every job here is a convenience sweep: the rules it applies
@@ -50,16 +49,6 @@ export async function runNightlyWalletReconciliation(): Promise<void> {
   }
 }
 
-export async function runMonthlyPointsRollover(): Promise<void> {
-  if (mongoose.connection.readyState !== 1) return;
-  try {
-    const moved = await rollOverMonthlyPoints();
-    if (moved > 0) console.log(`Started a new monthly score for ${moved} player(s)`);
-  } catch (err) {
-    console.error("Monthly points rollover failed:", err);
-  }
-}
-
 let started = false;
 
 export function startScheduler(): void {
@@ -82,16 +71,6 @@ export function startScheduler(): void {
     runNightlyWalletReconciliation().catch((err) => console.error("Wallet reconciliation error:", err));
   });
 
-  // 00:00 Lagos time on the 1st — start every player's monthly score again from 0
-  cron.schedule(
-    "0 0 1 * *",
-    () => {
-      runMonthlyPointsRollover().catch((err) => console.error("Points rollover error:", err));
-    },
-    { timezone: POINTS_TIMEZONE }
-  );
-
-  // Run the expiry sweep and the points rollover immediately on startup.
+  // Run the expiry sweep immediately on startup.
   runExpirySweep().catch((err) => console.error("Expiry sweep error:", err));
-  runMonthlyPointsRollover().catch((err) => console.error("Points rollover error:", err));
 }

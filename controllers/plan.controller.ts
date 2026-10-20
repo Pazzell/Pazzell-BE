@@ -16,7 +16,6 @@ import {
   getCustomQuizMinCards,
   getInterruptionThreshold,
   getDefaultTimerSeconds,
-  getPointsRules,
   getProPricing,
   getTimerRange,
   getTriviaCardBounds,
@@ -44,7 +43,7 @@ const publicPayment = (payment: any) => ({
 
 // GET /settings/game — public. Everything the client needs to build its setup screens.
 export const getGameSettings = CatchAsyncError(async (req: Request, res: Response) => {
-  const [defaultTimer, cards, pro, campaign, threshold, freeLimit, minCardsToPublish, points] =
+  const [defaultTimer, cards, pro, campaign, threshold, freeLimit, minCardsToPublish] =
     await Promise.all([
       getDefaultTimerSeconds(),
       getTriviaCardBounds(),
@@ -53,7 +52,6 @@ export const getGameSettings = CatchAsyncError(async (req: Request, res: Respons
       getInterruptionThreshold(),
       getCustomQuizFreeLimit(),
       getCustomQuizMinCards(),
-      getPointsRules(),
     ]);
   res.status(200).json({
     success: true,
@@ -63,8 +61,6 @@ export const getGameSettings = CatchAsyncError(async (req: Request, res: Respons
       customQuiz: { freeLimit, minCardsToPublish },
       pro,
       campaign: { ...campaign, interruptionThreshold: threshold },
-      // What a completed quiz needs to earn 1 point
-      points,
     },
   });
 });

@@ -21,7 +21,6 @@ import {
 } from "../campaign/campaign.service";
 import { brandForAttempt, resolveSource, SourceCard, titleForAttempt } from "./sources";
 import { pickMixedCards, shuffle } from "./mix";
-import { cardSetKey, readPoints, settleQuizPoint } from "../points/points.service";
 import { isObjectId } from "../../utils/validators";
 
 // One session engine for every kind of trivia (admin topics, custom quizzes, brand
@@ -33,7 +32,6 @@ type Player = {
   role: string;
   proUntil?: Date | string | null;
   nonCampaignPlaysSinceCampaign?: number;
-  points?: { month?: string | null; monthly?: number; lifetime?: number } | null;
 };
 
 /** Allowed card counts for a source: at least 5 (or all cards if fewer), up to the cap. */
@@ -246,11 +244,6 @@ export async function startSession(
       optionOrder: Math.random() < 0.5 ? [0, 1] : [1, 0],
     }))
   );
-  attempt.cardSetKey = cardSetKey(sourceKey, selected.map((card) => card.id));
-  await TriviaAttemptModel.updateOne(
-    { _id: attempt._id },
-    { $set: { cardSetKey: attempt.cardSetKey } }
-  );
 
   if (source.sourceType === "campaign" && !source.isPreview) {
     await recordCampaignPlayStart(source.sourceId, userId, String(attempt._id), cardCount);
@@ -293,16 +286,12 @@ async function buildResult(attempt: ITriviaAttempt, player?: Player) {
     isPreview: attempt.isPreview,
     brand: await brandForAttempt(attempt.sourceType, attempt.sourceId),
     completedAt: attempt.completedAt,
-    // True when this quiz earned a point; otherwise noPointReason says why (null on previews).
-    pointEarned: !!attempt.pointAwarded,
-    noPointReason: attempt.noPointReason ?? null,
-    points: player ? await readPoints(player) : undefined,
     // Tells the client whether the next non-campaign trivia will be blocked.
     campaignGate: player ? await getCampaignGateState(player) : undefined,
   };
 }
 
-/** Closes a finished quiz and applies the campaign counter and points rules exactly once. */
+/** Closes a finished quiz and applies the campaign counter rules exactly once. */
 async function completeSession(attempt: ITriviaAttempt): Promise<ITriviaAttempt> {
   const closed = await TriviaAttemptModel.findOneAndUpdate(
     { _id: attempt._id, active: true },
@@ -317,20 +306,15 @@ async function completeSession(attempt: ITriviaAttempt): Promise<ITriviaAttempt>
     { _id: closed._id, counterApplied: false },
     { $set: { counterApplied: true } }
   );
-  if (!claimed) return closed;
-  if (closed.sourceType === "campaign") {
-    await recordCampaignPlayCompleted(String(closed._id), closed.correctCount, closed.cardCount);
-    await resetCampaignCounter(closed.userId);
-  } else {
-    await countNonCampaignPlay(closed.userId);
+  if (claimed) {
+    if (closed.sourceType === "campaign") {
+      await recordCampaignPlayCompleted(String(closed._id), closed.correctCount, closed.cardCount);
+      await resetCampaignCounter(closed.userId);
+    } else {
+      await countNonCampaignPlay(closed.userId);
+    }
   }
-
-  const noPointReason = await settleQuizPoint(closed);
-  return (await TriviaAttemptModel.findByIdAndUpdate(
-    closed._id,
-    { $set: { pointAwarded: !noPointReason, noPointReason } },
-    { new: true }
-  ))!;
+  return closed;
 }
 
 async function settleQuestion(
@@ -395,7 +379,7 @@ export async function getCurrentQuestion(player: Player, sessionId: string) {
   assertInQuiz(attempt);
   attempt = await expireOverdue(attempt, now);
   if (attempt.status === "completed") {
-    return { completed: true, result: await buildResult(attempt, await freshPlayer(player)) };
+    return { completed: true, result: await buildResult(attempt, player) };
   }
 
   const filter = { attemptId: String(attempt._id), quizIndex: attempt.currentIndex };
@@ -423,8 +407,8 @@ export async function getCurrentQuestion(player: Player, sessionId: string) {
         : {}),
       timerSeconds: attempt.timerSeconds,
       servedAt: question.servedAt,
-      deadlineAt: question.deadlineAt,
-      remainingMs: remainingMs(question.deadlineAt!, now),
+      deadlineAt: question.deadlineAt ?? null,
+      remainingMs: question.deadlineAt ? remainingMs(question.deadlineAt, now) : null,
       serverTime: now,
     },
   };
@@ -464,12 +448,12 @@ export async function submitAnswer(
         currentIndex: attempt.currentIndex,
       });
     }
-    if (!question.servedAt || !question.deadlineAt) {
+    if (!question.servedAt) {
       throw new ErrorHandler("Fetch the question before answering it", 409, "QUESTION_NOT_SERVED");
     }
 
     let selected: number | undefined;
-    if (isPastDeadline(question.deadlineAt, now, await getSubmitGraceMs())) {
+    if (question.deadlineAt && isPastDeadline(question.deadlineAt, now, await getSubmitGraceMs())) {
       outcome = "timeout";
     } else {
       if (optionIndex !== 0 && optionIndex !== 1) {
@@ -497,17 +481,18 @@ export async function submitAnswer(
   };
 }
 
-// The counter and points may just have changed; re-read them so the result is current.
+// The counter may just have changed; re-read it so the returned gate state is current.
 async function freshPlayer(player: Player): Promise<Player> {
   const user = await userModel
     .findById(player._id)
-    .select("role proUntil nonCampaignPlaysSinceCampaign points")
+    .select("role proUntil nonCampaignPlaysSinceCampaign")
     .lean();
   return user ? ({ ...user, _id: String(user._id) } as Player) : player;
 }
 
 export async function getResult(player: Player, sessionId: string) {
   let attempt = await loadOwnedAttempt(String(player._id), sessionId);
+  assertInQuiz(attempt);
   if (attempt.status === "quiz") attempt = await expireOverdue(attempt, new Date());
   if (attempt.status !== "completed") {
     throw new ErrorHandler("This session is not finished yet", 409, "SESSION_IN_PROGRESS", {
@@ -520,7 +505,8 @@ export async function getResult(player: Player, sessionId: string) {
 }
 
 /**
- * Walks away from a session. It is closed without a result and counts for nothing:
+ * Ends a session early (the player's End button) or walks away from it. It is closed
+ * without a result and counts for nothing:
  * not toward quiz stats, not toward the campaign counter, and an abandoned campaign
  * session does not clear a campaign that is owed.
  */

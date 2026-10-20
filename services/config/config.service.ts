@@ -14,7 +14,8 @@ const envNumber = (name: string, fallback: number): number => {
  */
 export const CONFIG_DEFAULTS: Record<string, any> = {
   // Per-question countdown range, shared by topics, custom quizzes and campaigns.
-  "game.timerMinSeconds": 1,
+  // 0 means no countdown: the player moves on with Next.
+  "game.timerMinSeconds": 0,
   "game.timerMaxSeconds": 15,
   // Network grace added to every question deadline before a submit counts as late.
   "game.submitGraceMs": envNumber("GAME_SUBMIT_GRACE_MS", 1000),
@@ -38,13 +39,6 @@ export const CONFIG_DEFAULTS: Record<string, any> = {
   "pro.priceAmount": envNumber("PRO_PRICE_AMOUNT", 1500),
   "pro.durationDays": envNumber("PRO_DURATION_DAYS", 30),
   "payments.currency": (process.env.PAYMENT_CURRENCY || "NGN").toUpperCase(),
-  // What a completed quiz needs to earn 1 point (see services/points/points.service.ts).
-  "points.minCards": 20,
-  "points.minScorePercent": 100,
-  "points.dailyCap": 5,
-  "points.practiceEarns": false,
-  // When true, a set of questions earns once; replaying a set that has earned gives nothing.
-  "points.setEarnsOnce": true,
 };
 
 // The timer range is one global constant pair; it is exposed for reading but
@@ -74,13 +68,6 @@ export function validateConfigValue(key: string, value: any): string | null {
       return Number.isInteger(value) && value >= 0 && value <= 100
         ? null
         : "must be an integer between 0 and 100";
-    case "points.minScorePercent":
-      return Number.isInteger(value) && value >= 1 && value <= 100
-        ? null
-        : "must be an integer between 1 and 100";
-    case "points.practiceEarns":
-    case "points.setEarnsOnce":
-      return typeof value === "boolean" ? null : "must be true or false";
     case "campaign.priceAmount":
     case "pro.priceAmount":
       return isPositiveNumber(value) ? null : "must be a positive number";
@@ -262,22 +249,6 @@ export const getCampaignMinCards = async (): Promise<number> =>
 
 export const getInterruptionThreshold = async (): Promise<number> =>
   getConfigValue<number>("campaign.interruptionThreshold");
-
-export interface PointsRules {
-  minCards: number;
-  minScorePercent: number;
-  dailyCap: number;
-  practiceEarns: boolean;
-  setEarnsOnce: boolean;
-}
-
-export const getPointsRules = async (): Promise<PointsRules> => ({
-  minCards: await getConfigValue<number>("points.minCards"),
-  minScorePercent: await getConfigValue<number>("points.minScorePercent"),
-  dailyCap: await getConfigValue<number>("points.dailyCap"),
-  practiceEarns: await getConfigValue<boolean>("points.practiceEarns"),
-  setEarnsOnce: await getConfigValue<boolean>("points.setEarnsOnce"),
-});
 
 export interface Pricing {
   amount: number;

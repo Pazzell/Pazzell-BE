@@ -70,10 +70,10 @@ describe("Custom trivia", () => {
       expect(list.body.limit).toBeNull();
     });
 
-    it("validates the default timer against the global 1 to 15 range", async () => {
+    it("validates the default timer against the global 0 to 15 range (0 is no timer)", async () => {
       const user = await createUser();
       expect((await create(user, "Bad", { defaultTimerSeconds: 16 })).body.code).toBe("INVALID_TIMER");
-      expect((await create(user, "Bad", { defaultTimerSeconds: 0 })).body.code).toBe("INVALID_TIMER");
+      expect((await create(user, "Bad", { defaultTimerSeconds: -1 })).body.code).toBe("INVALID_TIMER");
       const ok = await create(user, "Good", { defaultTimerSeconds: 15, defaultCardCount: 6 });
       expect(ok.body.quiz).toMatchObject({ defaultTimerSeconds: 15, defaultCardCount: 6, status: "draft" });
     });
