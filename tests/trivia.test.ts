@@ -45,19 +45,19 @@ describe("Trivia (admin topics)", () => {
     it("exposes the single global timer range and card bounds", async () => {
       const res = await api().get("/api/v1/settings/game");
       expect(res.status).toBe(200);
-      expect(res.body.settings.timer).toEqual({ minSeconds: 1, maxSeconds: 15, defaultSeconds: 5 });
+      expect(res.body.settings.timer).toEqual({ minSeconds: 0, maxSeconds: 15, defaultSeconds: 5 });
       expect(res.body.settings.trivia).toEqual({ minCards: 5, maxCards: 30 });
       expect(res.body.settings.pro).toEqual({ amount: 1500, currency: "NGN", durationDays: 30 });
       expect(res.body.settings.campaign).toMatchObject({ amount: 15000, durationDays: 30, interruptionThreshold: 10 });
     });
 
-    it.each([0, 16, 3.5, "5"])("rejects timerSeconds=%p", async (timerSeconds) => {
+    it.each([-1, 16, 3.5, "5"])("rejects timerSeconds=%p", async (timerSeconds) => {
       const res = await startDefault({ timerSeconds });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe("INVALID_TIMER");
     });
 
-    it.each([1, 15])("accepts timerSeconds=%p", async (timerSeconds) => {
+    it.each([0, 1, 15])("accepts timerSeconds=%p", async (timerSeconds) => {
       const res = await startDefault({ timerSeconds });
       expect(res.status).toBe(201);
       expect(res.body.session.timerSeconds).toBe(timerSeconds);
@@ -269,6 +269,38 @@ describe("Trivia (admin topics)", () => {
       expect(next.body.question.index).toBe(2);
       const attempt = await TriviaAttemptModel.findById(id).lean();
       expect(attempt!.correctCount).toBe(0);
+    });
+
+    it("has no clock when the timer is 0: a question waits for its answer", async () => {
+      const started = await startDefault({ timerSeconds: 0 });
+      const id = started.body.session.id;
+      const served = await question(user, id);
+      expect(served.body.question).toMatchObject({ timerSeconds: 0, deadlineAt: null, remainingMs: null });
+
+      // Long after it was served, the question is still current and an answer still counts.
+      await TriviaAttemptQuestionModel.updateOne({ attemptId: id, quizIndex: 0 }, { servedAt: new Date(Date.now() - 60 * 60 * 1000) });
+      expect((await question(user, id)).body.question.index).toBe(0);
+      const late = await answer(user, id, 0, await correctPosition(id, 0));
+      expect(late.body.outcome).toBe("correct");
+      expect(late.body.nextQuestionIndex).toBe(1);
+    });
+
+    it("ends a quiz early: the session is cancelled with no result", async () => {
+      const started = await startDefault();
+      const id = started.body.session.id;
+      await question(user, id);
+      await answer(user, id, 0, await correctPosition(id, 0));
+
+      const ended = await api().post(`${base}/${id}/abandon`).set(user.auth);
+      expect(ended.status).toBe(200);
+      expect(ended.body.session.status).toBe("abandoned");
+      expect((await question(user, id)).body.code).toBe("SESSION_ABANDONED");
+      expect((await api().get(`${base}/${id}/result`).set(user.auth)).body.code).toBe("SESSION_ABANDONED");
+
+      // The next start is a new session, not the ended one.
+      const next = await startDefault();
+      expect(next.status).toBe(201);
+      expect(next.body.session.id).not.toBe(id);
     });
 
     it("resumes after a refresh at the same question with the remaining time", async () => {

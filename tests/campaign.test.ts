@@ -503,7 +503,7 @@ describe("Brand campaigns", () => {
       expect((await put("trivia.defaultTimerSeconds", 16)).status).toBe(400);
       expect((await put("points.sessionCompletionPoints", 7)).status).toBe(400);
       const settings = await api().get("/api/v1/settings/game");
-      expect(settings.body.settings.timer).toMatchObject({ minSeconds: 1, maxSeconds: 15 });
+      expect(settings.body.settings.timer).toMatchObject({ minSeconds: 0, maxSeconds: 15 });
     });
 
     it("summarises confirmed revenue for admins", async () => {

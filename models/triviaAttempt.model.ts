@@ -1,5 +1,4 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
-import type { NoPointReason } from "../services/points/points.service";
 
 export type TriviaSourceType = "topic" | "custom" | "campaign";
 export type TriviaAttemptStatus = "quiz" | "completed" | "abandoned";
@@ -28,11 +27,6 @@ export interface ITriviaAttempt extends Document {
   correctCount: number;
   // Guards the freemium counter update so a completed attempt is counted exactly once.
   counterApplied: boolean;
-  // Identifies the card set regardless of order (see cardSetKey); a set earns a point once.
-  cardSetKey?: string | null;
-  // True when this attempt earned the player a point; otherwise `noPointReason` says why.
-  pointAwarded: boolean;
-  noPointReason?: NoPointReason | null;
   startedAt: Date;
   completedAt?: Date;
 }
@@ -61,13 +55,6 @@ const triviaAttemptSchema: Schema<ITriviaAttempt> = new mongoose.Schema(
     currentIndex: { type: Number, default: 0 },
     correctCount: { type: Number, default: 0 },
     counterApplied: { type: Boolean, default: false },
-    cardSetKey: { type: String, default: null },
-    pointAwarded: { type: Boolean, default: false },
-    noPointReason: {
-      type: String,
-      enum: ["practice", "score_too_low", "too_few_cards", "set_already_earned", "daily_cap", null],
-      default: null,
-    },
     startedAt: { type: Date, default: Date.now },
     completedAt: { type: Date },
   },
@@ -82,8 +69,6 @@ triviaAttemptSchema.index(
 // Stats for a quiz or campaign
 triviaAttemptSchema.index({ sourceKey: 1, status: 1, isPreview: 1 });
 triviaAttemptSchema.index({ active: 1, startedAt: 1 });
-// Has this card set already earned the player a point?
-triviaAttemptSchema.index({ userId: 1, cardSetKey: 1 });
 
 const TriviaAttemptModel: Model<ITriviaAttempt> = mongoose.model(
   "TriviaAttempt",

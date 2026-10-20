@@ -9,7 +9,7 @@ topics), custom trivia, brand campaigns, Pro and the wallet screens. This docume
 - [3. Auth, profile and roles](#3-auth-profile-and-roles)
 - [4. Plans, Pro and payments](#4-plans-pro-and-payments)
 - [5. Match (removed)](#5-match-removed)
-- [6. Trivia sessions](#6-trivia-sessions-topics-custom-quizzes-and-campaigns) (6.3 Points)
+- [6. Trivia sessions](#6-trivia-sessions-topics-custom-quizzes-and-campaigns)
 - [7. Custom trivia](#7-custom-trivia)
 - [8. Brand campaigns](#8-brand-campaigns)
 - [9. Admin](#9-admin)
@@ -63,32 +63,33 @@ are never read from the client. Sending them has no effect.
 {
   "success": true,
   "settings": {
-    "timer": { "minSeconds": 1, "maxSeconds": 15, "defaultSeconds": 5 },
+    "timer": { "minSeconds": 0, "maxSeconds": 15, "defaultSeconds": 5 },
     "trivia": { "minCards": 5, "maxCards": 30 },
     "customQuiz": { "freeLimit": 1, "minCardsToPublish": 5 },
     "pro": { "amount": 1500, "currency": "NGN", "durationDays": 30 },
-    "campaign": { "amount": 15000, "currency": "NGN", "durationDays": 30, "interruptionThreshold": 10 },
-    "points": { "minCards": 20, "minScorePercent": 100, "dailyCap": 5, "practiceEarns": false, "setEarnsOnce": true }
+    "campaign": { "amount": 15000, "currency": "NGN", "durationDays": 30, "interruptionThreshold": 10 }
   }
 }
 ```
 
-Fetch this once at startup and build the setup screens from it. Do not hard-code prices or
-the points rules (`points`, see 6.3).
+Fetch this once at startup and build the setup screens from it. Do not hard-code prices.
 `timer.defaultSeconds` is the value the timer picker starts on (it was `matchDefaultSeconds`).
 
 ### The timer rule (applies to every game)
 
-- One global range: **1 to 15 seconds per question**, whole seconds only. It is the same for
-  every topic, every custom trivia and every campaign. There is no per-topic range and no
-  "timer off".
+- One global range: **0 to 15 seconds per question**, whole seconds only. It is the same for
+  every topic, every custom trivia and every campaign. There is no per-topic range.
+- **0 means no timer.** The question has no countdown and waits for an answer: `deadlineAt` and
+  `remainingMs` are `null`, an answer is never a `timeout`, and nothing moves on by itself.
+  Show no countdown bar; after the answer feedback, show a **Next** button (on the last
+  question, "See result") instead of advancing automatically.
 - The player (or parent) picks the value before starting. The server rejects anything else with
-  `400 INVALID_TIMER` and `details: { "minSeconds": 1, "maxSeconds": 15 }`. `0`, `16`, `2.5` and
+  `400 INVALID_TIMER` and `details: { "minSeconds": 0, "maxSeconds": 15 }`. `-1`, `16`, `2.5` and
   `"5"` (a string) are all rejected.
 - The clock for a question starts on the **server** the first time that question is fetched.
   Every question response carries `deadlineAt`, `remainingMs` and `serverTime`. Drive the
   countdown from `remainingMs` (or `deadlineAt - serverTime`), not from the device clock.
-- A submission that arrives after `deadlineAt` plus a 1 second network grace is recorded as
+- With a timer above 0, a submission that arrives after `deadlineAt` plus a 1 second network grace is recorded as
   `timeout`, whatever option was sent.
 - `timeout` is a failed question. Show the same red signal as a wrong answer, then move on.
 
@@ -134,14 +135,12 @@ another app), `400 GOOGLE_EMAIL_UNVERIFIED`, `503 GOOGLE_NOT_CONFIGURED`, `502 G
   "success": true,
   "user": { "_id": "…", "email": "ada@example.com", "role": "gamer", "username": "ada", "avatar": "…",
             "isVerified": true, "proUntil": null, "nonCampaignPlaysSinceCampaign": 3 },
-  "plan": { "tier": "freemium", "isPro": false, "proUntil": null },
-  "points": { "month": "2026-10", "monthly": 3, "lifetime": 12, "today": 1, "dailyCap": 5 }
+  "plan": { "tier": "freemium", "isPro": false, "proUntil": null }
 }
 ```
 
 Always read the tier from `plan` (computed on the server on every request). Do not compute it
-from `user.proUntil` on the client. In the same way, read points from `points` (also on
-`GET /profile/gamer` as `profile.points`), not from `user.points`: see 6.3.
+from `user.proUntil` on the client.
 
 **Share-link return:** when a logged-out visitor opens `/q/:slug`, keep the slug (for example
 in the `next` query parameter or session storage), send them through login or sign-up, then
@@ -276,7 +275,7 @@ own; it is played with `sourceType: "custom"` and its id as `sourceId`.
 | GET | `/trivia/sessions/:id/question` | Auth | Current question (answer marked only in practice) |
 | POST | `/trivia/sessions/:id/answer` | Auth | Submit an answer |
 | GET | `/trivia/sessions/:id/result` | Auth | Result |
-| POST | `/trivia/sessions/:id/abandon` | Auth | Leave without a result |
+| POST | `/trivia/sessions/:id/abandon` | Auth | End the quiz: cancel the session, no result |
 
 #### `GET /trivia/topics`
 
@@ -366,6 +365,8 @@ Show the picker only when both counts are above zero, and start it on `defaultIm
     "timerSeconds": 5, "servedAt": "…", "deadlineAt": "…", "remainingMs": 5000, "serverTime": "…" } }
 ```
 
+With `timerSeconds: 0` the question carries `"deadlineAt": null, "remainingMs": null`.
+
 - **Practice:** `correctOptionIndex` is the `index` of the right option. It is present only when
   the session was started with `practice: true`. Put the hand pointer or marker on that option.
   When the field is absent, show no marker. Never guess it on the client.
@@ -402,18 +403,20 @@ submitted, call `GET …/question` — the server has already failed the questio
 { "success": true, "result": {
   "sessionId": "6703…", "source": { "type": "topic", "id": "6702…", "title": "Football" },
   "correct": 8, "total": 10, "isPreview": false, "brand": null, "completedAt": "…",
-  "pointEarned": false, "noPointReason": "score_too_low",
-  "points": { "month": "2026-10", "monthly": 3, "lifetime": 12, "today": 1, "dailyCap": 5 },
   "campaignGate": { "required": false, "counter": 4, "threshold": 10, "campaign": null } } }
 ```
-
-`pointEarned` is true when this quiz earned a point; otherwise `noPointReason` says why (see
-6.3). `points` is the player's score after it. The same object is the `result` in the last answer and in a completed question fetch.
 
 Show `correct` out of `total`, **Retry** (start a new session for the same source: a new random
 card set) and **Pick Another Topic**. If `campaignGate.required` is true the next non-campaign
 start will be rejected, so offer the campaign straight away.
-`409 SESSION_IN_PROGRESS` while questions remain.
+`409 SESSION_IN_PROGRESS` while questions remain, `409 SESSION_ABANDONED` for an ended session.
+
+#### `POST /trivia/sessions/:id/abandon`
+
+The quiz screen's **End** button. Confirm first, then call this: the session is cancelled
+(`status: "abandoned"`) and counts for nothing. It has no result, adds nothing to play stats or
+the campaign counter, and its question and result calls answer `409 SESSION_ABANDONED`. The
+next start for the same source is a new session. Returns `{ "success": true, "session": { … } }`.
 
 ### 6.2 Trivia state machine
 
@@ -435,46 +438,9 @@ start will be rejected, so offer the campaign straight away.
                                 │
                           completed:true
                                 ▼
-                           completed ─▶ GET /result { correct, total, pointEarned, noPointReason, points }
+                           completed ─▶ GET /result { correct, total }
                                          Retry ─▶ POST /trivia/sessions (new random card set)
 ```
-
-### 6.3 Points
-
-A player earns **1 point** for a quiz (topic, custom quiz or campaign) that meets the rules an
-admin sets (section 9, `points.*`). They are public in `GET /settings/game` → `settings.points`;
-build any "how to earn" text from there. The defaults: **at least 20 questions**, **every
-question right**, **not a practice session**, **up to 5 points a day**, and **each set of
-questions earns once**. A session counts once however often its result is read. A rule
-change applies to quizzes completed afterwards. When a completed quiz earns nothing,
-`result.noPointReason` says why:
-
-| `noPointReason` | Meaning |
-| --- | --- |
-| `practice` | Practice session (the answers were shown) while `practiceEarns` is off |
-| `score_too_low` | Score below `minScorePercent` (with the default 100: at least one question wrong or timed out) |
-| `too_few_cards` | Fewer than `minCards` questions |
-| `set_already_earned` | This exact set of questions (in any order) has already earned the player a point, for example Play again after a perfect Play Now, while `setEarnsOnce` is on. A set with at least one different question can earn again |
-| `daily_cap` | The player already has `dailyCap` points today |
-
-With `setEarnsOnce` on, practising a set does not use it up, so **Play Now after a practice
-earns a point** when the player recalls the set; a missed run does not use it up either, so
-they can play the set again until they pass. After the set has earned, playing it again earns
-nothing (`set_already_earned`).
-
-An owner or brand preview earns nothing and has `noPointReason: null`.
-
-```json
-"points": { "month": "2026-10", "monthly": 3, "lifetime": 12, "today": 1, "dailyCap": 5 }
-```
-
-- `monthly`: points earned in `month`. Starts again from 0 when a month ends.
-- `lifetime`: every point the player has ever earned, the current month included.
-- `today`: points earned today, out of `dailyCap`.
-
-Days and months follow Lagos time (a new day starts at 00:00 WAT, a new month at 00:00 WAT
-on the 1st). The server applies the day and month change on every read, so `points` is
-always current; there is nothing to compute on the client.
 
 ---
 
@@ -858,7 +824,7 @@ any other role).
 
 | Key | Default | Editable |
 | --- | --- | --- |
-| `game.timerMinSeconds` / `game.timerMaxSeconds` | 1 / 15 | No (global constants; `400` on edit) |
+| `game.timerMinSeconds` / `game.timerMaxSeconds` | 0 / 15 | No (global constants; `400` on edit) |
 | `game.submitGraceMs` | 1000 | Yes (0–5000) |
 | `trivia.defaultTimerSeconds` | 5 | Yes (1–15) |
 | `trivia.minCards` / `trivia.maxCards` | 5 / 30 | Yes |
@@ -871,14 +837,9 @@ any other role).
 | `campaign.priceAmount` / `campaign.durationDays` | 15000 / 30 | Yes |
 | `pro.priceAmount` / `pro.durationDays` | 1500 / 30 | Yes |
 | `payments.currency` | `NGN` | Yes (3-letter code) |
-| `points.minCards` | 20 | Yes (positive integer; keep it at or below `trivia.maxCards`, or no session can earn) |
-| `points.minScorePercent` | 100 | Yes (1–100; 100 means every question right) |
-| `points.dailyCap` | 5 | Yes (positive integer; points per player per Lagos day) |
-| `points.practiceEarns` | `false` | Yes (`true` / `false`) |
-| `points.setEarnsOnce` | `true` | Yes (`true` / `false`; when `false` a set can earn every time it is played) |
 
 A price or duration change applies to checkouts started afterwards; existing payments keep the
-values they were created with. A points change applies to quizzes completed afterwards.
+values they were created with.
 
 ### Trivia topics and cards
 
@@ -1214,8 +1175,8 @@ There is no Match game and no study step. These routes no longer exist and retur
 `LEVEL_LOCKED`, `LEVEL_NOT_FOUND`, `ARTIFACT_NOT_FOUND`, `TIMER_NOT_IN_LEVEL_CONFIG` and every
 `ATTEMPT_*` code are gone with them.
 
-There are no leaderboards, rankings, ads, spin wheel, reward codes, prize draws or referral
-rewards. (Points came back in a new form: perfect-quiz points, see 6.3.) These routes no longer exist and return `404`:
+There are no points, leaderboards, rankings, ads, spin wheel, reward codes, prize draws or
+referral rewards. These routes no longer exist and return `404`:
 
 `/leaderboards/*`, `/referrals/*`, `/raffles/*`, `/sessions/*`, `/packages*`, `/payouts/*`,
 `/prize-pools/*`, `/platform/earnings`, `/gamers`, `/profile/privacy`, `/admin/clear-all-data`,
