@@ -15,6 +15,7 @@ import analyticsRouter from "./routes/analytics.route";
 import configRouter from "./routes/config.route";
 import walletRouter from "./routes/wallet.route";
 import forumRouter from "./routes/forum.route";
+import teamGameRouter from "./routes/teamGame.route";
 import { ErrorMiddleware } from "./middlewares/error";
 
 const app = express();
@@ -55,6 +56,7 @@ app.use(
   planRouter,
   triviaRouter,
   customQuizRouter,
+  teamGameRouter,
   aiTriviaRouter,
   campaignRouter,
   uploadRouter,

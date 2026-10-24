@@ -673,6 +673,94 @@ take a minute or more: show progress and do not retry automatically.
 Offer the timer and a card count within `cardCountBounds`; `practice` works as usual. For a
 freemium player these plays count toward the campaign interruption rule like General Trivia.
 
+### 7.6 Team games
+
+A host plays one of their own custom quizzes as tic-tac-toe between teams.
+`lobby → playing → finished` (or `lobby → cancelled`). All routes are Auth unless marked.
+
+**Rules.**
+- The board grows with the teams that have players when the game starts: 2 teams play a 3×3
+  board with 3 in a row; 3 teams play 4×4 with 3 in a row; 4 to 6 teams play 5×5 with 4 in a row.
+  The quiz needs at least one question per cell (9, 16 or 25).
+- Teams take turns, in team order. The **leader** of the team in turn picks an open cell (its
+  number is `index + 1`). That serves a random question and starts the clock (`timerSeconds`,
+  10 to 120, the same for every question in the game).
+- The team talks it over in its own chat; only the leader can answer. A correct answer gives the
+  team 1 point and the cell. A wrong answer, or no answer in time, leaves the cell open with a
+  fresh question for the next pick. Either way the turn passes on.
+- A full line wins (`endReason: "line"`). A full board with no line, or the host ending the game
+  (`"host_ended"`), goes to the highest score; a tie at the top is a draw (`isDraw: true`).
+- The first player on a team leads it; when a leader leaves, the longest-standing member takes
+  over. The host can move players and choose leaders at any time. Players can switch teams in
+  the lobby only; someone with no team can still join one mid-game. Empty teams are dropped at
+  start. Up to 6 teams of 20.
+- Questions are copied into the game when served, so editing the quiz mid-game changes nothing.
+
+**Endpoints.** Each one returns `{ success, game }` with the state below, unless noted.
+
+| Method | Path | Who | Body / notes |
+| --- | --- | --- | --- |
+| POST | `/team-games` | quiz owner | `{ quizId, teamCount? (2–6, default 2), timerSeconds? (10–120) }` → 201 |
+| GET | `/team-games` | host | `{ games: [{ code, status, quizTitle, teamCount, playerCount, joinUrl, … }] }`, newest 20 |
+| GET | `/team-games/:code` | anyone logged in | The current state |
+| PATCH | `/team-games/:code` | host, lobby | `{ teamCount?, timerSeconds?, teams?: [{ id, name }] }` (names up to 30 characters) |
+| POST | `/team-games/:code/join` | player | `{ teamId? }`. Without `teamId`: in the game, not on a team yet |
+| POST | `/team-games/:code/leave` | player | Leaves the game |
+| POST | `/team-games/:code/players/:userId/team` | host | `{ teamId }`, or `null` to take them off their team |
+| POST | `/team-games/:code/teams/:teamId/leader` | host | `{ userId }`, who must be on that team |
+| POST | `/team-games/:code/start` | host, lobby | Needs 2 teams with players |
+| POST | `/team-games/:code/pick` | leader in turn | `{ cellIndex }` (0-based) |
+| POST | `/team-games/:code/answer` | leader in turn | `{ optionIndex }` |
+| POST | `/team-games/:code/end` | host | Lobby: cancels. In play: finishes on score |
+| GET | `/team-games/:code/messages` | team member | `{ teamId, messages: [{ id, teamId, userId, name, text, createdAt }] }`, last 50 |
+| POST | `/team-games/:code/messages` | team member | `{ text }` (up to 300 characters) → 201 `{ message }` |
+| GET | `/team-games/:code/result` | **public**, finished only | `{ result }`, the shareable card below; 404 before that |
+
+**State.**
+
+```json
+{ "code": "q8Zk3vQ0a1b2", "status": "playing",
+  "quiz": { "id": "6704…", "title": "Capital cities", "coverImageUrl": null },
+  "host": { "userId": "66f1…", "name": "ada", "avatar": null },
+  "timerSeconds": 30,
+  "board": { "size": 3, "lineLength": 3,
+             "cells": [{ "index": 0, "number": 1, "owner": "t1" }, { "index": 1, "number": 2, "owner": null }, …] },
+  "teams": [{ "id": "t1", "name": "Team A", "color": "#ef4444", "leaderId": "66f2…", "score": 1,
+              "members": [{ "userId": "66f2…", "name": "bayo", "avatar": null }] }, …],
+  "unassigned": [],
+  "turnTeamId": "t2",
+  "current": { "cellIndex": 4, "number": 5, "teamId": "t2", "servedAt": "…", "deadlineAt": "…", "timerSeconds": 30,
+               "question": { "type": "definition", "imageUrl": null, "text": "Capital of Kenya", "attribution": null,
+                             "options": [{ "index": 0, "text": "Nairobi" }, { "index": 1, "text": "Mombasa" }] } },
+  "lastPlay": { "cellIndex": 0, "number": 1, "teamId": "t1", "outcome": "correct",
+                "optionIndex": 0, "correctOptionIndex": 0, "at": "…" },
+  "playCount": 1, "winnerTeamId": null, "winningLine": null, "isDraw": false, "endReason": null,
+  "startedAt": "…", "finishedAt": null,
+  "joinUrl": "https://pazzell.com/team/q8Zk3vQ0a1b2", "resultUrl": null, "serverTime": "…" }
+```
+
+`current` never carries the answer; `lastPlay` reveals it once the question is settled. Drive the
+countdown from `deadlineAt` and `serverTime`, as in section 2. The server closes an unanswered
+question itself when its clock runs out. Team ids are `t1`–`t6` and keep their colour all game.
+
+**Result card** (`GET …/result`): `{ code, quiz: { title, coverImageUrl }, host: { name, avatar },
+endReason, isDraw, winnerTeamId, board, winningLine, questionsPlayed, startedAt, finishedAt,
+resultUrl, teams: [{ id, name, color, score, cellsClaimed, questionsAnswered, correctAnswers,
+leaderName, isWinner, members: [{ name, avatar, isLeader }] }] }`, winner first. It carries names
+only, never account ids.
+
+**Live updates (socket.io).** Connect to the API origin (not `/api/v1`) with the access token:
+`io(API_URL, { auth: { token } })`. A refused handshake (bad or expired token) is not retried by
+socket.io: refresh the token and connect again. Then:
+
+- emit `team-game:watch` `{ code }` with an ack → `{ ok: true, state }` (or `{ ok: false, message, code }`);
+- `team-game:state` — the new state after every change, sent to everyone watching;
+- `team-game:message` — a chat line, sent to that team's members only;
+- emit `team-game:unwatch` when leaving the page.
+
+Every change goes through the REST endpoints; the socket only pushes. Keep the copy with the
+latest `serverTime`, and poll `GET /team-games/:code` while the socket is down.
+
 ---
 
 ## 8. Brand campaigns
@@ -1114,6 +1202,21 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | `ALREADY_PAID` / `CHECKOUT_EXPIRED` | 409 | checkout with an old `idempotencyKey` | Start a new checkout |
 | `CHECKOUT_FAILED` | 502 | checkout | Gateway error; retry |
 | `PAYMENTS_UNAVAILABLE` | 503 | checkout | Gateway not configured |
+| `TEAM_GAME_NOT_FOUND` | 404 | team games | Unknown code, or (result) the game has not finished |
+| `NOT_ENOUGH_CARDS` | 400 | create team game, team count, start | The board needs `details.needed` questions; the quiz has `details.available` |
+| `INVALID_TEAM_COUNT` | 400 | team games | Outside `details.min`–`details.max` (2–6) |
+| `QUIZ_LOCKED` | 403 | create or start team game | The quiz is locked on the host's plan |
+| `NOT_HOST` | 403 | team games | Only the host can do this |
+| `TEAM_NOT_FOUND` / `PLAYER_NOT_FOUND` | 400 / 404 | team games | No such team or player in this game |
+| `TEAM_FULL` / `GAME_FULL` | 409 | join, move player | `details.max` |
+| `TEAMS_LOCKED` | 409 | join | Players can't switch teams once the game has started |
+| `NOT_ON_TEAM` | 400 / 403 | set leader, team chat | The player is not on that team, or on any team |
+| `GAME_STARTED` / `GAME_NOT_PLAYING` / `GAME_OVER` | 409 | team games | The game is past the lobby, not in play, or has ended. Refetch the state |
+| `NOT_ENOUGH_TEAMS` | 400 | start | Fewer than 2 teams have players |
+| `NOT_YOUR_TURN` / `NOT_LEADER` | 403 | pick, answer | Another team's turn, or only the leader can do this |
+| `QUESTION_OPEN` / `NO_QUESTION_OPEN` | 409 | pick / answer | A question is already open; or none is (its clock may have run out) |
+| `INVALID_CELL` / `CELL_TAKEN` | 400 / 409 | pick | Not on the board, or already claimed |
+| `NO_QUESTIONS_LEFT` | 409 | pick | Every question has been answered correctly |
 | `RATE_LIMITED` | 429 | | Slow down |
 
 ---
@@ -1124,7 +1227,8 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 
 | Routes | Limit |
 | --- | --- |
-| Question fetch and answer submit | 180 / minute |
+| Question fetch and answer submit; team game pick and answer | 180 / minute |
+| Team game chat message | 40 / minute |
 | Start a session | 30 / minute |
 | Share-link resolve and play-info | 30 / minute |
 | Checkout start and payment verify | 10 / 10 minutes |
@@ -1132,7 +1236,7 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 | Image upload | 60 / 10 minutes |
 | Generate cards from a document | 10 / 10 minutes, plus the daily allowance in 7.4 |
 | Create an AI generated trivia | 10 / 10 minutes, plus the daily allowance in 7.5 |
-| Create/edit quizzes, campaigns and cards | 120 / minute |
+| Create/edit quizzes, campaigns and cards; team game set-up, join and leave | 120 / minute |
 
 ---
 

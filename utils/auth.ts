@@ -16,6 +16,31 @@ declare module 'express' {
   }
 }
 
+/** The user behind an access token. Shared by HTTP requests and WebSocket connections. */
+export async function userFromAccessToken(token: string): Promise<IUser> {
+  const decoded = jwt.verify(token, process.env.ACCESS_TOKEN as string) as JwtPayload;
+  if (!decoded) {
+    throw new ErrorHandler("Access token not valid", 400);
+  }
+
+  // The Redis entry proves the session is still open (logout deletes it)...
+  const session = await redis.get(decoded.id);
+  if (!session) {
+    throw new ErrorHandler("User not found", 400);
+  }
+
+  // ...but role, plan and counters are always read fresh from MongoDB, so a
+  // cached session can never grant a stale role or an expired Pro plan.
+  const user = await userModel.findById(decoded.id).select("-password");
+  if (!user) {
+    throw new ErrorHandler("User not found", 400);
+  }
+  // toObject() applies schema defaults (e.g. role "gamer" on old accounts that
+  // never stored one). _id stays a plain string, as it was when req.user came
+  // from the Redis JSON.
+  return { ...user.toObject(), _id: String(user._id) } as unknown as IUser;
+}
+
 //Authenticate user
 export const isAuthenticated = CatchAsyncError(
     async (req: Request, res: Response, next: NextFunction) => {
@@ -30,28 +55,7 @@ export const isAuthenticated = CatchAsyncError(
           // Extract the token from the authorization header
           const token = authHeader.split(" ")[1];
 
-          //Verify token
-          const decoded = jwt.verify(token, process.env.ACCESS_TOKEN as string) as JwtPayload;
-          if(!decoded){
-            return next(new ErrorHandler("Access token not valid", 400));
-          }
-
-          // The Redis entry proves the session is still open (logout deletes it)...
-          const session = await redis.get(decoded.id);
-          if(!session){
-            return next(new ErrorHandler("User not found", 400));
-          }
-
-          // ...but role, plan and counters are always read fresh from MongoDB, so a
-          // cached session can never grant a stale role or an expired Pro plan.
-          const user = await userModel.findById(decoded.id).select("-password");
-          if(!user){
-            return next(new ErrorHandler("User not found", 400));
-          }
-          // toObject() applies schema defaults (e.g. role "gamer" on old accounts that
-          // never stored one). _id stays a plain string, as it was when req.user came
-          // from the Redis JSON.
-          req.user = { ...user.toObject(), _id: String(user._id) } as unknown as IUser;
+          req.user = await userFromAccessToken(token);
           next();
 
       } catch (error: any) {
