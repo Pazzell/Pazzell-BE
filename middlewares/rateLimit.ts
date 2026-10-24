@@ -43,5 +43,7 @@ export const uploadLimiter = createRateLimiter({ windowMs: 10 * MINUTE, limit: 6
 // Turning a document, or a topic and a prompt, into trivia cards (the daily allowances
 // are enforced separately)
 export const generateLimiter = createRateLimiter({ windowMs: 10 * MINUTE, limit: 10 });
+// Team game chat lines
+export const chatLimiter = createRateLimiter({ windowMs: MINUTE, limit: 40 });
 // Create/update of quizzes, campaigns and cards
 export const writeLimiter = createRateLimiter({ windowMs: MINUTE, limit: 120 });

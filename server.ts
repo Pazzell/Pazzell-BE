@@ -1,5 +1,8 @@
+import http from "http";
 import { app } from "./app";
 import "dotenv/config";
+import { attachRealtime } from "./services/teamGame/realtime";
+import { rearmTeamGameTimers, watchTeamGame } from "./services/teamGame/teamGame.service";
 import connectDB from "./utils/db";
 import { startScheduler } from "./services/scheduler";
 import { initConfigCache, migrateRetiredPricing } from "./services/config/config.service";
@@ -21,7 +24,13 @@ async function start() {
   // Warm the Config cache (falls back to CONFIG_DEFAULTS for any unseeded key)
   await initConfigCache();
 
-  app.listen(PORT, () => {
+  // Team games push live updates over socket.io, served on the same port as the API.
+  const server = http.createServer(app);
+  attachRealtime(server, watchTeamGame);
+  // Questions that were open when the server stopped still close on time.
+  await rearmTeamGameTimers();
+
+  server.listen(PORT, () => {
     console.log(`Server is connected http://localhost:${PORT}`);
     // node-cron scheduler: campaign auto-end, Pro-expiry quiz locking, stale attempt
     // cleanup, nightly wallet reconciliation (see services/scheduler/index.ts)
