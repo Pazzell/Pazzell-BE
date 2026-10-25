@@ -234,7 +234,7 @@ const CHECK_SCHEMA = {
 };
 
 const notConfigured = () =>
-  new ErrorHandler("AI generated trivia is not available yet", 503, "AI_NOT_CONFIGURED");
+  new ErrorHandler("Writing questions with AI is not available yet", 503, "AI_NOT_CONFIGURED");
 const unavailable = () =>
   new ErrorHandler(
     "The trivia generator is busy right now. Please try again in a moment.",

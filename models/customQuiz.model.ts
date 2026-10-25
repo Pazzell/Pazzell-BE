@@ -7,10 +7,15 @@ export type CustomQuizStatus = "draft" | "live" | "unpublished" | "locked";
 // It is played by its owner only and stays outside the freemium quiz limit and its locks.
 export type CustomQuizOrigin = "manual" | "ai";
 export type AiReviewStatus = "pending" | "approved" | "rejected";
+// "broadcast": shared with a link, each player plays alone and gets their own score.
+// "team": hosted as a team game (services/teamGame), with no solo share link.
+export type CustomQuizMode = "broadcast" | "team";
+export const CUSTOM_QUIZ_MODES: CustomQuizMode[] = ["broadcast", "team"];
 
 export interface ICustomQuiz extends Document {
   ownerId: string;
   title: string;
+  mode: CustomQuizMode;
   description?: string;
   coverImageUrl?: string;
   status: CustomQuizStatus;
@@ -39,6 +44,7 @@ const customQuizSchema: Schema<ICustomQuiz> = new mongoose.Schema(
   {
     ownerId: { type: String, required: true },
     title: { type: String, required: true, trim: true, maxlength: 80 },
+    mode: { type: String, enum: CUSTOM_QUIZ_MODES, default: "broadcast" },
     description: { type: String, maxlength: 300 },
     coverImageUrl: { type: String },
     status: {

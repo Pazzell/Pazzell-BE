@@ -4,6 +4,8 @@
 
 export const MIN_TEAMS = 2;
 export const MAX_TEAMS = 6;
+/** Cards a team quiz needs at the least: one for each cell of the smallest board. */
+export const MIN_TEAM_QUIZ_CARDS = 9;
 
 export interface BoardShape {
   size: number; // cells per side

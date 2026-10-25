@@ -367,6 +367,87 @@ describe("Trivia from a document (HTTP)", () => {
     expect(info.body.generate).toMatchObject({ usedToday: 0, remaining: 3 });
   });
 
+  describe("from a description", () => {
+    let requestTopicCards: jest.SpyInstance;
+    let answerCards: jest.SpyInstance;
+    const describeIt = (user: TestUser, body: Record<string, any> = {}) =>
+      api()
+        .post(`${base}/generate`)
+        .set(user.auth)
+        .send({ prompt: "Questions about the solar system", ...body });
+
+    beforeEach(() => {
+      requestTopicCards = jest
+        .spyOn(claude, "requestTopicCards")
+        .mockImplementation(async (_topic, _prompt, count) => ({
+          title: "The solar system",
+          cards: Array.from({ length: count }, (_, i) => candidate(i, { statement: `Planet question ${i}?` })),
+        }));
+      // A perfect checker: it picks the right answer of every card.
+      answerCards = jest
+        .spyOn(claude, "answerCards")
+        .mockImplementation(async (_topic, questions: { options: string[] }[]) =>
+          questions.map((q) => q.options.findIndex((o) => o.startsWith("Right")))
+        );
+    });
+
+    it("writes draft cards for the description without saving anything", async () => {
+      const user = await createUser();
+      const res = await describeIt(user, { count: 40, topic: "Space quiz" });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        suggestedTitle: "The solar system",
+        requested: 40,
+        prompt: "Questions about the solar system",
+        document: null,
+      });
+      expect(res.body.cards).toHaveLength(40);
+      for (const card of res.body.cards) {
+        expect(card.options[card.correctOptionIndex]).toMatch(/^Right answer/);
+        expect(card.quote).toBe("");
+      }
+      // Spare cards were asked for, about the quiz's topic, and no document was read.
+      expect(requestTopicCards).toHaveBeenCalledWith("Space quiz", "Questions about the solar system", 50);
+      expect(requestCards).not.toHaveBeenCalled();
+      expect(await CustomQuizCardModel.countDocuments()).toBe(0);
+    });
+
+    it("keeps only the cards the blind check agrees with", async () => {
+      const user = await createUser();
+      answerCards.mockImplementation(async (_topic, questions: { options: string[] }[]) =>
+        questions.map((q, i) => (i % 2 ? null : q.options.findIndex((o) => o.startsWith("Right"))))
+      );
+      const res = await describeIt(user, { count: 4 });
+      expect(res.status).toBe(200);
+      expect(res.body.cards.map((c: any) => c.text)).toEqual([
+        "Planet question 0?",
+        "Planet question 2?",
+        "Planet question 4?",
+      ]);
+    });
+
+    it("allows up to 50 cards and shares the daily allowance with documents", async () => {
+      const user = await createUser();
+      expect((await describeIt(user, { count: 51 })).body.code).toBe("INVALID_CARD_COUNT");
+      const info = await api().get(`${base}/generate`).set(user.auth);
+      expect(info.body.generate.prompt).toEqual({ maxLength: 500, count: { default: 10, min: 1, max: 50 } });
+
+      expect((await describeIt(user, { count: 2 })).status).toBe(200);
+      expect((await fromText(user, { count: 2 })).status).toBe(200);
+      expect((await describeIt(user, { count: 2 })).status).toBe(200);
+      expect((await describeIt(user, { count: 2 })).body.code).toBe("GENERATION_LIMIT_REACHED");
+    });
+
+    it("passes on a declined request without charging for it", async () => {
+      const user = await createUser();
+      requestTopicCards.mockResolvedValueOnce({ declined: "Choose a subject people can be quizzed on.", cards: [] });
+      const res = await describeIt(user);
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ code: "PROMPT_REJECTED", message: "Choose a subject people can be quizzed on." });
+      expect((await api().get(`${base}/generate`).set(user.auth)).body.generate.usedToday).toBe(0);
+    });
+  });
+
   describe("for admins (/admin/trivia/generate)", () => {
     const adminBase = "/api/v1/admin/trivia";
     const generate = (user: TestUser, body: Record<string, any> = {}) =>
