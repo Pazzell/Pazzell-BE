@@ -87,9 +87,10 @@ export async function resolveSource(
     if (!isOwner) {
       // The owner's plan may have lapsed since the locks were last applied.
       await ensureQuizLocks(quiz.ownerId);
-      const fresh = await CustomQuizModel.findById(quiz._id).select("status shareSlug").lean();
+      const fresh = await CustomQuizModel.findById(quiz._id).select("status shareSlug mode").lean();
       const viaLink = typeof input.slug === "string" && input.slug === fresh?.shareSlug;
-      if (!fresh || fresh.status !== "live" || !viaLink) {
+      // A team quiz is only played through a team game, never alone through a link.
+      if (!fresh || fresh.status !== "live" || !viaLink || fresh.mode === "team") {
         throw notFound("Quiz", "QUIZ_NOT_FOUND");
       }
     }

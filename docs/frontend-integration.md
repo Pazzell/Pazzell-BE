@@ -446,7 +446,12 @@ next start for the same source is a new session. Returns `{ "success": true, "se
 
 ## 7. Custom trivia
 
-Any logged-in user can create quizzes and share them by link.
+Any logged-in user can create quizzes. The creator picks how each one is played (`mode`):
+
+- **`broadcast`** (the default): shared with a link (7.2). Each player plays alone and gets their
+  own score.
+- **`team`**: hosted as a team game (7.6). It has no share link, and no one can play it alone
+  through a link; the owner's own test play still works.
 
 - **Freemium:** 1 non-deleted quiz. **Pro:** unlimited. Enforced on the server at creation;
   the second attempt by a freemium user returns `403 UPGRADE_REQUIRED` with
@@ -458,37 +463,39 @@ Any logged-in user can create quizzes and share them by link.
   owner, but it cannot be published. Renewing Pro restores each one to its previous status and
   the same link works again. Deleting quizzes down to the limit unlocks the next one. A locked
   quiz returns `403 UPGRADE_REQUIRED` with `details.reason: "quiz_locked"` on publish.
-- A quiz needs at least `customQuiz.minCardsToPublish` (5) cards to go live.
+- A quiz needs at least `customQuiz.minCardsToPublish` (5) cards to go live; a team quiz needs at
+  least 9, one for each cell of the smallest board. `minCardsToPublish` on `GET /custom-quizzes/:id`
+  is the number for that quiz.
 
 ### 7.1 Owner endpoints (all Auth; every `:id` must belong to the caller, otherwise 404)
 
 | Method | Path | Body | Purpose |
 | --- | --- | --- | --- |
-| POST | `/custom-quizzes` | `title`, `description?`, `defaultTimerSeconds?` (1–15), `defaultCardCount?`, file `image?` or `coverImageUrl?` | Create a draft |
+| POST | `/custom-quizzes` | `title`, `mode?` (`broadcast` or `team`, default `broadcast`), `description?`, `defaultTimerSeconds?` (1–15), `defaultCardCount?`, file `image?` or `coverImageUrl?` | Create a draft |
 | GET | `/custom-quizzes` | | The caller's quizzes, with `plan` and `limit` (`null` for Pro) |
 | GET | `/custom-quizzes/:id` | | Quiz + all cards with answers (review screen) |
 | GET | `/custom-quizzes/:id/preview` | | Same as above |
-| PATCH | `/custom-quizzes/:id` | any create field | Edit |
+| PATCH | `/custom-quizzes/:id` | any create field | Edit. Changing `mode` of a live quiz returns `409 QUIZ_LIVE`: unpublish it first |
 | DELETE | `/custom-quizzes/:id` | | Delete (frees the freemium slot) |
 | POST | `/custom-quizzes/:id/cards` | card (see 7.3) | Add a card |
 | POST | `/custom-quizzes/:id/cards/bulk` | `{ cards: [ … ] }` up to 100 | Add many cards (all or nothing) |
 | PATCH | `/custom-quizzes/:id/cards/:cardId` | partial card | Edit a card |
 | DELETE | `/custom-quizzes/:id/cards/:cardId` | | Remove a card (`409 MIN_CARDS_REQUIRED` if a live quiz would drop below the minimum) |
-| POST | `/custom-quizzes/:id/publish` | | Go live; generates the share link |
+| POST | `/custom-quizzes/:id/publish` | | Go live; generates the share link (a team quiz gets none) |
 | POST | `/custom-quizzes/:id/unpublish` | | Back to unpublished; the link stops resolving |
-| POST | `/custom-quizzes/:id/share-link/regenerate` | | New link; the old one dies immediately |
+| POST | `/custom-quizzes/:id/share-link/regenerate` | | New link; the old one dies immediately (`409 TEAM_QUIZ_NO_SHARE_LINK` for a team quiz) |
 | DELETE | `/custom-quizzes/:id/share-link` | | Revoke the link; the quiz becomes unpublished |
 | GET | `/custom-quizzes/:id/stats` | | `{ stats: { plays, averageScore, averageScorePercent } }` |
 
 Quiz object:
 
 ```json
-{ "id": "6704…", "title": "Capital cities", "description": null, "coverImageUrl": null,
+{ "id": "6704…", "title": "Capital cities", "mode": "broadcast", "description": null, "coverImageUrl": null,
   "status": "live", "shareSlug": "Zk3vQ0a1b2c3d4e5f6g7hA", "shareUrl": "https://app.example/q/Zk3vQ0a1b2c3d4e5f6g7hA",
   "defaultTimerSeconds": 5, "defaultCardCount": 5, "cardCount": 8, "createdAt": "…", "updatedAt": "…" }
 ```
 
-`shareSlug`/`shareUrl` are `null` unless the quiz is live. `shareUrl` is
+`shareSlug`/`shareUrl` are `null` unless the quiz is live, and always `null` for a team quiz. `shareUrl` is
 `{FRONTEND_URL}/q/{shareSlug}`, so the frontend must serve that route.
 
 **Owner test play:** `POST /trivia/sessions { "sourceType": "custom", "sourceId": "<quiz id>", "timerSeconds": 5, "cardCount": 5 }`
@@ -508,7 +515,7 @@ of its cards.
 ```
 
 It never returns cards. `404 QUIZ_NOT_FOUND` when the slug is unknown, or the quiz is not live,
-locked, revoked or deleted. Render title, creator and a "Log in to play" button.
+locked, revoked, deleted or a team quiz. Render title, creator and a "Log in to play" button.
 
 `GET /custom-quizzes/link/:slug/play-info` — Auth. After login:
 
@@ -535,11 +542,18 @@ Invalid cards return `400 INVALID_CARD`; in bulk the message names the row (`Car
 `details.index` is its zero-based position. Editor responses return a card as
 `{ id, type, imageUrl, text, options, correctOptionIndex, attribution, createdAt, updatedAt }`.
 
-### 7.4 Cards from a document
+### 7.4 Cards written with AI: from a description or a document
 
-A player uploads their study material and gets draft cards to review. The server reads the text,
-asks Claude to write definition cards from it, and keeps only the cards whose supporting sentence
-really appears in the document. **Nothing is saved by this endpoint.** The drafts come back in the
+A player either describes the questions they want ("50 questions about the solar system") or
+uploads their study material, and gets draft cards to review.
+
+- **From a description**, Claude writes the cards from its own knowledge. With no document to
+  check them against, a second request answers each card blind, and only the cards it agrees on
+  come back (the same check as 7.5).
+- **From a document**, the server reads the text, asks Claude to write definition cards from it,
+  and keeps only the cards whose supporting sentence really appears in the document.
+
+**Nothing is saved by this endpoint.** The drafts come back in the
 card format of 7.3, so the review screen edits them and saves the ones the player keeps through the
 existing endpoints.
 
@@ -550,15 +564,25 @@ existing endpoints.
   "enabled": true,
   "fileTypes": ["pdf", "docx", "txt", "md"], "maxFileBytes": 10485760, "minCharacters": 300,
   "count": { "default": 10, "min": 1, "max": 30 },
+  "prompt": { "maxLength": 500, "count": { "default": 10, "min": 1, "max": 50 } },
   "dailyLimit": 3, "usedToday": 1, "remaining": 2, "resetsAt": "2026-10-12T00:00:00.000Z" } }
 ```
+
+`count` is for documents and `prompt.count` for descriptions. Both draw on the same daily
+allowance.
 
 Hide or disable the feature when `enabled` is `false` (no API key on the server), and show
 `remaining` of `dailyLimit`. The allowance resets at `resetsAt` (midnight UTC).
 
-`POST /custom-quizzes/generate` — Auth. Either `multipart/form-data` with the file in a field
-named `document`, or JSON `{ "text": "pasted notes…" }`. Optional `count` (1–30, default 10).
-It can take up to a minute, so show progress and do not retry automatically.
+`POST /custom-quizzes/generate` — Auth. One of:
+
+- JSON `{ "prompt": "Questions about the solar system", "topic?": "Space quiz", "count?": 40 }`:
+  `prompt` up to 500 characters, `count` 1–50. Send the quiz's title as `topic` when the cards go
+  to a quiz that already exists; otherwise the description is used as the topic.
+- `multipart/form-data` with the file in a field named `document`, or JSON
+  `{ "text": "pasted notes…" }`. Optional `count` (1–30, default 10).
+
+It can take a minute or two, so show progress and do not retry automatically.
 
 ```json
 { "success": true,
@@ -571,11 +595,16 @@ It can take up to a minute, so show progress and do not retry automatically.
       "correctOptionIndex": 0,
       "quote": "The accounting equation states that assets equal liabilities plus owner's equity." }
   ],
+  "prompt": null,
   "document": { "name": "accounting.pdf", "kind": "pdf", "characters": 48211, "sampled": false },
   "usage": { "dailyLimit": 3, "usedToday": 2, "remaining": 1, "resetsAt": "2026-10-12T00:00:00.000Z" } }
 ```
 
-- `cards` may hold fewer than `requested`: a card the document does not support is dropped.
+- `cards` may hold fewer than `requested`: a card the document does not support, or that fails
+  the blind check, is dropped.
+- From a description, `prompt` echoes it, `document` is `null` and every `quote` is `""`. A
+  description Claude will not write trivia for returns `422 PROMPT_REJECTED` with a message saying
+  what to change.
 - `quote` is the sentence from the document that proves the answer. Show it on the review
   screen so the player can check each card; it is not part of a saved card.
 - `document.kind` is `pdf`, `docx` or `text`. `sampled` is `true` when the document was longer
@@ -586,14 +615,15 @@ It can take up to a minute, so show progress and do not retry automatically.
 **Review, then save.** Let the player edit the text and options, change which option is correct
 and remove cards. Then:
 
-1. `POST /custom-quizzes` with the title (prefill it from `suggestedTitle`), or use a quiz the
-   player already owns. The freemium quiz limit applies here as usual.
+1. `POST /custom-quizzes` with the title (prefill it from `suggestedTitle`) and `mode`, or use a
+   quiz the player already owns. The freemium quiz limit applies here as usual.
 2. `POST /custom-quizzes/:id/cards/bulk` with `{ "cards": [ …the kept drafts… ] }`. Extra
    fields such as `quote` are ignored.
-3. `POST /custom-quizzes/:id/publish` when the player is ready (at least 5 cards).
+3. `POST /custom-quizzes/:id/publish` when the player is ready (at least 5 cards, or 9 for a
+   team quiz).
 
-Limits: freemium players may generate from `customQuiz.generateDailyLimitFree` (3) documents a
-day and Pro players from `customQuiz.generateDailyLimitPro` (20). A request that fails does not
+Limits: freemium players may generate `customQuiz.generateDailyLimitFree` (3) times a day and Pro
+players `customQuiz.generateDailyLimitPro` (20), descriptions and documents together. A request that fails does not
 use up the allowance. Over the limit returns `429 GENERATION_LIMIT_REACHED` with
 `details: { dailyLimit, resetsAt, isPro }`; offer Pro when `isPro` is `false`.
 
@@ -675,7 +705,9 @@ freemium player these plays count toward the campaign interruption rule like Gen
 
 ### 7.6 Team games
 
-A host plays one of their own custom quizzes as tic-tac-toe between teams.
+A host runs one of their own **team quizzes** (`mode: "team"`, published) as tic-tac-toe between
+teams. The host creates the game and shares the join link; other players join the teams. The host
+never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
 `lobby → playing → finished` (or `lobby → cancelled`). All routes are Auth unless marked.
 
 **Rules.**
@@ -700,11 +732,11 @@ A host plays one of their own custom quizzes as tic-tac-toe between teams.
 
 | Method | Path | Who | Body / notes |
 | --- | --- | --- | --- |
-| POST | `/team-games` | quiz owner | `{ quizId, teamCount? (2–6, default 2), timerSeconds? (10–120) }` → 201 |
+| POST | `/team-games` | quiz owner | `{ quizId, teamCount? (2–6, default 2), timerSeconds? (10–120) }` → 201. The quiz must be a live team quiz (`409 NOT_A_TEAM_QUIZ`, `409 QUIZ_NOT_LIVE`) |
 | GET | `/team-games` | host | `{ games: [{ code, status, quizTitle, teamCount, playerCount, joinUrl, … }] }`, newest 20 |
 | GET | `/team-games/:code` | anyone logged in | The current state |
 | PATCH | `/team-games/:code` | host, lobby | `{ teamCount?, timerSeconds?, teams?: [{ id, name }] }` (names up to 30 characters) |
-| POST | `/team-games/:code/join` | player | `{ teamId? }`. Without `teamId`: in the game, not on a team yet |
+| POST | `/team-games/:code/join` | player, not the host | `{ teamId? }`. Without `teamId`: in the game, not on a team yet |
 | POST | `/team-games/:code/leave` | player | Leaves the game |
 | POST | `/team-games/:code/players/:userId/team` | host | `{ teamId }`, or `null` to take them off their team |
 | POST | `/team-games/:code/teams/:teamId/leader` | host | `{ userId }`, who must be on that team |
@@ -1187,9 +1219,12 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | `DOCUMENT_UNREADABLE` | 400 | generate from a document | Scanned, password-protected or damaged PDF. Show the message |
 | `DOCUMENT_TOO_SHORT` | 400 | generate from a document | Under `details.minCharacters` characters of text |
 | `NO_CARDS_GENERATED` | 422 | generate from a document | No card could be backed by the document. Suggest another document |
-| `GENERATION_LIMIT_REACHED` | 429 | generate from a document, create AI trivia | Daily allowance used; `details: { dailyLimit, resetsAt, isPro }` |
+| `GENERATION_LIMIT_REACHED` | 429 | generate cards, create AI trivia | Daily allowance used; `details: { dailyLimit, resetsAt, isPro }` |
 | `TOPIC_REQUIRED` / `PROMPT_REQUIRED` | 400 | create AI trivia | No topic selected or typed; no description of the questions |
-| `PROMPT_REJECTED` | 422 | create AI trivia | Questions cannot be written for this request. Show `message` |
+| `PROMPT_REJECTED` | 422 | generate cards from a description, create AI trivia | Questions cannot be written for this request. Show `message` |
+| `INVALID_QUIZ_MODE` | 400 | create or edit a quiz | `mode` is not `broadcast` or `team`; `details.modes` |
+| `QUIZ_LIVE` | 409 | edit a quiz | Unpublish before changing `mode` |
+| `TEAM_QUIZ_NO_SHARE_LINK` | 409 | regenerate share link | A team quiz is shared through its team game's join link |
 | `AI_TRIVIA_NOT_FOUND` | 404 | AI trivia | Unknown or not yours |
 | `AI_TRIVIA_NOT_SHAREABLE` | 409 | publish | An AI generated trivia has no share link |
 | `ALREADY_REVIEWED` | 409 | admin AI trivia review | `details.reviewStatus` |
@@ -1206,6 +1241,8 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | `NOT_ENOUGH_CARDS` | 400 | create team game, team count, start | The board needs `details.needed` questions; the quiz has `details.available` |
 | `INVALID_TEAM_COUNT` | 400 | team games | Outside `details.min`–`details.max` (2–6) |
 | `QUIZ_LOCKED` | 403 | create or start team game | The quiz is locked on the host's plan |
+| `NOT_A_TEAM_QUIZ` / `QUIZ_NOT_LIVE` | 409 | create team game | Only a published team quiz can be hosted |
+| `HOST_CANNOT_PLAY` | 403 | join | The host runs the game and can't be on a team |
 | `NOT_HOST` | 403 | team games | Only the host can do this |
 | `TEAM_NOT_FOUND` / `PLAYER_NOT_FOUND` | 400 / 404 | team games | No such team or player in this game |
 | `TEAM_FULL` / `GAME_FULL` | 409 | join, move player | `details.max` |

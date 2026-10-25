@@ -2,7 +2,11 @@ import { Request, Response, NextFunction } from "express";
 import { randomBytes } from "crypto";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import CustomQuizModel, { ICustomQuiz } from "../models/customQuiz.model";
+import CustomQuizModel, {
+  CUSTOM_QUIZ_MODES,
+  CustomQuizMode,
+  ICustomQuiz,
+} from "../models/customQuiz.model";
 import CustomQuizCardModel from "../models/customQuizCard.model";
 import userModel from "../models/user.model";
 import { assertObjectId, cleanString, requireString, toInt } from "../utils/validators";
@@ -13,6 +17,7 @@ import { assertCanCreateCustomQuiz } from "../services/plan/policy";
 import { getPlan } from "../services/plan/plan.service";
 import { ensureQuizLocks, syncQuizLocks } from "../services/customQuiz/quizLock.service";
 import { generateDraftCards, getGenerateOptions } from "../services/quizGen/generate.service";
+import { MIN_TEAM_QUIZ_CARDS } from "../services/teamGame/board";
 import {
   getCustomQuizFreeLimit,
   getCustomQuizMinCards,
@@ -28,21 +33,46 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const newShareSlug = () => randomBytes(16).toString("base64url");
 const shareUrlFor = (slug?: string) => (slug ? `${FRONTEND_URL}/q/${slug}` : null);
 
-const ownerQuiz = (quiz: any, cardCount: number) => ({
-  id: String(quiz._id),
-  title: quiz.title,
-  description: quiz.description || null,
-  coverImageUrl: quiz.coverImageUrl || null,
-  status: quiz.status,
-  // The link only resolves while the quiz is live.
-  shareSlug: quiz.status === "live" ? quiz.shareSlug || null : null,
-  shareUrl: quiz.status === "live" ? shareUrlFor(quiz.shareSlug) : null,
-  defaultTimerSeconds: quiz.defaultTimerSeconds,
-  defaultCardCount: quiz.defaultCardCount,
-  cardCount,
-  createdAt: quiz.createdAt,
-  updatedAt: quiz.updatedAt,
-});
+const isTeamQuiz = (quiz: { mode?: string }) => quiz.mode === "team";
+
+const ownerQuiz = (quiz: any, cardCount: number) => {
+  // The link only resolves while the quiz is live, and a team quiz has none: it is played
+  // through a team game's join link instead.
+  const linked = quiz.status === "live" && !isTeamQuiz(quiz);
+  return {
+    id: String(quiz._id),
+    title: quiz.title,
+    mode: quiz.mode || "broadcast",
+    description: quiz.description || null,
+    coverImageUrl: quiz.coverImageUrl || null,
+    status: quiz.status,
+    shareSlug: linked ? quiz.shareSlug || null : null,
+    shareUrl: linked ? shareUrlFor(quiz.shareSlug) : null,
+    defaultTimerSeconds: quiz.defaultTimerSeconds,
+    defaultCardCount: quiz.defaultCardCount,
+    cardCount,
+    createdAt: quiz.createdAt,
+    updatedAt: quiz.updatedAt,
+  };
+};
+
+function parseMode(value: any): CustomQuizMode {
+  if (!CUSTOM_QUIZ_MODES.includes(value)) {
+    throw new ErrorHandler(
+      `mode must be one of: ${CUSTOM_QUIZ_MODES.join(", ")}`,
+      400,
+      "INVALID_QUIZ_MODE",
+      { modes: CUSTOM_QUIZ_MODES }
+    );
+  }
+  return value;
+}
+
+/** Cards a quiz needs before it can go live: a team quiz fills the smallest board. */
+async function minCardsFor(quiz: { mode?: string }): Promise<number> {
+  const min = await getCustomQuizMinCards();
+  return isTeamQuiz(quiz) ? Math.max(min, MIN_TEAM_QUIZ_CARDS) : min;
+}
 
 /** Loads a quiz the caller owns. 404 for anyone else, so ids cannot be probed. */
 async function loadOwnedQuiz(req: Request): Promise<ICustomQuiz> {
@@ -96,6 +126,7 @@ export const createQuiz = CatchAsyncError(async (req: Request, res: Response) =>
   const quiz = await CustomQuizModel.create({
     ownerId,
     title,
+    mode: body.mode === undefined ? "broadcast" : parseMode(body.mode),
     description: cleanString(body.description, 300),
     coverImageUrl: await resolveImage(req.file, body.coverImageUrl, ownerId, "covers"),
     defaultTimerSeconds:
@@ -147,7 +178,7 @@ export const getMyQuiz = CatchAsyncError(async (req: Request, res: Response) => 
     success: true,
     quiz: ownerQuiz(quiz, cards.length),
     cards: cards.map(editorCard),
-    minCardsToPublish: await getCustomQuizMinCards(),
+    minCardsToPublish: await minCardsFor(quiz),
     cardCountBounds: await cardCountBounds(cards.length),
     cardMix: await cardMix(cards.filter((c) => c.type === "image").length, cards.length),
   });
@@ -158,6 +189,18 @@ export const updateQuiz = CatchAsyncError(async (req: Request, res: Response) =>
   const quiz = await loadOwnedQuiz(req);
   const body = req.body || {};
   if (body.title !== undefined) quiz.title = requireString(body.title, "title", 80);
+  if (body.mode !== undefined) {
+    const mode = parseMode(body.mode);
+    // Switching a live quiz would cut off a link people have, or open one nobody expects.
+    if (mode !== (quiz.mode || "broadcast") && quiz.status === "live") {
+      throw new ErrorHandler(
+        "Unpublish the quiz before changing how it is played",
+        409,
+        "QUIZ_LIVE"
+      );
+    }
+    quiz.mode = mode;
+  }
   if (body.description !== undefined) quiz.description = cleanString(body.description, 300);
   if (body.defaultTimerSeconds !== undefined) {
     quiz.defaultTimerSeconds = parseTimer(body.defaultTimerSeconds);
@@ -230,7 +273,7 @@ export const deleteCard = CatchAsyncError(async (req: Request, res: Response) =>
   const quiz = await loadOwnedQuiz(req);
   const card = await loadQuizCard(quiz, req.params.cardId);
   if (quiz.status === "live") {
-    const min = await getCustomQuizMinCards();
+    const min = await minCardsFor(quiz);
     const count = await CustomQuizCardModel.countDocuments({ quizId: String(quiz._id) });
     if (count - 1 < min) {
       throw new ErrorHandler(
@@ -267,18 +310,20 @@ export const publishQuiz = CatchAsyncError(async (req: Request, res: Response) =
     throw new ErrorHandler("An AI generated trivia cannot be shared", 409, "AI_TRIVIA_NOT_SHAREABLE");
   }
 
-  const min = await getCustomQuizMinCards();
+  const min = await minCardsFor(quiz);
   const count = await CustomQuizCardModel.countDocuments({ quizId: String(quiz._id) });
   if (count < min) {
     throw new ErrorHandler(
-      `A quiz needs at least ${min} cards to go live.`,
+      isTeamQuiz(quiz)
+        ? `A team quiz needs at least ${min} cards, one for each cell of the board.`
+        : `A quiz needs at least ${min} cards to go live.`,
       400,
       "MIN_CARDS_REQUIRED",
       { minCards: min, cardCount: count }
     );
   }
   quiz.status = "live";
-  if (!quiz.shareSlug) quiz.shareSlug = newShareSlug();
+  if (!quiz.shareSlug && !isTeamQuiz(quiz)) quiz.shareSlug = newShareSlug();
   await quiz.save();
   res.status(200).json({ success: true, quiz: ownerQuiz(quiz, count) });
 });
@@ -301,6 +346,13 @@ export const regenerateShareLink = CatchAsyncError(async (req: Request, res: Res
   assertNotLocked(quiz);
   if (quiz.status !== "live") {
     throw new ErrorHandler("Publish the quiz to get a share link", 409, "QUIZ_NOT_LIVE");
+  }
+  if (isTeamQuiz(quiz)) {
+    throw new ErrorHandler(
+      "A team quiz is shared through its team game's join link",
+      409,
+      "TEAM_QUIZ_NO_SHARE_LINK"
+    );
   }
   quiz.shareSlug = newShareSlug();
   await quiz.save();
@@ -339,6 +391,8 @@ export const generateCards = CatchAsyncError(async (req: Request, res: Response)
   const result = await generateDraftCards(req.user!, {
     file: req.file,
     text: body.text,
+    prompt: body.prompt,
+    topic: body.topic,
     count: body.count,
   });
   res.status(200).json({ success: true, ...result });
@@ -362,6 +416,8 @@ export const resolveShareLink = CatchAsyncError(
       shareSlug: slug,
       deletedAt: null,
       status: "live",
+      // A team quiz is only played through a team game.
+      mode: { $ne: "team" },
     }).lean();
     if (!quiz) return notFound();
 
@@ -396,7 +452,12 @@ export const getShareLinkPlayInfo = CatchAsyncError(
     }).lean();
     if (quiz) await ensureQuizLocks(quiz.ownerId);
     const live = quiz
-      ? await CustomQuizModel.findOne({ _id: quiz._id, status: "live", shareSlug: slug }).lean()
+      ? await CustomQuizModel.findOne({
+          _id: quiz._id,
+          status: "live",
+          shareSlug: slug,
+          mode: { $ne: "team" },
+        }).lean()
       : null;
     if (!live) return next(new ErrorHandler("This link is not available", 404, "QUIZ_NOT_FOUND"));
 

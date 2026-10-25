@@ -195,6 +195,53 @@ describe("Custom trivia", () => {
     });
   });
 
+  describe("broadcast and team quizzes", () => {
+    it("is a broadcast quiz unless the creator picks team", async () => {
+      const owner = await createUser({ proUntil: new Date(Date.now() + DAY_MS) });
+      expect((await create(owner)).body.quiz.mode).toBe("broadcast");
+      expect((await create(owner, "Teams", { mode: "team" })).body.quiz.mode).toBe("team");
+      const bad = await create(owner, "Odd", { mode: "relay" });
+      expect(bad.status).toBe(400);
+      expect(bad.body.code).toBe("INVALID_QUIZ_MODE");
+    });
+
+    it("publishes a team quiz with a card for each cell and no share link", async () => {
+      const owner = await createUser();
+      const id = (await create(owner, "Teams", { mode: "team" })).body.quiz.id;
+      await addQuizCards(id, 8);
+      const short = await publish(owner, id);
+      expect(short.body).toMatchObject({ code: "MIN_CARDS_REQUIRED", details: { minCards: 9, cardCount: 8 } });
+
+      await addQuizCards(id, 1);
+      const live = await publish(owner, id);
+      expect(live.status).toBe(200);
+      expect(live.body.quiz).toMatchObject({ status: "live", mode: "team", shareSlug: null, shareUrl: null });
+      expect((await api().get(`${base}/${id}`).set(owner.auth)).body.minCardsToPublish).toBe(9);
+      expect((await api().post(`${base}/${id}/share-link/regenerate`).set(owner.auth)).body.code).toBe(
+        "TEAM_QUIZ_NO_SHARE_LINK"
+      );
+    });
+
+    it("stops an old link working once the quiz is played in teams", async () => {
+      const owner = await createUser();
+      const player = await createUser();
+      const { id, slug } = await liveQuiz(owner);
+      const live = await api().patch(`${base}/${id}`).set(owner.auth).send({ mode: "team" });
+      expect(live.body.code).toBe("QUIZ_LIVE");
+
+      await api().post(`${base}/${id}/unpublish`).set(owner.auth);
+      await api().patch(`${base}/${id}`).set(owner.auth).send({ mode: "team" });
+      await addQuizCards(id, 3);
+      expect((await publish(owner, id)).status).toBe(200);
+
+      expect((await resolve(slug)).status).toBe(404);
+      expect((await api().get(`${base}/link/${slug}/play-info`).set(player.auth)).status).toBe(404);
+      expect((await startTrivia(player, { sourceType: "custom", slug })).status).toBe(404);
+      // The owner can still try their own quiz.
+      expect((await startTrivia(owner, { sourceType: "custom", sourceId: id, cardCount: 5 })).status).toBe(201);
+    });
+  });
+
   describe("ownership and stats", () => {
     it("lets only the owner read, edit, publish or delete a quiz", async () => {
       const owner = await createUser();

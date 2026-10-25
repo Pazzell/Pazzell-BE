@@ -7,16 +7,22 @@ import { api, createUser, resetState, addQuizCards, TestUser } from "./helpers";
 import { app } from "../app";
 import TeamGameModel from "../models/teamGame.model";
 import CustomQuizCardModel from "../models/customQuizCard.model";
+import CustomQuizModel from "../models/customQuiz.model";
 import { boardFor, findWinningLine, winningLines } from "../services/teamGame/board";
 import { attachRealtime, closeRealtime } from "../services/teamGame/realtime";
 import { watchTeamGame } from "../services/teamGame/teamGame.service";
 
 const base = "/api/v1/team-games";
 
-async function hostQuiz(host: TestUser, cards = 9) {
-  const created = await api().post("/api/v1/custom-quizzes").set(host.auth).send({ title: "Team quiz" });
+/** A live team quiz of the host's. `cards` below 9 is set live directly, as publish refuses it. */
+async function hostQuiz(host: TestUser, cards = 9, fields: Record<string, any> = {}) {
+  const created = await api()
+    .post("/api/v1/custom-quizzes")
+    .set(host.auth)
+    .send({ title: "Team quiz", mode: "team", ...fields });
   const quizId = created.body.quiz.id as string;
   await addQuizCards(quizId, cards);
+  await CustomQuizModel.updateOne({ _id: quizId }, { status: "live" });
   return quizId;
 }
 
@@ -114,6 +120,19 @@ describe("Team games", () => {
       expect(res.body.game.board.cells).toHaveLength(9);
     });
 
+    it("only hosts a published team quiz", async () => {
+      // Pro, so the host can own several quizzes
+      const host = await createUser({ proUntil: new Date(Date.now() + 86400000) });
+      const broadcast = await hostQuiz(host, 9, { mode: "broadcast" });
+      const refused = await api().post(base).set(host.auth).send({ quizId: broadcast });
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe("NOT_A_TEAM_QUIZ");
+
+      const draft = await hostQuiz(host);
+      await CustomQuizModel.updateOne({ _id: draft }, { status: "draft" });
+      expect((await api().post(base).set(host.auth).send({ quizId: draft })).body.code).toBe("QUIZ_NOT_LIVE");
+    });
+
     it("refuses someone else's quiz", async () => {
       const owner = await createUser();
       const other = await createUser();
@@ -175,6 +194,17 @@ describe("Team games", () => {
   });
 
   describe("lobby", () => {
+    it("keeps the host off the teams", async () => {
+      const host = await createUser();
+      const code = await createGame(host);
+      for (const teamId of ["t1", null]) {
+        const res = await join(host, code, teamId);
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe("HOST_CANNOT_PLAY");
+      }
+      expect((await api().get(`${base}/${code}`).set(host.auth)).body.game.unassigned).toEqual([]);
+    });
+
     it("makes the first player on a team its leader, and hands over when they leave", async () => {
       const host = await createUser();
       const a = await createUser();

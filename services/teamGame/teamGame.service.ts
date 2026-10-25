@@ -423,6 +423,16 @@ async function playableQuiz(quizId: string, ownerId: string) {
   if (quiz.status === "locked") {
     throw new ErrorHandler("This quiz is locked on your current plan", 403, "QUIZ_LOCKED");
   }
+  if (quiz.mode !== "team") {
+    throw new ErrorHandler(
+      "Only a team quiz can be hosted as a team game",
+      409,
+      "NOT_A_TEAM_QUIZ"
+    );
+  }
+  if (quiz.status !== "live") {
+    throw new ErrorHandler("Publish the quiz before hosting a game", 409, "QUIZ_NOT_LIVE");
+  }
   return quiz;
 }
 
@@ -491,6 +501,10 @@ export async function joinTeam(code: string, user: Actor, teamId: any) {
   const userId = String(user._id);
   const game = await mutate(code, (game) => {
     assertOpen(game);
+    // The host runs the game and knows every answer, so they never play in it.
+    if (game.hostId === userId) {
+      throw new ErrorHandler("The host runs the game and can't join a team", 403, "HOST_CANNOT_PLAY");
+    }
     const target = teamId === null || teamId === undefined ? null : findTeam(game, teamId).id;
     let player = findPlayer(game, userId);
     if (!player) {

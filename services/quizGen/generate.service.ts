@@ -1,6 +1,6 @@
 import ErrorHandler from "../../utils/ErrorHandler";
 import { redis } from "../../utils/redis";
-import { toInt } from "../../utils/validators";
+import { cleanString, requireString, toInt } from "../../utils/validators";
 import { ICardContent } from "../../models/cardFields";
 import { buildCardContent } from "../trivia/cardInput";
 import { getPlan } from "../plan/plan.service";
@@ -21,6 +21,11 @@ import {
 
 export const GENERATE_DEFAULT_COUNT = 10;
 export const GENERATE_MAX_COUNT = 30;
+// Cards written from the owner's own description rather than a document. A team quiz on
+// the biggest board uses 25, so a set this size still leaves spares for missed cells.
+export const PROMPT_MAX_COUNT = 50;
+export const PROMPT_TEXT_MAX = 500;
+const PROMPT_TOPIC_MAX = 60;
 // Text sent to the model. Longer documents are sampled evenly from start to end.
 export const PROMPT_MAX_CHARS = 60_000;
 const PROMPT_WINDOWS = 6;
@@ -35,6 +40,7 @@ type PlanUser = { _id: any; proUntil?: Date | string | null };
 
 export interface DraftCard extends ICardContent {
   // The sentence in the document that supports the answer; shown on the review screen only.
+  // Empty for cards written from a description, which have no document to quote.
   quote: string;
 }
 
@@ -145,26 +151,89 @@ export async function getGenerateOptions(user: PlanUser, { unlimited = false } =
     maxFileBytes: DOCUMENT_MAX_BYTES,
     minCharacters: DOCUMENT_MIN_CHARS,
     count: { default: GENERATE_DEFAULT_COUNT, min: 1, max: GENERATE_MAX_COUNT },
+    // Writing from a description ("50 questions about the solar system") instead of a document.
+    prompt: {
+      maxLength: PROMPT_TEXT_MAX,
+      count: { default: GENERATE_DEFAULT_COUNT, min: 1, max: PROMPT_MAX_COUNT },
+    },
     ...(unlimited ? {} : await allowance(user)),
   };
 }
 
-function parseCount(value: any): number {
+function parseCount(value: any, max = GENERATE_MAX_COUNT): number {
   const count = toInt(value) ?? GENERATE_DEFAULT_COUNT;
-  if (!Number.isInteger(count) || count < 1 || count > GENERATE_MAX_COUNT) {
+  if (!Number.isInteger(count) || count < 1 || count > max) {
     throw new ErrorHandler(
-      `count must be a whole number from 1 to ${GENERATE_MAX_COUNT}`,
+      `count must be a whole number from 1 to ${max}`,
       400,
       "INVALID_CARD_COUNT",
-      { min: 1, max: GENERATE_MAX_COUNT }
+      { min: 1, max }
     );
   }
   return count;
 }
 
+/**
+ * Cards Claude writes from its own knowledge for the owner's description. With no document
+ * to quote, a second request answers each one blind and only the cards it agrees on stay.
+ */
+async function draftsFromPrompt(
+  prompt: string,
+  topic: string,
+  count: number,
+  ownerId: string
+): Promise<{ title?: string; cards: DraftCard[] }> {
+  // A few spare cards cover the ones the checks below throw away.
+  const spare = count + Math.ceil(count / 4);
+  const generated = await claude.requestTopicCards(topic, prompt, spare);
+  if (generated.declined && generated.cards.length === 0) {
+    throw new ErrorHandler(generated.declined.slice(0, 300), 422, "PROMPT_REJECTED");
+  }
+
+  const seen = new Set<string>();
+  const cards: DraftCard[] = [];
+  for (const candidate of generated.cards) {
+    const key = fingerprint(candidate.statement);
+    if (!key || seen.has(key)) continue;
+    // The correct answer goes first or second at random; play shuffles the options again.
+    const correctOptionIndex = Math.random() < 0.5 ? 0 : 1;
+    const options =
+      correctOptionIndex === 0
+        ? [candidate.correctAnswer, candidate.wrongAnswer]
+        : [candidate.wrongAnswer, candidate.correctAnswer];
+    try {
+      const content = await buildCardContent(
+        { type: "definition", text: candidate.statement, options, correctOptionIndex },
+        undefined,
+        ownerId,
+        "cards"
+      );
+      cards.push({ ...content, quote: "" });
+    } catch {
+      continue;
+    }
+    seen.add(key);
+  }
+
+  const answers = cards.length
+    ? await claude.answerCards(
+        topic,
+        cards.map((card) => ({ statement: card.text || "", options: card.options }))
+      )
+    : [];
+  return {
+    title: generated.title,
+    cards: cards.filter((card, i) => answers[i] === card.correctOptionIndex).slice(0, count),
+  };
+}
+
 export interface GenerateInput {
   file?: { buffer: Buffer; originalname?: string };
   text?: any;
+  // A description of the questions to write, used instead of a document.
+  prompt?: any;
+  // What the questions are about when writing from a description, e.g. the quiz title.
+  topic?: any;
   count?: any;
   // Admin runs: no daily allowance is checked or used.
   unlimited?: boolean;
@@ -181,11 +250,19 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
       "AI_NOT_CONFIGURED"
     );
   }
-  const count = parseCount(input.count);
+  const fromPrompt =
+    !input.file?.buffer?.length && typeof input.prompt === "string" && input.prompt.trim() !== "";
+  const count = parseCount(input.count, fromPrompt ? PROMPT_MAX_COUNT : GENERATE_MAX_COUNT);
 
   let kind: DocumentKind = "text";
-  let text: string;
-  if (input.file?.buffer?.length) {
+  let text = "";
+  let prompt = "";
+  let topic = "";
+  if (fromPrompt) {
+    prompt = requireString(input.prompt, "prompt", PROMPT_TEXT_MAX);
+    // The quiz title when there is one; otherwise the description says it all.
+    topic = cleanString(input.topic, PROMPT_TOPIC_MAX) || prompt.slice(0, PROMPT_TOPIC_MAX);
+  } else if (input.file?.buffer?.length) {
     ({ kind, text } = await extractDocumentText(input.file.buffer));
   } else if (typeof input.text === "string" && input.text.trim()) {
     if (Buffer.byteLength(input.text) > DOCUMENT_MAX_BYTES) {
@@ -194,12 +271,12 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
     text = cleanText(input.text);
   } else {
     throw new ErrorHandler(
-      'Upload a document in the "document" field, or send its text as "text"',
+      'Upload a document in the "document" field, send its text as "text", or describe the questions in "prompt"',
       400,
       "DOCUMENT_REQUIRED"
     );
   }
-  if (text.length < DOCUMENT_MIN_CHARS) {
+  if (!fromPrompt && text.length < DOCUMENT_MIN_CHARS) {
     throw new ErrorHandler(
       `The document has too little text to write questions from (at least ${DOCUMENT_MIN_CHARS} characters are needed)`,
       400,
@@ -217,7 +294,7 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
     if (used > dailyLimit) {
       await redis.decr(key);
       throw new ErrorHandler(
-        `You have used today's ${dailyLimit} document${dailyLimit === 1 ? "" : "s"}. Try again tomorrow.`,
+        `You have used today's ${dailyLimit} AI generation${dailyLimit === 1 ? "" : "s"}. Try again tomorrow.`,
         429,
         "GENERATION_LIMIT_REACHED",
         { dailyLimit, resetsAt: nextResetAt(), isPro: getPlan(user).isPro }
@@ -228,18 +305,26 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
 
   let drafts: DraftCard[];
   let title: string | undefined;
-  const prompt = excerptForPrompt(text);
+  const excerpt = fromPrompt ? "" : excerptForPrompt(text);
   try {
-    // A few spare cards cover the ones the checks below throw away.
-    const spare = count + Math.ceil(count / 4);
-    const generated = avoid.length
-      ? await claude.requestCards(prompt, spare, avoid)
-      : await claude.requestCards(prompt, spare);
-    drafts = await verifyCandidates(generated.cards, text, userId, count, avoid);
-    title = generated.title?.slice(0, TITLE_MAX);
+    if (fromPrompt) {
+      const written = await draftsFromPrompt(prompt, topic, count, userId);
+      drafts = written.cards;
+      title = written.title?.slice(0, TITLE_MAX);
+    } else {
+      // A few spare cards cover the ones the checks below throw away.
+      const spare = count + Math.ceil(count / 4);
+      const generated = avoid.length
+        ? await claude.requestCards(excerpt, spare, avoid)
+        : await claude.requestCards(excerpt, spare);
+      drafts = await verifyCandidates(generated.cards, text, userId, count, avoid);
+      title = generated.title?.slice(0, TITLE_MAX);
+    }
     if (drafts.length === 0) {
       throw new ErrorHandler(
-        "No questions could be written from this document. Try one with more explanatory text.",
+        fromPrompt
+          ? "No reliable questions could be written for this. Try describing it differently."
+          : "No questions could be written from this document. Try one with more explanatory text.",
         422,
         "NO_CARDS_GENERATED"
       );
@@ -254,13 +339,17 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
     suggestedTitle: title || null,
     cards: drafts,
     requested: count,
-    document: {
-      name: input.file?.originalname || null,
-      kind,
-      characters: text.length,
-      // True when the document was longer than what is read in one go and was sampled.
-      sampled: prompt.length < text.length,
-    },
+    // What the cards were written from: a document, or the owner's description.
+    prompt: fromPrompt ? prompt : null,
+    document: fromPrompt
+      ? null
+      : {
+          name: input.file?.originalname || null,
+          kind,
+          characters: text.length,
+          // True when the document was longer than what is read in one go and was sampled.
+          sampled: excerpt.length < text.length,
+        },
     ...(input.unlimited ? {} : { usage: await allowance(user) }),
   };
 }
