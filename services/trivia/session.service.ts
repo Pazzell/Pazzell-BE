@@ -146,7 +146,8 @@ export async function startSession(
     await assertNoCampaignOwed(player);
   }
 
-  const timerSeconds = input.timerSeconds ?? source.defaults.timerSeconds;
+  const timerSeconds =
+    source.fixedTimerSeconds ?? input.timerSeconds ?? source.defaults.timerSeconds;
   if (!isValidTimerSeconds(timerSeconds)) {
     const { minSeconds, maxSeconds } = getTimerRange();
     throw new ErrorHandler(

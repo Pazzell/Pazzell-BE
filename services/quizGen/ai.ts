@@ -115,7 +115,7 @@ export async function requestCards(
       schema: SCHEMA,
       tier: "fast",
     },
-    "Generating trivia from a document is not available yet",
+    "Generating trivia from a document isn't available right now. Please try again later.",
     // Nothing usable comes back; the caller reports that no cards could be written.
     () => ({})
   );
@@ -219,7 +219,7 @@ const CHECK_SCHEMA = {
   additionalProperties: false,
 };
 
-const TOPIC_NOT_CONFIGURED = "Writing questions with AI is not available yet";
+const TOPIC_NOT_CONFIGURED = "Writing questions with AI isn't available right now. Please try again later.";
 const rejected = () => {
   throw new ErrorHandler(
     "Questions could not be written for this topic. Try describing it differently.",

@@ -12,9 +12,17 @@ const model = (tier: AiTier): string =>
     ? process.env.ANTHROPIC_TOPIC_MODEL || DEFAULT_STRONG_MODEL
     : process.env.ANTHROPIC_MODEL || DEFAULT_FAST_MODEL;
 
+// An account without credit answers 400 with this message. Retrying never helps, so it
+// is treated like a missing key: the feature is unavailable until someone tops it up.
+const OUT_OF_CREDIT = /credit balance is too low/i;
+
 function failed(e: any): AiError {
   if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
     console.error("Claude API rejected the configured ANTHROPIC_API_KEY:", e.message);
+    return new AiError("not_configured");
+  }
+  if (e instanceof Anthropic.BadRequestError && OUT_OF_CREDIT.test(e.message)) {
+    console.error("Claude API account is out of credit; top it up in Plans & Billing:", e.message);
     return new AiError("not_configured");
   }
   console.error("Claude API request failed:", e?.status || "", e?.message);

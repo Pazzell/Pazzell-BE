@@ -10,14 +10,21 @@ import {
   cleanString,
   parseHttpUrl,
   requireString,
+  toInt,
 } from "../utils/validators";
 import { resolveImage } from "../services/upload/image.service";
 import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
 import { cardCountBounds } from "../services/trivia/session.service";
 import { startCheckout } from "../services/payment/payment.service";
-import { getCampaignMinCards, getCampaignPricing } from "../services/config/config.service";
+import {
+  getCampaignMinCards,
+  getCampaignPricing,
+  getTimerRange,
+  isValidTimerSeconds,
+} from "../services/config/config.service";
 import {
   getCampaignGateState,
+  campaignTimerSeconds,
   getCampaignStats,
   isServable,
   pickCampaignForPlayer,
@@ -39,6 +46,7 @@ const brandCampaign = (campaign: any, cardCount: number) => ({
   description: campaign.description || null,
   coverImageUrl: campaign.coverImageUrl || null,
   tags: campaign.tags || [],
+  timerSeconds: campaignTimerSeconds(campaign),
   // A live campaign past its end date reads as ended even before the scheduler runs.
   status:
     campaign.status === "live" && !isServable(campaign) ? "ended" : campaign.status,
@@ -93,6 +101,21 @@ function parseTags(raw: any): string[] | undefined {
   return Array.from(new Set<string>(tags));
 }
 
+/** Seconds per question chosen by the brand: 0 (no timer) up to the global maximum. */
+function parseTimer(value: any): number {
+  const timer = toInt(value);
+  if (!isValidTimerSeconds(timer)) {
+    const { minSeconds, maxSeconds } = getTimerRange();
+    throw new ErrorHandler(
+      `timerSeconds must be a whole number from ${minSeconds} to ${maxSeconds}`,
+      400,
+      "INVALID_TIMER",
+      { minSeconds, maxSeconds }
+    );
+  }
+  return timer;
+}
+
 const fileOf = (req: Request, field: string) =>
   ((req.files as Record<string, Express.Multer.File[]> | undefined) || {})[field]?.[0];
 
@@ -127,6 +150,7 @@ export const createCampaign = CatchAsyncError(async (req: Request, res: Response
     description: cleanString(body.description, 300),
     coverImageUrl: await resolveImage(fileOf(req, "cover"), body.coverImageUrl, brandId, "covers"),
     tags: parseTags(body.tags) || [],
+    ...(body.timerSeconds !== undefined ? { timerSeconds: parseTimer(body.timerSeconds) } : {}),
   });
   res.status(201).json({ success: true, campaign: brandCampaign(campaign, 0) });
 });
@@ -177,6 +201,7 @@ export const updateCampaign = CatchAsyncError(async (req: Request, res: Response
   if (body.description !== undefined) campaign.description = cleanString(body.description, 300);
   const tags = parseTags(body.tags);
   if (tags) campaign.tags = tags;
+  if (body.timerSeconds !== undefined) campaign.timerSeconds = parseTimer(body.timerSeconds);
   const logo = await resolveImage(fileOf(req, "logo"), body.logoUrl, brandId, "logos");
   if (logo) campaign.logoUrl = logo;
   const cover = await resolveImage(fileOf(req, "cover"), body.coverImageUrl, brandId, "covers");

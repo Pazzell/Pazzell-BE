@@ -6,7 +6,11 @@ import CampaignCardModel from "../models/campaignCard.model";
 import PaymentModel from "../models/payment.model";
 import { assertObjectId, requireString } from "../utils/validators";
 import { editorCard } from "../services/trivia/cardInput";
-import { getCampaignStats, isServable } from "../services/campaign/campaign.service";
+import {
+  campaignTimerSeconds,
+  getCampaignStats,
+  isServable,
+} from "../services/campaign/campaign.service";
 
 // Every route that uses this controller is mounted behind
 // isAuthenticated + authorizeRoles("admin") in routes/admin.route.ts.
@@ -24,6 +28,7 @@ const adminCampaign = (campaign: any) => ({
   description: campaign.description || null,
   coverImageUrl: campaign.coverImageUrl || null,
   tags: campaign.tags || [],
+  timerSeconds: campaignTimerSeconds(campaign),
   status: campaign.status === "live" && !isServable(campaign) ? "ended" : campaign.status,
   paymentId: campaign.paymentId || null,
   startsAt: campaign.startsAt || null,

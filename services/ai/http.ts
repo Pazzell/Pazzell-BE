@@ -10,7 +10,8 @@ const retryable = (status?: number) =>
 
 /**
  * POSTs `body` and returns the response data. Retries rate limits, server errors and
- * network failures. A rejected key becomes not_configured; anything else unavailable.
+ * network failures. A rejected key or an account that cannot pay becomes not_configured,
+ * since retrying never helps; anything else unavailable.
  */
 export async function postJson(
   provider: string,
@@ -18,7 +19,8 @@ export async function postJson(
   body: unknown,
   config: { headers: Record<string, string>; timeout: number },
   isKeyRejected: (status: number, data: any) => boolean = (status) =>
-    status === 401 || status === 403
+    status === 401 || status === 403,
+  isOutOfCredit: (status: number, data: any) => boolean = () => false
 ): Promise<any> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -28,6 +30,10 @@ export async function postJson(
       const data = e?.response?.data;
       if (status && isKeyRejected(status, data)) {
         console.error(`${provider} API rejected the configured API key:`, JSON.stringify(data));
+        throw new AiError("not_configured");
+      }
+      if (status && isOutOfCredit(status, data)) {
+        console.error(`${provider} API account is out of credit or quota:`, JSON.stringify(data));
         throw new AiError("not_configured");
       }
       // A timed out request already used the whole wait; the player retries instead.

@@ -825,7 +825,7 @@ Sponsored trivia created by `brand` accounts and delivered to freemium players.
 | Method | Path | Body | Purpose |
 | --- | --- | --- | --- |
 | GET | `/brand/campaigns/pricing` | | `{ pricing: { amount, currency, durationDays }, minCardsToPublish }` |
-| POST | `/brand/campaigns` | `title`, `brandName?`, `websiteUrl?`, `ctaText?`, `description?`, `tags?`, files `logo?`, `cover?` (or `logoUrl?`, `coverImageUrl?`) | Create a draft. Brand name, logo and website default to the brand profile |
+| POST | `/brand/campaigns` | `title`, `brandName?`, `websiteUrl?`, `ctaText?`, `description?`, `tags?`, `timerSeconds?` (0–15, default 15), files `logo?`, `cover?` (or `logoUrl?`, `coverImageUrl?`) | Create a draft. Brand name, logo and website default to the brand profile |
 | GET | `/brand/campaigns` | | The brand's campaigns |
 | GET | `/brand/campaigns/:id` | | Campaign + cards with answers + pricing |
 | GET | `/brand/campaigns/:id/preview` | | Same as above |
@@ -841,13 +841,16 @@ Sponsored trivia created by `brand` accounts and delivered to freemium players.
 
 `websiteUrl` must be an absolute `http://` or `https://` URL; anything else is `400`.
 `ctaText` is at most 40 characters (for example "Visit our site"). `tags` is up to 8 labels.
+`timerSeconds` is the time per question every player of the campaign gets, a whole number from 0
+to 15 (`400 INVALID_TIMER` otherwise); 0 means no countdown, and players press Next after each
+answer (section 2). A new campaign starts at 15.
 
 Campaign object:
 
 ```json
 { "id": "6705…", "brandName": "Acme", "logoUrl": "https://…/logo.webp", "websiteUrl": "https://acme.example/",
   "ctaText": "Visit our site", "title": "Spring launch", "description": null, "coverImageUrl": null,
-  "tags": ["food"], "status": "live", "startsAt": "2026-10-06T09:00:00.000Z", "endsAt": "2026-11-05T09:00:00.000Z",
+  "tags": ["food"], "timerSeconds": 15, "status": "live", "startsAt": "2026-10-06T09:00:00.000Z", "endsAt": "2026-11-05T09:00:00.000Z",
   "moderationReason": null, "cardCount": 6, "createdAt": "…", "updatedAt": "…" }
 ```
 
@@ -908,8 +911,11 @@ No per-player data is exposed. **Brand test play:** start a session with
 
 ### 8.4 Campaign sessions and the brand link
 
-Campaign plays use the session engine in section 6 unchanged (timer 1 to 15, the practice
-toggle, answers hidden unless practice is on). `session.brand` (on start and session state)
+Campaign plays use the session engine in section 6 unchanged, except for the timer: every
+campaign session runs at the campaign's own `timerSeconds`, set by the brand, and a `timerSeconds`
+sent when starting is ignored. Show it on the setup screen instead of the timer picker
+(`timerSeconds` is on `GET /campaigns/:id` and in `details.campaign` of `CAMPAIGN_REQUIRED`).
+The practice toggle and hidden answers work as usual. `session.brand` (on start and session state)
 and `result.brand` carry:
 
 ```json
@@ -1192,7 +1198,7 @@ The wallet no longer exists: there is no balance, ledger, bank account or withdr
 | `QUIZ_NOT_LIVE` | 409 | regenerate link | Publish first |
 | `INVALID_CARD` | 400 | cards | See 7.3; `details.index` in bulk |
 | `CARD_NOT_FOUND` | 404 | cards | |
-| `AI_NOT_CONFIGURED` | 503 | generate from a document | The server has no AI provider key, or the provider rejected it. Hide the feature |
+| `AI_NOT_CONFIGURED` | 503 | generate from a document | The server has no AI provider key, the provider rejected it, or the AI account is out of credit. Retrying won't help: show `message` or hide the feature |
 | `AI_UNAVAILABLE` | 502 | generate from a document | The AI request failed. Let the player retry |
 | `DOCUMENT_REQUIRED` / `DOCUMENT_TOO_LARGE` / `INVALID_DOCUMENT_TYPE` | 400 | generate from a document | No file or text; over 10MB; not a PDF, .docx or text file |
 | `DOCUMENT_UNREADABLE` | 400 | generate from a document | Scanned, password-protected or damaged PDF. Show the message |
