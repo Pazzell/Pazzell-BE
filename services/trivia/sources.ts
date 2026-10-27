@@ -9,7 +9,7 @@ import CustomQuizCardModel from "../../models/customQuizCard.model";
 import CampaignModel from "../../models/campaign.model";
 import CampaignCardModel from "../../models/campaignCard.model";
 import { ensureQuizLocks } from "../customQuiz/quizLock.service";
-import { isServable, publicCampaign } from "../campaign/campaign.service";
+import { campaignTimerSeconds, isServable, publicCampaign } from "../campaign/campaign.service";
 
 export interface SourceCard extends ICardContent {
   id: string;
@@ -22,6 +22,9 @@ export interface ResolvedSource {
   // Owner / brand / admin test play: never gated and never counted.
   isPreview: boolean;
   defaults: { timerSeconds?: number; cardCount?: number };
+  // Seconds per question the source insists on (a campaign's, set by its brand); the
+  // player's own choice is ignored when it is set.
+  fixedTimerSeconds?: number;
   // The source's own share of picture cards; without it the global setting applies.
   imagePercent?: number;
   brand: ReturnType<typeof publicCampaign> | null;
@@ -123,6 +126,7 @@ export async function resolveSource(
       title: campaign.title,
       isPreview,
       defaults: {},
+      fixedTimerSeconds: campaignTimerSeconds(campaign),
       brand: publicCampaign(campaign),
       cards: toCards(cards),
     };

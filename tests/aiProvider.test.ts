@@ -1,4 +1,5 @@
 import axios from "axios";
+import Anthropic from "@anthropic-ai/sdk";
 import { activeProvider, isAiConfigured, requestJson, JsonRequest } from "../services/ai";
 import * as ai from "../services/quizGen/ai";
 
@@ -97,6 +98,14 @@ describe("AI provider", () => {
       expect(post).toHaveBeenCalledTimes(1);
     });
 
+    it("treats an account out of quota as unconfigured, without retrying", async () => {
+      post.mockRejectedValue({
+        response: { status: 429, data: { error: { code: "insufficient_quota", message: "No quota" } } },
+      });
+      await expect(requestJson(REQUEST)).rejects.toMatchObject({ kind: "not_configured" });
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
     it("retries a server error, then gives up", async () => {
       jest.spyOn(global, "setTimeout").mockImplementation(((fn: () => void) => {
         fn();
@@ -105,6 +114,34 @@ describe("AI provider", () => {
       post.mockRejectedValue({ response: { status: 500, data: {} } });
       await expect(requestJson(REQUEST)).rejects.toMatchObject({ kind: "unavailable" });
       expect(post).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe("Claude", () => {
+    beforeEach(() => {
+      process.env.AI_PROVIDER = "claude";
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    });
+
+    it("treats an account out of credit as unconfigured, so players are not told to retry", async () => {
+      const message = "Your credit balance is too low to access the Anthropic API.";
+      jest
+        .spyOn(Anthropic.Messages.prototype, "create")
+        .mockRejectedValue(
+          new Anthropic.BadRequestError(400, { type: "error", error: { type: "invalid_request_error", message } }, message, new Headers())
+        );
+      await expect(requestJson({ ...REQUEST, tier: "fast" })).rejects.toMatchObject({ kind: "not_configured" });
+      await expect(ai.requestCards("Some document", 1)).rejects.toMatchObject({
+        statusCode: 503,
+        code: "AI_NOT_CONFIGURED",
+      });
+    });
+
+    it("still reports other bad requests as unavailable", async () => {
+      jest
+        .spyOn(Anthropic.Messages.prototype, "create")
+        .mockRejectedValue(new Anthropic.BadRequestError(400, undefined, "max_tokens is too large", new Headers()));
+      await expect(requestJson({ ...REQUEST, tier: "fast" })).rejects.toMatchObject({ kind: "unavailable" });
     });
   });
 

@@ -9,6 +9,9 @@ export type CampaignStatus =
   | "paused"
   | "taken_down";
 
+// Seconds per question unless the brand picks otherwise; 0 means no countdown (Next button).
+export const CAMPAIGN_DEFAULT_TIMER_SECONDS = 15;
+
 export interface ICampaign extends Document {
   brandId: string; // the brand's user id
   brandName: string;
@@ -19,6 +22,8 @@ export interface ICampaign extends Document {
   description?: string;
   coverImageUrl?: string;
   tags: string[];
+  // Seconds per question for every player of this campaign, set by the brand (0 = no timer).
+  timerSeconds: number;
   status: CampaignStatus;
   paymentId?: string;
   startsAt?: Date; // the confirmed payment time
@@ -43,6 +48,7 @@ const campaignSchema: Schema<ICampaign> = new mongoose.Schema(
     description: { type: String, maxlength: 300 },
     coverImageUrl: { type: String },
     tags: { type: [String], default: [] },
+    timerSeconds: { type: Number, default: CAMPAIGN_DEFAULT_TIMER_SECONDS },
     status: {
       type: String,
       enum: ["draft", "awaiting_payment", "live", "ended", "paused", "taken_down"],

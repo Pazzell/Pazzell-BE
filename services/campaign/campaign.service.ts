@@ -1,5 +1,5 @@
 import ErrorHandler from "../../utils/ErrorHandler";
-import CampaignModel, { ICampaign } from "../../models/campaign.model";
+import CampaignModel, { CAMPAIGN_DEFAULT_TIMER_SECONDS, ICampaign } from "../../models/campaign.model";
 import CampaignPlayModel from "../../models/campaignPlay.model";
 import userModel from "../../models/user.model";
 import { IPayment } from "../../models/payment.model";
@@ -57,6 +57,10 @@ export async function activateCampaignFromPayment(payment: IPayment): Promise<vo
   );
 }
 
+/** The campaign's seconds per question; campaigns made before the setting get the default. */
+export const campaignTimerSeconds = (campaign: { timerSeconds?: number }): number =>
+  campaign.timerSeconds ?? CAMPAIGN_DEFAULT_TIMER_SECONDS;
+
 /** What a player may know about a campaign: brand identity, never the cards. */
 export const publicCampaign = (campaign: any) => ({
   id: String(campaign._id),
@@ -67,6 +71,7 @@ export const publicCampaign = (campaign: any) => ({
   logoUrl: campaign.logoUrl,
   websiteUrl: campaign.websiteUrl,
   ctaText: campaign.ctaText || null,
+  timerSeconds: campaignTimerSeconds(campaign),
   endsAt: campaign.endsAt || null,
 });
 

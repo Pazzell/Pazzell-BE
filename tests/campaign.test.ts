@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import mongoose from "mongoose";
 import { connectTestDB, closeTestDB } from "./setup";
 import { closeRedisConnection } from "../utils/redis";
 import {
@@ -111,6 +112,29 @@ describe("Brand campaigns", () => {
       const test = await startCampaign(brand, id);
       expect(test.status).toBe(201);
       expect(test.body.session.isPreview).toBe(true);
+    });
+
+    it("lets the brand set the timer from 0 to 15 seconds, 15 by default", async () => {
+      const id = await draftWithCards(0);
+      const created = await api().get(`${brandBase}/${id}`).set(brand.auth);
+      expect(created.body.campaign.timerSeconds).toBe(15);
+
+      for (const timerSeconds of [0, 7, 15]) {
+        const res = await api().patch(`${brandBase}/${id}`).set(brand.auth).send({ timerSeconds });
+        expect(res.status).toBe(200);
+        expect(res.body.campaign.timerSeconds).toBe(timerSeconds);
+      }
+      for (const timerSeconds of [-1, 16, 2.5, "fast"]) {
+        const res = await api().patch(`${brandBase}/${id}`).set(brand.auth).send({ timerSeconds });
+        expect(res.body.code).toBe("INVALID_TIMER");
+      }
+
+      const withTimer = await api()
+        .post(brandBase)
+        .set(brand.auth)
+        .send({ title: "T", brandName: "Acme", websiteUrl: "https://acme.example/", logoUrl: created.body.campaign.logoUrl, timerSeconds: 0 });
+      expect(withTimer.status).toBe(201);
+      expect(withTimer.body.campaign.timerSeconds).toBe(0);
     });
 
     it("only accepts http(s) brand URLs", async () => {
@@ -380,11 +404,27 @@ describe("Brand campaigns", () => {
       expect(keys.has("correctOptionIndex")).toBe(false);
       expect(keys.has("isCorrect")).toBe(false);
 
-      const bad = await startTrivia(player, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 16, cardCount: 5 });
-      expect(bad.status).toBe(200); // already in progress: resumed, not restarted
+      const again = await startTrivia(player, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 16, cardCount: 5 });
+      expect(again.status).toBe(200); // already in progress: resumed, not restarted
+    });
+
+    it("plays at the brand's timer, whatever the player sends", async () => {
+      const campaignId = await createCampaign(brand.id, { ...liveWindow(), timerSeconds: 0 });
+      const player = await createUser();
+      const session = await startTrivia(player, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 16, cardCount: 5 });
+      expect(session.status).toBe(201);
+      expect(session.body.session.timerSeconds).toBe(0);
+      const q = await api().get(`/api/v1/trivia/sessions/${session.body.session.id}/question`).set(player.auth);
+      expect(q.body.question).toMatchObject({ deadlineAt: null, remainingMs: null });
+
+      // A campaign made before the setting existed plays at the default of 15.
+      const older = await createCampaign(brand.id, liveWindow());
+      await CampaignModel.collection.updateOne({ _id: new mongoose.Types.ObjectId(older) }, { $unset: { timerSeconds: "" } });
       const other = await createUser();
-      const invalid = await startTrivia(other, { sourceType: "campaign", sourceId: campaignId, timerSeconds: 16, cardCount: 5 });
-      expect(invalid.body.code).toBe("INVALID_TIMER");
+      const oldSession = await startTrivia(other, { sourceType: "campaign", sourceId: older, cardCount: 5 });
+      expect(oldSession.body.session.timerSeconds).toBe(15);
+      const gate = await api().get(`/api/v1/campaigns/${older}`).set(other.auth);
+      expect(gate.body.campaign.timerSeconds).toBe(15);
     });
 
     it("counts brand URL clicks and reports them on the dashboard", async () => {

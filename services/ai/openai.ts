@@ -45,7 +45,10 @@ export const openaiProvider: AiProvider = {
       {
         headers: { Authorization: `Bearer ${apiKey}` },
         timeout: timeoutFor(request.tier),
-      }
+      },
+      undefined,
+      // No credit left on the account: 429 with code insufficient_quota (not a rate limit).
+      (status, body) => status === 429 && body?.error?.code === "insufficient_quota"
     );
 
     const choice = data?.choices?.[0];
