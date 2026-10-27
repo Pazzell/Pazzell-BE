@@ -12,10 +12,8 @@ import {
 import userModel from "../models/user.model";
 import PaymentModel from "../models/payment.model";
 import ProSubscriptionModel from "../models/proSubscription.model";
-import WalletTransactionModel from "../models/walletTransaction.model";
 import { paystackService } from "../services/payment";
 import { getPlan } from "../services/plan/plan.service";
-import { creditWallet, getBalance } from "../services/wallet/wallet.service";
 
 const checkout = (user: TestUser, body: any = {}) =>
   api().post("/api/v1/plan/pro/checkout").set(user.auth).send(body);
@@ -296,32 +294,6 @@ describe("Pro plan and payments", () => {
       const res = await api().get(`/api/v1/payments/verify/${reference}`).set(other.auth);
       expect(res.status).toBe(404);
       expect(verify).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("the wallet is never used to pay", () => {
-    it("leaves the wallet balance and ledger untouched by a Pro purchase", async () => {
-      const user = await createUser();
-      await creditWallet(user.id, 5000, "reward", { idempotencyKey: "reward-1" });
-
-      const { reference } = (await checkout(user)).body.checkout;
-      await signedWebhook(chargeSuccess(reference, 1500, new Date()));
-
-      expect((await api().get("/api/v1/plan/me").set(user.auth)).body.plan.isPro).toBe(true);
-      expect(await getBalance(user.id)).toBe(5000);
-      const ledger = await WalletTransactionModel.find({ userId: user.id }).lean();
-      expect(ledger).toHaveLength(1);
-      expect(ledger[0]).toMatchObject({ type: "credit", reason: "reward" });
-    });
-
-    it("has no way to pay from the wallet: a wallet balance does not grant Pro", async () => {
-      const user = await createUser();
-      await creditWallet(user.id, 100000, "reward");
-      // There is no pay-with-wallet route; checkout always returns a gateway URL.
-      const res = await checkout(user, { payWithWallet: true, source: "wallet" });
-      expect(res.body.checkout.authorizationUrl).toContain("https://checkout.test/");
-      expect(await proUntilOf(user)).toBeNull();
-      expect(await getBalance(user.id)).toBe(100000);
     });
   });
 });

@@ -13,7 +13,6 @@ import uploadRouter from "./routes/upload.route";
 import adminRouter from "./routes/admin.route";
 import analyticsRouter from "./routes/analytics.route";
 import configRouter from "./routes/config.route";
-import walletRouter from "./routes/wallet.route";
 import forumRouter from "./routes/forum.route";
 import teamGameRouter from "./routes/teamGame.route";
 import { ErrorMiddleware } from "./middlewares/error";
@@ -62,7 +61,6 @@ app.use(
   uploadRouter,
   analyticsRouter,
   configRouter,
-  walletRouter,
   forumRouter,
   adminRouter
 );

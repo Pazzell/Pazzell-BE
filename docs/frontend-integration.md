@@ -1,7 +1,7 @@
 # Pazzell API — frontend integration guide
 
 Everything the frontend needs to build trivia (image and short-definition questions across
-topics), custom trivia, brand campaigns, Pro and the wallet screens. This document describes the API as implemented on the
+topics), custom trivia, brand campaigns and Pro. This document describes the API as implemented on the
 `pazzell-brain-training` branch.
 
 - [1. Conventions](#1-conventions)
@@ -14,7 +14,7 @@ topics), custom trivia, brand campaigns, Pro and the wallet screens. This docume
 - [8. Brand campaigns](#8-brand-campaigns)
 - [9. Admin](#9-admin)
 - [10. Uploads](#10-uploads)
-- [11. Wallet](#11-wallet)
+- [11. Wallet (removed)](#11-wallet-removed)
 - [12. Error codes](#12-error-codes)
 - [13. Rate limits](#13-rate-limits)
 - [14. Environment variables](#14-environment-variables)
@@ -160,8 +160,7 @@ Presence endpoints (optional): `POST /analytics/user/online`, `POST /analytics/u
   `proUntil`; renewing after expiry starts from the new payment time.
 - Pro benefits: never interrupted by campaign trivia, unlimited custom trivias, and AI
   generated trivia (section 7.5).
-- Payment is made **only** through the payment gateway (Paystack). The wallet is never used to
-  pay for anything.
+- Payment is made **only** through the payment gateway (Paystack).
 
 ### `GET /plan/me` — Auth
 
@@ -1157,31 +1156,11 @@ File fields on other endpoints: `image` (cards, quiz cover, topic cover), `logo`
 
 ---
 
-## 11. Wallet
+## 11. Wallet (removed)
 
-The wallet is **withdraw-only**. It holds rewards a player has earned and lets them withdraw to
-their bank account. There is no top-up or deposit, and it is never used to pay for Pro or
-campaigns. No gameplay credits the wallet yet, so balances stay at their current values until a
-reward feature is added. Amounts are in NGN.
-
-| Method | Path | Auth | Purpose |
-| --- | --- | --- | --- |
-| GET | `/wallet/balance` | Auth | `{ balance, currency: "NGN" }` |
-| GET | `/wallet/transactions?limit=50` | Auth | Ledger, newest first |
-| POST | `/wallet/bank-accounts` | Auth | `{ accountNumber, bankCode, bankName }` — the account name is resolved by the bank |
-| GET | `/wallet/bank-accounts` | Auth | Saved accounts |
-| DELETE | `/wallet/bank-accounts/:id` | Auth | Remove an account |
-| POST | `/wallet/withdrawals` | Auth | `{ bankAccountId, amount, idempotencyKey }` |
-| GET | `/wallet/withdrawals` | Auth | Withdrawal history |
-| GET | `/wallet/withdrawals/:id` | Auth | One withdrawal |
-
-Ledger entry: `{ type: "credit" | "debit", amount, balanceAfter, reason, referenceId, status, createdAt }`
-where `reason` is `reward`, `withdrawal`, `withdrawal_reversal`, `admin_adjustment` or
-(historical rows) `weekly_payout`.
-
-Withdrawal `status`: `pending` → `processing` → `paid`, or `failed` (the amount is returned to
-the wallet). Always send a fresh `idempotencyKey` (a UUID) per withdrawal; re-sending the same key
-returns the original withdrawal and never withdraws twice. Insufficient balance → `400`.
+The wallet no longer exists: there is no balance, ledger, bank account or withdrawal. Every
+`/wallet/*` route returns `404`, as does the transfer webhook
+`/payments/webhook/paystack-transfer`. Remove the wallet screen and its menu link.
 
 ---
 
@@ -1292,7 +1271,7 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 | `PORT`, `NODE_ENV`, `TRUST_PROXY` | Server |
 | `DB_URI`, `REDIS_URL` | MongoDB and Redis |
 | `ACCESS_TOKEN`, `REFRESH_TOKEN`, `ACCESS_TOKEN_EXPIRE`, `REFRESH_TOKEN_EXPIRE`, `ACTIVATION_SECRET` | JWT secrets and lifetimes |
-| `PAYSTACK_SECRET_KEY`, `TRANSFER_PROVIDER` | Payment gateway and withdrawals |
+| `PAYSTACK_SECRET_KEY` | Payment gateway |
 | `PAYMENT_CURRENCY`, `PRO_PRICE_AMOUNT`, `PRO_DURATION_DAYS`, `CAMPAIGN_PRICE_AMOUNT`, `CAMPAIGN_DURATION_DAYS`, `CAMPAIGN_INTERRUPTION_THRESHOLD`, `GAME_SUBMIT_GRACE_MS`, `TRIVIA_IMAGE_PERCENT` | Defaults for the settings in section 9 (an admin override wins) |
 | `WIKIMEDIA_CONTACT` | Contact email or URL sent to Wikimedia with image-import requests |
 | `AI_PROVIDER` (`claude` \| `openai` \| `gemini`) | Which AI writes and checks the cards for every AI feature. Empty: the first of those whose key is set. With no key the AI features answer `503 AI_NOT_CONFIGURED` |
@@ -1319,10 +1298,10 @@ There is no Match game and no study step. These routes no longer exist and retur
 `LEVEL_LOCKED`, `LEVEL_NOT_FOUND`, `ARTIFACT_NOT_FOUND`, `TIMER_NOT_IN_LEVEL_CONFIG` and every
 `ATTEMPT_*` code are gone with them.
 
-There are no points, leaderboards, rankings, ads, spin wheel, reward codes, prize draws or
+There is no wallet, and no points, leaderboards, rankings, ads, spin wheel, reward codes, prize draws or
 referral rewards. These routes no longer exist and return `404`:
 
-`/leaderboards/*`, `/referrals/*`, `/raffles/*`, `/sessions/*`, `/packages*`, `/payouts/*`,
+`/wallet/*`, `/payments/webhook/paystack-transfer`, `/leaderboards/*`, `/referrals/*`, `/raffles/*`, `/sessions/*`, `/packages*`, `/payouts/*`,
 `/prize-pools/*`, `/platform/earnings`, `/gamers`, `/profile/privacy`, `/admin/clear-all-data`,
 `/forum/winner-submissions*`, the old `/campaigns*` and `/brands*` routes, and
 `/payments/initialize`, `/payments/transactions`, `/payments/calculate-weekly-price`.

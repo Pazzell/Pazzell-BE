@@ -1,6 +1,5 @@
 import cron from "node-cron";
 import mongoose from "mongoose";
-import { reconcileAllWallets } from "../wallet/wallet.service";
 import { expireCampaigns } from "../campaign/campaign.service";
 import { lockQuizzesForExpiredPro } from "../customQuiz/quizLock.service";
 import { abandonStaleTriviaSessions } from "../trivia/session.service";
@@ -37,18 +36,6 @@ export async function runStaleAttemptSweep(): Promise<void> {
   }
 }
 
-export async function runNightlyWalletReconciliation(): Promise<void> {
-  if (mongoose.connection.readyState !== 1) return;
-  try {
-    const result = await reconcileAllWallets();
-    if (result.corrected > 0) {
-      console.log(`Wallet reconciliation corrected ${result.corrected}/${result.checked} wallet(s)`);
-    }
-  } catch (err) {
-    console.error("Wallet reconciliation failed:", err);
-  }
-}
-
 let started = false;
 
 export function startScheduler(): void {
@@ -63,12 +50,6 @@ export function startScheduler(): void {
   // Hourly — close trivia sessions that were walked away from
   cron.schedule("0 * * * *", () => {
     runStaleAttemptSweep().catch((err) => console.error("Stale attempt sweep error:", err));
-  });
-
-  // Nightly at 03:00 — wallet ledger reconciliation (defense-in-depth against the narrow
-  // crash window described in services/wallet/wallet.service.ts)
-  cron.schedule("0 3 * * *", () => {
-    runNightlyWalletReconciliation().catch((err) => console.error("Wallet reconciliation error:", err));
   });
 
   // Run the expiry sweep immediately on startup.

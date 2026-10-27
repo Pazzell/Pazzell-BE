@@ -21,10 +21,8 @@ import userModel from "../models/user.model";
 import CampaignModel from "../models/campaign.model";
 import CampaignPlayModel from "../models/campaignPlay.model";
 import PaymentModel from "../models/payment.model";
-import WalletTransactionModel from "../models/walletTransaction.model";
 import { paystackService } from "../services/payment";
 import { expireCampaigns } from "../services/campaign/campaign.service";
-import { creditWallet, getBalance } from "../services/wallet/wallet.service";
 
 const brandBase = "/api/v1/brand/campaigns";
 const counterOf = async (user: TestUser) =>
@@ -178,9 +176,8 @@ describe("Brand campaigns", () => {
       expect(repay.body.code).toBe("CAMPAIGN_NOT_PAYABLE");
     });
 
-    it("does not open a second checkout on a double click, and never touches the wallet", async () => {
+    it("does not open a second checkout on a double click", async () => {
       const id = await draftWithCards();
-      await creditWallet(brand.id, 9000, "reward");
 
       const first = await api().post(`${brandBase}/${id}/checkout`).set(brand.auth).send({});
       const second = await api().post(`${brandBase}/${id}/checkout`).set(brand.auth).send({});
@@ -190,8 +187,6 @@ describe("Brand campaigns", () => {
 
       await signedWebhook(chargeSuccess(first.body.checkout.reference, 15000, new Date()));
       expect((await CampaignModel.findById(id).lean())!.status).toBe("live");
-      expect(await getBalance(brand.id)).toBe(9000);
-      expect(await WalletTransactionModel.countDocuments({ userId: brand.id, type: "debit" })).toBe(0);
     });
 
     it("rejects a campaign payment with the wrong amount", async () => {

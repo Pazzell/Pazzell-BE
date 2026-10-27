@@ -8,7 +8,6 @@ Backend for Pazzell: image and short-definition trivia across many topics.
   drafted with AI (Claude, OpenAI or Gemini) from a description or an uploaded document, then reviewed.
 - **Brand campaigns** — sponsored trivia that freemium players play periodically.
 - **Freemium and Pro** player tiers.
-- **Wallet** — withdraw-only; holds rewards and pays them out to a bank account.
 
 There are no points, leaderboards, rankings, ads, prize draws or referral rewards.
 
@@ -24,7 +23,7 @@ There are no points, leaderboards, rankings, ads, prize draws or referral reward
 ## Stack
 
 Node 20, Express 4, TypeScript, MongoDB (Mongoose 8), Redis (sessions and presence), JWT auth,
-Paystack (payments in and bank transfers out), S3 or Firebase Storage for images, `sharp` for
+Paystack (payments), S3 or Firebase Storage for images, `sharp` for
 image processing, `node-cron` for scheduled jobs, Jest + supertest + mongodb-memory-server.
 
 ## Getting started
@@ -63,7 +62,6 @@ services/
   quizGen/               Draft cards from an uploaded document (text extraction + prompts)
   ai/                    AI providers (Claude, OpenAI, Gemini), chosen by AI_PROVIDER
   campaign/              Activation, expiry, rotation and the interruption gate
-  wallet/, transfer/     Ledger and bank withdrawals
   upload/, storage/      Image validation/processing and storage providers
   scheduler/             Cron jobs
 models/                  Mongoose models
@@ -96,9 +94,6 @@ tests/                   Jest suites
 - **Campaign window.** A campaign goes live when its payment is confirmed and ends exactly the
   configured number of days later. Delivery always checks the end date, so a late job can never
   cause an ended campaign to be served.
-- **Wallet.** Withdraw-only. `creditWallet(userId, amount, reason)` in
-  `services/wallet/wallet.service.ts` is the entry point for future reward features. Nothing in
-  gameplay calls it yet.
 
 ## Scheduled jobs
 
@@ -106,14 +101,12 @@ tests/                   Jest suites
 | --- | --- |
 | Every 10 minutes and at startup | End campaigns past their window; lock the extra quizzes of expired Pro accounts |
 | Hourly | Close trivia sessions left open for more than 6 hours |
-| 03:00 daily | Reconcile wallet balances against the ledger |
 
-All three are sweeps. The rules they apply are also enforced on read.
+Both are sweeps. The rules they apply are also enforced on read.
 
-## Webhooks to register with Paystack
+## Webhook to register with Paystack
 
 - Charges: `{API_ORIGIN}/api/v1/payments/webhook/paystack`
-- Transfers (withdrawals): `{API_ORIGIN}/api/v1/payments/webhook/paystack-transfer`
 
 ## Deployment notes
 

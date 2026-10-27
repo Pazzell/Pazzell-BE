@@ -32,8 +32,8 @@ async function start() {
 
   server.listen(PORT, () => {
     console.log(`Server is connected http://localhost:${PORT}`);
-    // node-cron scheduler: campaign auto-end, Pro-expiry quiz locking, stale attempt
-    // cleanup, nightly wallet reconciliation (see services/scheduler/index.ts)
+    // node-cron scheduler: campaign auto-end, Pro-expiry quiz locking and stale attempt
+    // cleanup (see services/scheduler/index.ts)
     startScheduler();
   });
 }
