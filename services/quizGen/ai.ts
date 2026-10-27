@@ -1,15 +1,12 @@
-import Anthropic from "@anthropic-ai/sdk";
 import ErrorHandler from "../../utils/ErrorHandler";
 import { CARD_OPTION_MAX, CARD_TEXT_MAX } from "../../models/cardFields";
+import * as ai from "../ai";
 
-// The only file that talks to the Claude API. Everything it returns is treated as
-// untrusted by the caller, which validates each card and checks its quote.
+// The prompts and schemas for every AI request the game makes. Which AI answers them is
+// set in the environment (see services/ai). Everything returned is treated as untrusted
+// by the caller, which validates each card (and, for a document, checks its quote).
 
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
-const TOOL_NAME = "save_trivia_cards";
-
-export const isAiConfigured = (): boolean => Boolean(process.env.ANTHROPIC_API_KEY);
-export const aiModel = (): string => process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+export const isAiConfigured = (): boolean => ai.isAiConfigured();
 
 export interface CardCandidate {
   statement: string;
@@ -41,35 +38,61 @@ Rules:
 
 Also give a short title (at most 60 characters) naming the subject of the document.`;
 
-const TOOL: Anthropic.Tool = {
-  name: TOOL_NAME,
-  description: "Saves the trivia cards written from the document.",
-  input_schema: {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Short title naming the subject of the document" },
-      cards: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            statement: { type: "string" },
-            correctAnswer: { type: "string" },
-            wrongAnswer: { type: "string" },
-            quote: { type: "string", description: "Sentence copied word for word from the document" },
-          },
-          required: ["statement", "correctAnswer", "wrongAnswer", "quote"],
+const SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string", description: "Short title naming the subject of the document" },
+    cards: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          statement: { type: "string" },
+          correctAnswer: { type: "string" },
+          wrongAnswer: { type: "string" },
+          quote: { type: "string", description: "Sentence copied word for word from the document" },
         },
+        required: ["statement", "correctAnswer", "wrongAnswer", "quote"],
+        additionalProperties: false,
       },
     },
-    required: ["title", "cards"],
   },
+  required: ["title", "cards"],
+  additionalProperties: false,
 };
 
 const asString = (value: any): string => (typeof value === "string" ? value.trim() : "");
 
+const unavailable = () =>
+  new ErrorHandler(
+    "The trivia generator is busy right now. Please try again in a moment.",
+    502,
+    "AI_UNAVAILABLE"
+  );
+
 /**
- * Asks Claude for `count` cards written from `text`. `avoid` lists questions that
+ * Sends one request and turns provider failures into the errors the player sees.
+ * `notConfiguredMessage` names the feature that is unavailable.
+ */
+async function ask(
+  request: ai.JsonRequest,
+  notConfiguredMessage: string,
+  onRefused: () => any
+): Promise<any> {
+  try {
+    return await ai.requestJson(request);
+  } catch (e) {
+    if (!(e instanceof ai.AiError)) throw e;
+    if (e.kind === "not_configured") {
+      throw new ErrorHandler(notConfiguredMessage, 503, "AI_NOT_CONFIGURED");
+    }
+    if (e.kind === "refused") return onRefused();
+    throw unavailable();
+  }
+}
+
+/**
+ * Asks the AI for `count` cards written from `text`. `avoid` lists questions that
  * already exist, so a second run over the same document brings new ones.
  */
 export async function requestCards(
@@ -77,62 +100,28 @@ export async function requestCards(
   count: number,
   avoid: string[] = []
 ): Promise<GeneratedCards> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new ErrorHandler(
-      "Generating trivia from a document is not available yet",
-      503,
-      "AI_NOT_CONFIGURED"
-    );
-  }
-
-  const client = new Anthropic({ apiKey, maxRetries: 2, timeout: 120_000 });
-  let response: Anthropic.Message;
-  try {
-    response = await client.messages.create({
-      model: aiModel(),
-      max_tokens: 8192,
+  const input = await ask(
+    {
+      name: "save_trivia_cards",
+      description: "Saves the trivia cards written from the document.",
       system: SYSTEM_PROMPT,
-      tools: [TOOL],
-      tool_choice: { type: "tool", name: TOOL_NAME },
-      messages: [
-        {
-          role: "user",
-          content:
-            `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document.` +
-            (avoid.length
-              ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
-                  .map((question) => `- ${question}`)
-                  .join("\n")}`
-              : ""),
-        },
-      ],
-    });
-  } catch (e: any) {
-    // A rejected key is our configuration problem, not something the player can fix.
-    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
-      console.error("Claude API rejected the configured ANTHROPIC_API_KEY:", e.message);
-      throw new ErrorHandler(
-        "Generating trivia from a document is not available yet",
-        503,
-        "AI_NOT_CONFIGURED"
-      );
-    }
-    console.error("Claude API request failed:", e?.status || "", e?.message);
-    throw new ErrorHandler(
-      "The trivia generator is busy right now. Please try again in a moment.",
-      502,
-      "AI_UNAVAILABLE"
-    );
-  }
-
-  const block = response.content.find(
-    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === TOOL_NAME
+      content:
+        `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document.` +
+        (avoid.length
+          ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
+              .map((question) => `- ${question}`)
+              .join("\n")}`
+          : ""),
+      schema: SCHEMA,
+      tier: "fast",
+    },
+    "Generating trivia from a document is not available yet",
+    // Nothing usable comes back; the caller reports that no cards could be written.
+    () => ({})
   );
-  const input = (block?.input || {}) as any;
-  const rows: any[] = Array.isArray(input.cards) ? input.cards : [];
+  const rows: any[] = Array.isArray(input?.cards) ? input.cards : [];
   return {
-    title: asString(input.title) || undefined,
+    title: asString(input?.title) || undefined,
     cards: rows.map((row) => ({
       statement: asString(row?.statement),
       correctAnswer: asString(row?.correctAnswer),
@@ -145,9 +134,6 @@ export async function requestCards(
 // --- Cards from a topic and a prompt (AI generated trivia) -------------------------------
 // There is no document to check these against, so they are written by the strongest model
 // and then answered blind by a second request (see services/aiTrivia/aiTrivia.service.ts).
-
-const DEFAULT_TOPIC_MODEL = "claude-opus-5-5";
-export const aiTopicModel = (): string => process.env.ANTHROPIC_TOPIC_MODEL || DEFAULT_TOPIC_MODEL;
 
 export interface TopicCardCandidate {
   statement: string;
@@ -233,64 +219,17 @@ const CHECK_SCHEMA = {
   additionalProperties: false,
 };
 
-const notConfigured = () =>
-  new ErrorHandler("Writing questions with AI is not available yet", 503, "AI_NOT_CONFIGURED");
-const unavailable = () =>
-  new ErrorHandler(
-    "The trivia generator is busy right now. Please try again in a moment.",
-    502,
-    "AI_UNAVAILABLE"
+const TOPIC_NOT_CONFIGURED = "Writing questions with AI is not available yet";
+const rejected = () => {
+  throw new ErrorHandler(
+    "Questions could not be written for this topic. Try describing it differently.",
+    422,
+    "PROMPT_REJECTED"
   );
-
-/** One request that must answer with JSON matching `schema`. */
-async function requestJson(system: string, content: string, schema: Record<string, unknown>) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw notConfigured();
-
-  const client = new Anthropic({ apiKey, maxRetries: 2, timeout: 180_000 });
-  const model = aiTopicModel();
-  let response: Anthropic.Beta.BetaMessage;
-  try {
-    response = await client.beta.messages.create({
-      model,
-      max_tokens: 16000,
-      system,
-      output_config: { effort: "medium", format: { type: "json_schema", schema } },
-      // If a safety classifier declines the request, the API re-runs it on the model it
-      // picks for that case. Only the default model is known to accept the parameter.
-      ...(model === DEFAULT_TOPIC_MODEL
-        ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
-        : {}),
-      messages: [{ role: "user", content }],
-    });
-  } catch (e: any) {
-    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
-      console.error("Claude API rejected the configured ANTHROPIC_API_KEY:", e.message);
-      throw notConfigured();
-    }
-    console.error("Claude API request failed:", e?.status || "", e?.message);
-    throw unavailable();
-  }
-
-  if (response.stop_reason === "refusal") {
-    throw new ErrorHandler(
-      "Questions could not be written for this topic. Try describing it differently.",
-      422,
-      "PROMPT_REJECTED"
-    );
-  }
-  const text = response.content.find((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text");
-  try {
-    return JSON.parse(text?.text || "");
-  } catch {
-    // Cut off at max_tokens, or no text at all.
-    console.error("Claude API returned no usable JSON; stop_reason:", response.stop_reason);
-    throw unavailable();
-  }
-}
+};
 
 /**
- * Asks Claude for `count` cards on `topic`, shaped by the player's `prompt`. `avoid`
+ * Asks the AI for `count` cards on `topic`, shaped by the player's `prompt`. `avoid`
  * lists questions the topic already has, so the set brings new ones.
  */
 export async function requestTopicCards(
@@ -299,15 +238,23 @@ export async function requestTopicCards(
   count: number,
   avoid: string[] = []
 ): Promise<GeneratedTopicCards> {
-  const input = await requestJson(
-    TOPIC_SYSTEM_PROMPT,
-    `<topic>\n${topic}\n</topic>\n\n<description>\n${prompt}\n</description>\n\nWrite ${count} trivia cards.` +
-      (avoid.length
-        ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
-            .map((question) => `- ${question}`)
-            .join("\n")}`
-        : ""),
-    TOPIC_SCHEMA
+  const input = await ask(
+    {
+      name: "save_topic_cards",
+      description: "Saves the trivia cards written for the topic.",
+      system: TOPIC_SYSTEM_PROMPT,
+      content:
+        `<topic>\n${topic}\n</topic>\n\n<description>\n${prompt}\n</description>\n\nWrite ${count} trivia cards.` +
+        (avoid.length
+          ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
+              .map((question) => `- ${question}`)
+              .join("\n")}`
+          : ""),
+      schema: TOPIC_SCHEMA,
+      tier: "strong",
+    },
+    TOPIC_NOT_CONFIGURED,
+    rejected
   );
   const rows: any[] = Array.isArray(input?.cards) ? input.cards : [];
   return {
@@ -322,20 +269,28 @@ export async function requestTopicCards(
 }
 
 /**
- * Has Claude answer each question without being told which option was marked correct.
+ * Has the AI answer each question without being told which option was marked correct.
  * Returns, per question, the index of the option it chose, or null when it was not sure.
  */
 export async function answerCards(
   topic: string,
   questions: { statement: string; options: string[] }[]
 ): Promise<(number | null)[]> {
-  const input = await requestJson(
-    CHECK_SYSTEM_PROMPT,
-    `Topic: ${topic}\n\n` +
-      questions
-        .map((q, i) => `${i + 1}. ${q.statement}\nA. ${q.options[0]}\nB. ${q.options[1]}`)
-        .join("\n\n"),
-    CHECK_SCHEMA
+  const input = await ask(
+    {
+      name: "save_answers",
+      description: "Saves the chosen option for each question.",
+      system: CHECK_SYSTEM_PROMPT,
+      content:
+        `Topic: ${topic}\n\n` +
+        questions
+          .map((q, i) => `${i + 1}. ${q.statement}\nA. ${q.options[0]}\nB. ${q.options[1]}`)
+          .join("\n\n"),
+      schema: CHECK_SCHEMA,
+      tier: "strong",
+    },
+    TOPIC_NOT_CONFIGURED,
+    rejected
   );
   const chosen: (number | null)[] = questions.map(() => null);
   const rows: any[] = Array.isArray(input?.answers) ? input.answers : [];

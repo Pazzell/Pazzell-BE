@@ -16,13 +16,13 @@ import CustomQuizCardModel from "../models/customQuizCard.model";
 import TriviaTopicModel from "../models/triviaTopic.model";
 import TriviaCardModel from "../models/triviaCard.model";
 import { setConfigValue } from "../services/config/config.service";
-import * as claude from "../services/quizGen/claude";
+import * as ai from "../services/quizGen/ai";
 
 const base = "/api/v1/ai-trivia";
 const adminBase = "/api/v1/admin/trivia/ai";
 const PROMPT = "Hard questions about the emperors of the first century";
 
-const candidate = (i: number): claude.TopicCardCandidate => ({
+const candidate = (i: number): ai.TopicCardCandidate => ({
   statement: `Question ${i}?`,
   correctAnswer: `Right ${i}`,
   wrongAnswer: `Wrong ${i}`,
@@ -38,15 +38,15 @@ describe("AI generated trivia", () => {
 
   beforeAll(connectTestDB);
   beforeEach(() => {
-    configured = jest.spyOn(claude, "isAiConfigured").mockReturnValue(true);
+    configured = jest.spyOn(ai, "isAiConfigured").mockReturnValue(true);
     requestTopicCards = jest
-      .spyOn(claude, "requestTopicCards")
+      .spyOn(ai, "requestTopicCards")
       .mockImplementation(async (_topic, _prompt, count) => ({
         title: "Emperors of Rome",
         cards: Array.from({ length: count }, (_, i) => candidate(i)),
       }));
     answerCards = jest
-      .spyOn(claude, "answerCards")
+      .spyOn(ai, "answerCards")
       .mockImplementation(async (_topic, questions) => rightOption(questions));
   });
   afterEach(async () => {
@@ -223,7 +223,7 @@ describe("AI generated trivia", () => {
       expect((await api().get(`${base}/options`).set(pro.auth)).body.options.enabled).toBe(false);
 
       jest.restoreAllMocks();
-      await expect(claude.requestTopicCards("Topic", "Prompt", 3)).rejects.toMatchObject({
+      await expect(ai.requestTopicCards("Topic", "Prompt", 3)).rejects.toMatchObject({
         statusCode: 503,
         code: "AI_NOT_CONFIGURED",
       });

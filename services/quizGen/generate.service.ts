@@ -5,7 +5,7 @@ import { ICardContent } from "../../models/cardFields";
 import { buildCardContent } from "../trivia/cardInput";
 import { getPlan } from "../plan/plan.service";
 import { getGenerateDailyLimit } from "../config/config.service";
-import * as claude from "./claude";
+import * as ai from "./ai";
 import {
   DOCUMENT_MAX_BYTES,
   DOCUMENT_MIN_CHARS,
@@ -74,7 +74,7 @@ export function excerptForPrompt(text: string, maxChars = PROMPT_MAX_CHARS): str
  * one that repeats a question in `taken`.
  */
 export async function verifyCandidates(
-  candidates: claude.CardCandidate[],
+  candidates: ai.CardCandidate[],
   documentText: string,
   ownerId: string,
   limit: number,
@@ -146,7 +146,7 @@ async function allowance(user: PlanUser) {
  */
 export async function getGenerateOptions(user: PlanUser, { unlimited = false } = {}) {
   return {
-    enabled: claude.isAiConfigured(),
+    enabled: ai.isAiConfigured(),
     fileTypes: DOCUMENT_TYPES,
     maxFileBytes: DOCUMENT_MAX_BYTES,
     minCharacters: DOCUMENT_MIN_CHARS,
@@ -174,7 +174,7 @@ function parseCount(value: any, max = GENERATE_MAX_COUNT): number {
 }
 
 /**
- * Cards Claude writes from its own knowledge for the owner's description. With no document
+ * Cards the AI writes from its own knowledge for the owner's description. With no document
  * to quote, a second request answers each one blind and only the cards it agrees on stay.
  */
 async function draftsFromPrompt(
@@ -185,7 +185,7 @@ async function draftsFromPrompt(
 ): Promise<{ title?: string; cards: DraftCard[] }> {
   // A few spare cards cover the ones the checks below throw away.
   const spare = count + Math.ceil(count / 4);
-  const generated = await claude.requestTopicCards(topic, prompt, spare);
+  const generated = await ai.requestTopicCards(topic, prompt, spare);
   if (generated.declined && generated.cards.length === 0) {
     throw new ErrorHandler(generated.declined.slice(0, 300), 422, "PROMPT_REJECTED");
   }
@@ -216,7 +216,7 @@ async function draftsFromPrompt(
   }
 
   const answers = cards.length
-    ? await claude.answerCards(
+    ? await ai.answerCards(
         topic,
         cards.map((card) => ({ statement: card.text || "", options: card.options }))
       )
@@ -243,7 +243,7 @@ export interface GenerateInput {
 
 export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
   const userId = String(user._id);
-  if (!claude.isAiConfigured()) {
+  if (!ai.isAiConfigured()) {
     throw new ErrorHandler(
       "Generating trivia from a document is not available yet",
       503,
@@ -315,8 +315,8 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
       // A few spare cards cover the ones the checks below throw away.
       const spare = count + Math.ceil(count / 4);
       const generated = avoid.length
-        ? await claude.requestCards(excerpt, spare, avoid)
-        : await claude.requestCards(excerpt, spare);
+        ? await ai.requestCards(excerpt, spare, avoid)
+        : await ai.requestCards(excerpt, spare);
       drafts = await verifyCandidates(generated.cards, text, userId, count, avoid);
       title = generated.title?.slice(0, TITLE_MAX);
     }
