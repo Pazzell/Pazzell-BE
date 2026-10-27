@@ -15,11 +15,11 @@ import {
   getDefaultTimerSeconds,
   getProPricing,
 } from "../config/config.service";
-import * as claude from "../quizGen/claude";
+import * as ai from "../quizGen/ai";
 import { GENERATE_AVOID_MAX, GENERATE_MAX_COUNT, fingerprint } from "../quizGen/generate.service";
 
 // AI generated trivia: a Pro player names a topic and describes the questions they want;
-// Claude writes the cards, a second request answers them blind, and the cards both
+// the AI writes the cards, a second request answers them blind, and the cards both
 // requests agree on are stored as a trivia that only its owner plays. It is kept as a
 // custom quiz with origin "ai", so it runs on the same session engine as everything else.
 // An admin decides separately whether the cards also go into General Trivia.
@@ -78,7 +78,7 @@ export async function getAiTriviaOptions(user: PlanUser) {
     .select("name")
     .lean();
   return {
-    enabled: claude.isAiConfigured(),
+    enabled: ai.isAiConfigured(),
     isPro,
     // What Pro costs, for the upgrade prompt.
     pro: isPro ? null : await getProPricing(),
@@ -133,7 +133,7 @@ async function resolveTopic(input: { topicId?: any; topicName?: any }) {
  * repeat a question in `taken` or each other.
  */
 async function buildCards(
-  candidates: claude.TopicCardCandidate[],
+  candidates: ai.TopicCardCandidate[],
   ownerId: string,
   taken: string[]
 ): Promise<ICardContent[]> {
@@ -175,7 +175,7 @@ export interface AiTriviaInput {
 /** POST /ai-trivia: writes, checks and stores a new AI generated trivia for a Pro player. */
 export async function generateAiTrivia(user: PlanUser, input: AiTriviaInput) {
   const userId = String(user._id);
-  if (!claude.isAiConfigured()) {
+  if (!ai.isAiConfigured()) {
     throw new ErrorHandler("AI generated trivia is not available yet", 503, "AI_NOT_CONFIGURED");
   }
   await assertCanGenerateAiTrivia(user);
@@ -220,7 +220,7 @@ export async function generateAiTrivia(user: PlanUser, input: AiTriviaInput) {
 
     // A few spare cards cover the ones the checks below throw away.
     const spare = count + Math.ceil(count / 4);
-    const generated = await claude.requestTopicCards(topic.name, prompt, spare, avoid);
+    const generated = await ai.requestTopicCards(topic.name, prompt, spare, avoid);
     if (generated.declined && generated.cards.length === 0) {
       throw new ErrorHandler(generated.declined.slice(0, 300), 422, "PROMPT_REJECTED");
     }
@@ -229,7 +229,7 @@ export async function generateAiTrivia(user: PlanUser, input: AiTriviaInput) {
     // The blind check: a card stays only when a second request, which is not told the
     // marked answer, picks the same option.
     const answers = cards.length
-      ? await claude.answerCards(
+      ? await ai.answerCards(
           topic.name,
           cards.map((card) => ({ statement: card.text || "", options: card.options }))
         )

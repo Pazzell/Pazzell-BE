@@ -547,10 +547,10 @@ Invalid cards return `400 INVALID_CARD`; in bulk the message names the row (`Car
 A player either describes the questions they want ("50 questions about the solar system") or
 uploads their study material, and gets draft cards to review.
 
-- **From a description**, Claude writes the cards from its own knowledge. With no document to
+- **From a description**, the AI writes the cards from its own knowledge. With no document to
   check them against, a second request answers each card blind, and only the cards it agrees on
   come back (the same check as 7.5).
-- **From a document**, the server reads the text, asks Claude to write definition cards from it,
+- **From a document**, the server reads the text, asks the AI to write definition cards from it,
   and keeps only the cards whose supporting sentence really appears in the document.
 
 **Nothing is saved by this endpoint.** The drafts come back in the
@@ -603,7 +603,7 @@ It can take a minute or two, so show progress and do not retry automatically.
 - `cards` may hold fewer than `requested`: a card the document does not support, or that fails
   the blind check, is dropped.
 - From a description, `prompt` echoes it, `document` is `null` and every `quote` is `""`. A
-  description Claude will not write trivia for returns `422 PROMPT_REJECTED` with a message saying
+  description the AI will not write trivia for returns `422 PROMPT_REJECTED` with a message saying
   what to change.
 - `quote` is the sentence from the document that proves the answer. Show it on the review
   screen so the player can check each card; it is not part of a saved card.
@@ -632,7 +632,7 @@ use up the allowance. Over the limit returns `429 GENERATION_LIMIT_REACHED` with
 The second kind of trivia a player sees next to **General Trivia** (section 6). In General
 Trivia the questions are ours; here a Pro player gets questions on exactly the topic they want.
 They select one of our topics or type their own, describe the questions they want, and the
-server has Claude write them. The set is stored and is theirs to play as often as they like.
+server has the AI write them. The set is stored and is theirs to play as often as they like.
 
 - **Pro only to create.** A freemium player gets `403 UPGRADE_REQUIRED` with
   `details: { feature: "ai_trivia", pro: { amount, currency, durationDays } }`.
@@ -1213,7 +1213,7 @@ returns the original withdrawal and never withdraws twice. Insufficient balance 
 | `QUIZ_NOT_LIVE` | 409 | regenerate link | Publish first |
 | `INVALID_CARD` | 400 | cards | See 7.3; `details.index` in bulk |
 | `CARD_NOT_FOUND` | 404 | cards | |
-| `AI_NOT_CONFIGURED` | 503 | generate from a document | The server has no Claude API key. Hide the feature |
+| `AI_NOT_CONFIGURED` | 503 | generate from a document | The server has no AI provider key, or the provider rejected it. Hide the feature |
 | `AI_UNAVAILABLE` | 502 | generate from a document | The AI request failed. Let the player retry |
 | `DOCUMENT_REQUIRED` / `DOCUMENT_TOO_LARGE` / `INVALID_DOCUMENT_TYPE` | 400 | generate from a document | No file or text; over 10MB; not a PDF, .docx or text file |
 | `DOCUMENT_UNREADABLE` | 400 | generate from a document | Scanned, password-protected or damaged PDF. Show the message |
@@ -1295,9 +1295,12 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 | `PAYSTACK_SECRET_KEY`, `TRANSFER_PROVIDER` | Payment gateway and withdrawals |
 | `PAYMENT_CURRENCY`, `PRO_PRICE_AMOUNT`, `PRO_DURATION_DAYS`, `CAMPAIGN_PRICE_AMOUNT`, `CAMPAIGN_DURATION_DAYS`, `CAMPAIGN_INTERRUPTION_THRESHOLD`, `GAME_SUBMIT_GRACE_MS`, `TRIVIA_IMAGE_PERCENT` | Defaults for the settings in section 9 (an admin override wins) |
 | `WIKIMEDIA_CONTACT` | Contact email or URL sent to Wikimedia with image-import requests |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Claude API key for trivia from a document (without it the feature answers `503 AI_NOT_CONFIGURED`), and the model that writes the cards (default `claude-haiku-4-5-20251001`) |
+| `AI_PROVIDER` (`claude` \| `openai` \| `gemini`) | Which AI writes and checks the cards for every AI feature. Empty: the first of those whose key is set. With no key the AI features answer `503 AI_NOT_CONFIGURED` |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_TOPIC_MODEL` | Claude key; fast model (cards from a document, default `claude-haiku-4-5-20251001`) and strong model (cards from a topic or description and their check, default `claude-opus-5-5`) |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TOPIC_MODEL` | OpenAI key; fast model (default `gpt-5-mini`) and strong model (default `gpt-5`) |
+| `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_TOPIC_MODEL` | Google Gemini key; fast model (default `gemini-2.5-flash`) and strong model (default `gemini-2.5-pro`) |
 | `QUIZ_GENERATE_DAILY_LIMIT_FREE`, `QUIZ_GENERATE_DAILY_LIMIT_PRO` | Defaults for the daily document allowance (an admin override wins) |
-| `ANTHROPIC_TOPIC_MODEL`, `AI_TRIVIA_DAILY_LIMIT` | The model that writes and checks AI generated trivia (default `claude-opus-5-5`), and the default daily allowance per Pro player (an admin override wins) |
+| `AI_TRIVIA_DAILY_LIMIT` | The default daily allowance of AI generated trivia per Pro player (an admin override wins) |
 | `STORAGE_PROVIDER` (`firebase` \| `aws` \| `memory`), `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`, `AWS_S3_PUBLIC_BASE_URL`, `FIREBASE_STORAGE_BUCKET` | Image storage |
 | `GOOGLE_CLIENT_ID` | Google OAuth web client id(s), comma separated, whose tokens `/auth/google` accepts: the same id as the frontend's `NEXT_PUBLIC_GOOGLE_CLIENT_ID` (which is also read as a fallback) |
 | `TYPE`, `PROJECT_ID`, `PRIVATE_KEY_ID`, `PRIVATE_KEY`, `CLIENT_EMAIL`, `CLIENT_ID`, `AUTH_URI`, `TOKEN_URI`, `AUTH_PROVIDER_CERT_URL`, `CLIENT_CERT_URL`, `UNIVERSE_DOMAIN` | Firebase service account (Firebase `idToken` sign-in, Firebase storage) |

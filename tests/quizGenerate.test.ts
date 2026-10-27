@@ -4,7 +4,7 @@ import { closeRedisConnection, redis } from "../utils/redis";
 import { api, createUser, resetState, DAY_MS, TestUser } from "./helpers";
 import CustomQuizCardModel from "../models/customQuizCard.model";
 import { setConfigValue } from "../services/config/config.service";
-import * as claude from "../services/quizGen/claude";
+import * as ai from "../services/quizGen/ai";
 import { cleanText, detectDocumentKind, extractDocumentText } from "../services/quizGen/extract";
 import {
   PROMPT_MAX_CHARS,
@@ -25,7 +25,7 @@ const FACTS = [
 ];
 const MATERIAL = FACTS.join("\n");
 
-const candidate = (i: number, extra: Partial<claude.CardCandidate> = {}): claude.CardCandidate => ({
+const candidate = (i: number, extra: Partial<ai.CardCandidate> = {}): ai.CardCandidate => ({
   statement: `Question about fact ${i}?`,
   correctAnswer: `Right answer ${i}`,
   wrongAnswer: `Wrong answer ${i}`,
@@ -121,7 +121,7 @@ describe("Document text extraction", () => {
 });
 
 describe("Draft card checks", () => {
-  const verify = (cards: claude.CardCandidate[], limit = 10) =>
+  const verify = (cards: ai.CardCandidate[], limit = 10) =>
     verifyCandidates(cards, MATERIAL, "owner", limit);
 
   it("keeps a card whose quote is in the document and marks the right option", async () => {
@@ -183,9 +183,9 @@ describe("Trivia from a document (HTTP)", () => {
 
   beforeAll(connectTestDB);
   beforeEach(() => {
-    configured = jest.spyOn(claude, "isAiConfigured").mockReturnValue(true);
+    configured = jest.spyOn(ai, "isAiConfigured").mockReturnValue(true);
     requestCards = jest
-      .spyOn(claude, "requestCards")
+      .spyOn(ai, "requestCards")
       .mockImplementation(async (_text, count) => ({
         title: "Financial accounting basics",
         cards: Array.from({ length: count }, (_, i) => candidate(i, { statement: `Question ${i}?` })),
@@ -312,8 +312,8 @@ describe("Trivia from a document (HTTP)", () => {
 
   it("really is unconfigured in the test environment", async () => {
     jest.restoreAllMocks();
-    expect(claude.isAiConfigured()).toBe(false);
-    await expect(claude.requestCards(MATERIAL, 3)).rejects.toMatchObject({
+    expect(ai.isAiConfigured()).toBe(false);
+    await expect(ai.requestCards(MATERIAL, 3)).rejects.toMatchObject({
       statusCode: 503,
       code: "AI_NOT_CONFIGURED",
     });
@@ -378,14 +378,14 @@ describe("Trivia from a document (HTTP)", () => {
 
     beforeEach(() => {
       requestTopicCards = jest
-        .spyOn(claude, "requestTopicCards")
+        .spyOn(ai, "requestTopicCards")
         .mockImplementation(async (_topic, _prompt, count) => ({
           title: "The solar system",
           cards: Array.from({ length: count }, (_, i) => candidate(i, { statement: `Planet question ${i}?` })),
         }));
       // A perfect checker: it picks the right answer of every card.
       answerCards = jest
-        .spyOn(claude, "answerCards")
+        .spyOn(ai, "answerCards")
         .mockImplementation(async (_topic, questions: { options: string[] }[]) =>
           questions.map((q) => q.options.findIndex((o) => o.startsWith("Right")))
         );
