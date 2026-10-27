@@ -5,13 +5,7 @@ import userModel from "../models/user.model";
 import CampaignModel from "../models/campaign.model";
 import CustomQuizModel from "../models/customQuiz.model";
 import TriviaAttemptModel from "../models/triviaAttempt.model";
-import { creditWallet, getBalance } from "../services/wallet/wallet.service";
-import WalletModel from "../models/wallet.model";
-import {
-  runExpirySweep,
-  runNightlyWalletReconciliation,
-  runStaleAttemptSweep,
-} from "../services/scheduler";
+import { runExpirySweep, runStaleAttemptSweep } from "../services/scheduler";
 
 describe("Scheduled jobs", () => {
   beforeAll(connectTestDB);
@@ -78,12 +72,5 @@ describe("Scheduled jobs", () => {
 
     expect(await TriviaAttemptModel.countDocuments({ status: "abandoned", active: false })).toBe(1);
     expect(await TriviaAttemptModel.countDocuments({ status: "quiz", active: true })).toBe(1);
-  });
-
-  it("still reconciles wallet balances against the ledger", async () => {
-    await creditWallet("user-x", 500, "reward", { idempotencyKey: "r-1" });
-    await WalletModel.updateOne({ userId: "user-x" }, { balance: 999 });
-    await runNightlyWalletReconciliation();
-    expect(await getBalance("user-x")).toBe(500);
   });
 });

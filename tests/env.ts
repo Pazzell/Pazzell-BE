@@ -13,7 +13,6 @@ process.env.SMTP_MAIL = "";
 process.env.SMTP_PASSWORD = "";
 process.env.SENDGRID_API_KEY = "";
 process.env.NOTIFICATION_PROVIDER = "none";
-process.env.TRANSFER_PROVIDER = "paystack";
 process.env.PAYSTACK_SECRET_KEY = "sk_test_unit_tests_only";
 process.env.FRONTEND_URL = "https://app.pazzell.test";
 process.env.AWS_ACCESS_KEY_ID = "";

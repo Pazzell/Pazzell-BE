@@ -24,7 +24,7 @@ export interface CheckoutResult {
 
 /**
  * Creates a pending Payment and a gateway checkout for it. Pro and campaigns are
- * paid for through the gateway only — the wallet is never debited here.
+ * paid for through the gateway only.
  * Repeating the call with the same idempotencyKey returns the same pending checkout.
  */
 export async function startCheckout(params: CheckoutParams): Promise<CheckoutResult> {
