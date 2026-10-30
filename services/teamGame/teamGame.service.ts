@@ -18,7 +18,8 @@ import { shuffle } from "../trivia/mix";
 // then push the new state to everyone watching. The server owns the clock and the
 // correct answers; clients only ever see the current question without its answer.
 
-export const TEAM_TIMER = { minSeconds: 10, maxSeconds: 120, defaultSeconds: 30 };
+// Seconds to answer in a team game: 5, 10, 15, 20, 25 or 30.
+export const TEAM_TIMER = { minSeconds: 5, maxSeconds: 30, stepSeconds: 5, defaultSeconds: 30 };
 export const MAX_TEAM_SIZE = 20;
 const MAX_PLAYERS = MAX_TEAMS * MAX_TEAM_SIZE;
 const TEAM_NAME_MAX = 30;
@@ -404,13 +405,19 @@ function parseTeamCount(value: any): number {
 
 function parseTimer(value: any): number {
   const seconds = toInt(value);
-  const { minSeconds, maxSeconds } = TEAM_TIMER;
-  if (seconds === undefined || !Number.isInteger(seconds) || seconds < minSeconds || seconds > maxSeconds) {
+  const { minSeconds, maxSeconds, stepSeconds } = TEAM_TIMER;
+  if (
+    seconds === undefined ||
+    !Number.isInteger(seconds) ||
+    seconds < minSeconds ||
+    seconds > maxSeconds ||
+    seconds % stepSeconds !== 0
+  ) {
     throw new ErrorHandler(
-      `timerSeconds must be a whole number from ${minSeconds} to ${maxSeconds}`,
+      `timerSeconds must be ${minSeconds} to ${maxSeconds} seconds in steps of ${stepSeconds}`,
       400,
       "INVALID_TIMER",
-      { minSeconds, maxSeconds }
+      { minSeconds, maxSeconds, stepSeconds }
     );
   }
   return seconds;
@@ -446,7 +453,9 @@ export async function createTeamGame(user: Actor, body: any) {
   const quiz = await playableQuiz(assertObjectId(body?.quizId, "quiz id"), ownerId);
   const teamCount = body?.teamCount === undefined ? MIN_TEAMS : parseTeamCount(body.teamCount);
   const fallbackTimer =
-    quiz.defaultTimerSeconds >= TEAM_TIMER.minSeconds && quiz.defaultTimerSeconds <= TEAM_TIMER.maxSeconds
+    quiz.defaultTimerSeconds >= TEAM_TIMER.minSeconds &&
+    quiz.defaultTimerSeconds <= TEAM_TIMER.maxSeconds &&
+    quiz.defaultTimerSeconds % TEAM_TIMER.stepSeconds === 0
       ? quiz.defaultTimerSeconds
       : TEAM_TIMER.defaultSeconds;
   const timerSeconds = body?.timerSeconds === undefined ? fallbackTimer : parseTimer(body.timerSeconds);

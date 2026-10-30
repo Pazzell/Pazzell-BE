@@ -737,7 +737,7 @@ never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
   The quiz needs at least one question per cell (9, 16 or 25).
 - Teams take turns, in team order. The **leader** of the team in turn picks an open cell (its
   number is `index + 1`). That serves a random question and starts the clock (`timerSeconds`,
-  10 to 120, the same for every question in the game).
+  5, 10, 15, 20, 25 or 30 seconds, the same for every question in the game; 30 by default).
 - The team talks it over in its own chat; only the leader can answer. A correct answer gives the
   team 1 point and the cell. A wrong answer, or no answer in time, leaves the cell open with a
   fresh question for the next pick. Either way the turn passes on.
@@ -755,7 +755,7 @@ never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
 
 | Method | Path | Who | Body / notes |
 | --- | --- | --- | --- |
-| POST | `/team-games` | quiz owner | `{ quizId, teamCount? (2–6, default 2), timerSeconds? (10–120) }` → 201. The quiz must be a live team quiz (`409 NOT_A_TEAM_QUIZ`, `409 QUIZ_NOT_LIVE`) |
+| POST | `/team-games` | quiz owner | `{ quizId, teamCount? (2–6, default 2), timerSeconds? (5, 10, 15, 20, 25 or 30; default 30) }` → 201. The quiz must be a live team quiz (`409 NOT_A_TEAM_QUIZ`, `409 QUIZ_NOT_LIVE`) |
 | GET | `/team-games` | host | `{ games: [{ code, status, quizTitle, teamCount, playerCount, joinUrl, … }] }`, newest 20 |
 | GET | `/team-games/:code` | anyone logged in | The current state |
 | PATCH | `/team-games/:code` | host, lobby | `{ teamCount?, timerSeconds?, teams?: [{ id, name }] }` (names up to 30 characters) |
