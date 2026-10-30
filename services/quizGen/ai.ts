@@ -11,7 +11,8 @@ export const isAiConfigured = (): boolean => ai.isAiConfigured();
 export interface CardCandidate {
   statement: string;
   correctAnswer: string;
-  wrongAnswer: string;
+  // One wrong answer for a 2-option card, three for a 4-option quiz card.
+  wrongAnswers: string[];
   quote: string;
 }
 
@@ -25,7 +26,7 @@ const SYSTEM_PROMPT = `You write trivia cards for a study game. A student upload
 Each card has:
 - statement: a short question, definition or fill-in statement (at most ${CARD_TEXT_MAX - 80} characters) that tests one fact from the document. It must make sense on its own to someone who studied the material, and it must not give the answer away.
 - correctAnswer: the right answer (at most ${CARD_OPTION_MAX - 10} characters).
-- wrongAnswer: one wrong answer of the same kind and similar length as the right one, plausible to someone who has not studied, and clearly wrong according to the document (at most ${CARD_OPTION_MAX - 10} characters).
+- wrongAnswers: the number of wrong answers the request asks for, each of the same kind and similar length as the right one, plausible to someone who has not studied, clearly wrong according to the document, and different from each other (each at most ${CARD_OPTION_MAX - 10} characters).
 - quote: one sentence copied word for word from the document that proves the correct answer. Do not paraphrase, shorten or fix it.
 
 Rules:
@@ -49,10 +50,10 @@ const SCHEMA = {
         properties: {
           statement: { type: "string" },
           correctAnswer: { type: "string" },
-          wrongAnswer: { type: "string" },
+          wrongAnswers: { type: "array", items: { type: "string" } },
           quote: { type: "string", description: "Sentence copied word for word from the document" },
         },
-        required: ["statement", "correctAnswer", "wrongAnswer", "quote"],
+        required: ["statement", "correctAnswer", "wrongAnswers", "quote"],
         additionalProperties: false,
       },
     },
@@ -62,6 +63,11 @@ const SCHEMA = {
 };
 
 const asString = (value: any): string => (typeof value === "string" ? value.trim() : "");
+const asStrings = (value: any): string[] =>
+  Array.isArray(value) ? value.map(asString).filter(Boolean) : [];
+
+const wrongAnswersAsked = (wrongCount: number) =>
+  `Give each card exactly ${wrongCount} wrong answer${wrongCount === 1 ? "" : "s"}.`;
 
 const unavailable = () =>
   new ErrorHandler(
@@ -98,7 +104,8 @@ async function ask(
 export async function requestCards(
   text: string,
   count: number,
-  avoid: string[] = []
+  avoid: string[] = [],
+  wrongCount = 1
 ): Promise<GeneratedCards> {
   const input = await ask(
     {
@@ -106,7 +113,7 @@ export async function requestCards(
       description: "Saves the trivia cards written from the document.",
       system: SYSTEM_PROMPT,
       content:
-        `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document.` +
+        `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document. ${wrongAnswersAsked(wrongCount)}` +
         (avoid.length
           ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
               .map((question) => `- ${question}`)
@@ -125,7 +132,7 @@ export async function requestCards(
     cards: rows.map((row) => ({
       statement: asString(row?.statement),
       correctAnswer: asString(row?.correctAnswer),
-      wrongAnswer: asString(row?.wrongAnswer),
+      wrongAnswers: asStrings(row?.wrongAnswers),
       quote: asString(row?.quote),
     })),
   };
@@ -138,7 +145,7 @@ export async function requestCards(
 export interface TopicCardCandidate {
   statement: string;
   correctAnswer: string;
-  wrongAnswer: string;
+  wrongAnswers: string[];
 }
 
 export interface GeneratedTopicCards {
@@ -153,7 +160,7 @@ const TOPIC_SYSTEM_PROMPT = `You write trivia cards for a quiz game. A player na
 Each card has:
 - statement: a short question, definition or fill-in statement (at most ${CARD_TEXT_MAX - 80} characters) that tests one fact. It must make sense on its own and must not give the answer away.
 - correctAnswer: the right answer (at most ${CARD_OPTION_MAX - 10} characters).
-- wrongAnswer: one wrong answer of the same kind and similar length as the right one, plausible to someone who does not know the subject, and unmistakably wrong (at most ${CARD_OPTION_MAX - 10} characters).
+- wrongAnswers: the number of wrong answers the request asks for, each of the same kind and similar length as the right one, plausible to someone who does not know the subject, unmistakably wrong, and different from each other (each at most ${CARD_OPTION_MAX - 10} characters).
 
 Accuracy matters more than anything else here, because nobody can look the answer up while playing:
 - Write a card only when you are certain of the fact and it has exactly one correct answer. Leave out anything disputed, approximate, or a matter of opinion.
@@ -182,9 +189,9 @@ const TOPIC_SCHEMA = {
         properties: {
           statement: { type: "string" },
           correctAnswer: { type: "string" },
-          wrongAnswer: { type: "string" },
+          wrongAnswers: { type: "array", items: { type: "string" } },
         },
-        required: ["statement", "correctAnswer", "wrongAnswer"],
+        required: ["statement", "correctAnswer", "wrongAnswers"],
         additionalProperties: false,
       },
     },
@@ -193,11 +200,13 @@ const TOPIC_SCHEMA = {
   additionalProperties: false,
 };
 
-const CHECK_SYSTEM_PROMPT = `You check two-option trivia questions before they are published. For each question, decide which option is correct from your own knowledge.
+const CHECK_SYSTEM_PROMPT = `You check multiple-choice trivia questions before they are published. Each question has two to four options, lettered A to D. For each question, decide which option is correct from your own knowledge.
 
-Answer "A" or "B" only when that option is clearly correct and the other is clearly wrong. Answer "unsure" when neither option is right, both could be, the question is ambiguous, the answer depends on the date or on opinion, or you are not certain. A wrong card that gets published misleads every player, so "unsure" is the right answer whenever there is real doubt.
+Answer with an option's letter only when that option is clearly correct and every other option is clearly wrong. Answer "unsure" when no option is right, more than one could be, the question is ambiguous, the answer depends on the date or on opinion, or you are not certain. A wrong card that gets published misleads every player, so "unsure" is the right answer whenever there is real doubt.
 
 Give one answer for every question, using its number.`;
+
+const LETTERS = ["A", "B", "C", "D"];
 
 const CHECK_SCHEMA = {
   type: "object",
@@ -208,7 +217,7 @@ const CHECK_SCHEMA = {
         type: "object",
         properties: {
           number: { type: "integer" },
-          choice: { type: "string", enum: ["A", "B", "unsure"] },
+          choice: { type: "string", enum: [...LETTERS, "unsure"] },
         },
         required: ["number", "choice"],
         additionalProperties: false,
@@ -236,7 +245,8 @@ export async function requestTopicCards(
   topic: string,
   prompt: string,
   count: number,
-  avoid: string[] = []
+  avoid: string[] = [],
+  wrongCount = 1
 ): Promise<GeneratedTopicCards> {
   const input = await ask(
     {
@@ -244,7 +254,7 @@ export async function requestTopicCards(
       description: "Saves the trivia cards written for the topic.",
       system: TOPIC_SYSTEM_PROMPT,
       content:
-        `<topic>\n${topic}\n</topic>\n\n<description>\n${prompt}\n</description>\n\nWrite ${count} trivia cards.` +
+        `<topic>\n${topic}\n</topic>\n\n<description>\n${prompt}\n</description>\n\nWrite ${count} trivia cards. ${wrongAnswersAsked(wrongCount)}` +
         (avoid.length
           ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
               .map((question) => `- ${question}`)
@@ -263,7 +273,7 @@ export async function requestTopicCards(
     cards: rows.map((row) => ({
       statement: asString(row?.statement),
       correctAnswer: asString(row?.correctAnswer),
-      wrongAnswer: asString(row?.wrongAnswer),
+      wrongAnswers: asStrings(row?.wrongAnswers),
     })),
   };
 }
@@ -284,7 +294,11 @@ export async function answerCards(
       content:
         `Topic: ${topic}\n\n` +
         questions
-          .map((q, i) => `${i + 1}. ${q.statement}\nA. ${q.options[0]}\nB. ${q.options[1]}`)
+          .map(
+            (q, i) =>
+              `${i + 1}. ${q.statement}\n` +
+              q.options.map((option, o) => `${LETTERS[o]}. ${option}`).join("\n")
+          )
           .join("\n\n"),
       schema: CHECK_SCHEMA,
       tier: "strong",
@@ -297,7 +311,8 @@ export async function answerCards(
   for (const row of rows) {
     const index = Number(row?.number) - 1;
     if (!Number.isInteger(index) || index < 0 || index >= chosen.length) continue;
-    chosen[index] = row.choice === "A" ? 0 : row.choice === "B" ? 1 : null;
+    const picked = LETTERS.indexOf(row.choice);
+    chosen[index] = picked >= 0 && picked < questions[index].options.length ? picked : null;
   }
   return chosen;
 }

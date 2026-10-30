@@ -1,7 +1,7 @@
 import ErrorHandler from "../../utils/ErrorHandler";
 import { redis } from "../../utils/redis";
 import { cleanString, requireString, toInt } from "../../utils/validators";
-import { ICardContent } from "../../models/cardFields";
+import { ICardContent, TOPIC_CARD_OPTIONS } from "../../models/cardFields";
 import { buildCardContent } from "../trivia/cardInput";
 import { getPlan } from "../plan/plan.service";
 import { getGenerateDailyLimit } from "../config/config.service";
@@ -69,6 +69,32 @@ export function excerptForPrompt(text: string, maxChars = PROMPT_MAX_CHARS): str
 }
 
 /**
+ * The options for a drafted card: the right answer at a random position among the first
+ * `optionCount - 1` distinct wrong answers. Null when the model gave too few.
+ */
+export function placeAnswer(
+  correctAnswer: string,
+  wrongAnswers: string[],
+  optionCount: number
+): { options: string[]; correctOptionIndex: number } | null {
+  const seen = new Set([correctAnswer.toLowerCase()]);
+  const wrongs: string[] = [];
+  for (const wrong of wrongAnswers) {
+    const key = wrong.toLowerCase();
+    if (!wrong || seen.has(key)) continue;
+    seen.add(key);
+    wrongs.push(wrong);
+    if (wrongs.length === optionCount - 1) break;
+  }
+  if (!correctAnswer || wrongs.length < optionCount - 1) return null;
+  // Play shuffles the options again; this just keeps the editor from always showing it first.
+  const correctOptionIndex = Math.floor(Math.random() * optionCount);
+  const options = [...wrongs];
+  options.splice(correctOptionIndex, 0, correctAnswer);
+  return { options, correctOptionIndex };
+}
+
+/**
  * Keeps only the cards that are well formed and whose quote really is in the document.
  * A card the model cannot back with the student's own material is dropped, and so is
  * one that repeats a question in `taken`.
@@ -78,7 +104,8 @@ export async function verifyCandidates(
   documentText: string,
   ownerId: string,
   limit: number,
-  taken: string[] = []
+  taken: string[] = [],
+  optionCount: number = TOPIC_CARD_OPTIONS
 ): Promise<DraftCard[]> {
   const haystack = fingerprint(documentText);
   const seen = new Set<string>(taken.map(fingerprint));
@@ -93,20 +120,18 @@ export async function verifyCandidates(
     const key = fingerprint(candidate.statement);
     if (!key || seen.has(key)) continue;
 
-    // The correct answer goes first or second at random; play shuffles the options again.
-    const correctOptionIndex = Math.random() < 0.5 ? 0 : 1;
-    const options =
-      correctOptionIndex === 0
-        ? [candidate.correctAnswer, candidate.wrongAnswer]
-        : [candidate.wrongAnswer, candidate.correctAnswer];
+    const placed = placeAnswer(candidate.correctAnswer, candidate.wrongAnswers, optionCount);
+    if (!placed) continue;
     let content: ICardContent;
     try {
       // The same validator the card endpoints use, so every draft can be saved as it is.
       content = await buildCardContent(
-        { type: "definition", text: candidate.statement, options, correctOptionIndex },
+        { type: "definition", text: candidate.statement, ...placed },
         undefined,
         ownerId,
-        "cards"
+        "cards",
+        undefined,
+        optionCount
       );
     } catch {
       continue;
@@ -181,11 +206,12 @@ async function draftsFromPrompt(
   prompt: string,
   topic: string,
   count: number,
-  ownerId: string
+  ownerId: string,
+  optionCount: number
 ): Promise<{ title?: string; cards: DraftCard[] }> {
   // A few spare cards cover the ones the checks below throw away.
   const spare = count + Math.ceil(count / 4);
-  const generated = await ai.requestTopicCards(topic, prompt, spare);
+  const generated = await ai.requestTopicCards(topic, prompt, spare, [], optionCount - 1);
   if (generated.declined && generated.cards.length === 0) {
     throw new ErrorHandler(generated.declined.slice(0, 300), 422, "PROMPT_REJECTED");
   }
@@ -195,18 +221,16 @@ async function draftsFromPrompt(
   for (const candidate of generated.cards) {
     const key = fingerprint(candidate.statement);
     if (!key || seen.has(key)) continue;
-    // The correct answer goes first or second at random; play shuffles the options again.
-    const correctOptionIndex = Math.random() < 0.5 ? 0 : 1;
-    const options =
-      correctOptionIndex === 0
-        ? [candidate.correctAnswer, candidate.wrongAnswer]
-        : [candidate.wrongAnswer, candidate.correctAnswer];
+    const placed = placeAnswer(candidate.correctAnswer, candidate.wrongAnswers, optionCount);
+    if (!placed) continue;
     try {
       const content = await buildCardContent(
-        { type: "definition", text: candidate.statement, options, correctOptionIndex },
+        { type: "definition", text: candidate.statement, ...placed },
         undefined,
         ownerId,
-        "cards"
+        "cards",
+        undefined,
+        optionCount
       );
       cards.push({ ...content, quote: "" });
     } catch {
@@ -239,6 +263,8 @@ export interface GenerateInput {
   unlimited?: boolean;
   // Questions that already exist where the cards are going; they are not written again.
   avoid?: string[];
+  // Options per card: 2 for General Trivia topics (the default), 4 for custom quizzes.
+  optionCount?: number;
 }
 
 export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
@@ -302,22 +328,21 @@ export async function generateDraftCards(user: PlanUser, input: GenerateInput) {
     }
   }
   const avoid = input.avoid || [];
+  const optionCount = input.optionCount ?? TOPIC_CARD_OPTIONS;
 
   let drafts: DraftCard[];
   let title: string | undefined;
   const excerpt = fromPrompt ? "" : excerptForPrompt(text);
   try {
     if (fromPrompt) {
-      const written = await draftsFromPrompt(prompt, topic, count, userId);
+      const written = await draftsFromPrompt(prompt, topic, count, userId, optionCount);
       drafts = written.cards;
       title = written.title?.slice(0, TITLE_MAX);
     } else {
       // A few spare cards cover the ones the checks below throw away.
       const spare = count + Math.ceil(count / 4);
-      const generated = avoid.length
-        ? await ai.requestCards(excerpt, spare, avoid)
-        : await ai.requestCards(excerpt, spare);
-      drafts = await verifyCandidates(generated.cards, text, userId, count, avoid);
+      const generated = await ai.requestCards(excerpt, spare, avoid, optionCount - 1);
+      drafts = await verifyCandidates(generated.cards, text, userId, count, avoid, optionCount);
       title = generated.title?.slice(0, TITLE_MAX);
     }
     if (drafts.length === 0) {

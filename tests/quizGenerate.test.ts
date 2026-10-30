@@ -28,7 +28,7 @@ const MATERIAL = FACTS.join("\n");
 const candidate = (i: number, extra: Partial<ai.CardCandidate> = {}): ai.CardCandidate => ({
   statement: `Question about fact ${i}?`,
   correctAnswer: `Right answer ${i}`,
-  wrongAnswer: `Wrong answer ${i}`,
+  wrongAnswers: [`Wrong answer ${i}`, `Second wrong ${i}`, `Third wrong ${i}`],
   quote: FACTS[i % FACTS.length],
   ...extra,
 });
@@ -132,6 +132,18 @@ describe("Draft card checks", () => {
     expect(card.options[1 - card.correctOptionIndex]).toBe("Wrong answer 0");
   });
 
+  it("builds four options for a quiz card, the right one anywhere", async () => {
+    const [card] = await verifyCandidates([candidate(0)], MATERIAL, "owner", 10, [], 4);
+    expect(card.options).toHaveLength(4);
+    expect(card.options[card.correctOptionIndex]).toBe("Right answer 0");
+    expect(card.options).toEqual(
+      expect.arrayContaining(["Wrong answer 0", "Second wrong 0", "Third wrong 0"])
+    );
+    // Too few distinct wrong answers for four options: dropped.
+    const short = candidate(1, { wrongAnswers: ["Wrong", "wrong", "Right answer 1"] });
+    expect(await verifyCandidates([short], MATERIAL, "owner", 10, [], 4)).toHaveLength(0);
+  });
+
   it("matches a quote across line breaks, hyphenation and curly quotes", async () => {
     const quote = "Assets  equal\nliabilities plus owner’s equi-\nty";
     expect(await verify([candidate(0, { quote })])).toHaveLength(1);
@@ -148,10 +160,10 @@ describe("Draft card checks", () => {
     const cards = [
       candidate(0),
       candidate(1, { statement: "QUESTION about fact 0?" }), // same question again
-      candidate(2, { wrongAnswer: "right answer 2" }), // both options the same
+      candidate(2, { wrongAnswers: ["right answer 2"] }), // both options the same
       candidate(3, { correctAnswer: "x".repeat(81) }), // option too long
       candidate(4, { statement: "y".repeat(301) }), // statement too long
-      candidate(5, { wrongAnswer: "" }),
+      candidate(5, { wrongAnswers: [""] }),
       candidate(1),
       candidate(2),
       candidate(3),
@@ -234,7 +246,8 @@ describe("Trivia from a document (HTTP)", () => {
       expect(MATERIAL).toContain(card.quote);
     }
     // The model saw the document, and was asked for a few spare cards.
-    expect(requestCards).toHaveBeenCalledWith(MATERIAL, 7);
+    // A custom quiz card has four options, so three wrong answers are asked for.
+    expect(requestCards).toHaveBeenCalledWith(MATERIAL, 7, [], 3);
     expect(await CustomQuizCardModel.countDocuments()).toBe(0);
   });
 
@@ -407,7 +420,7 @@ describe("Trivia from a document (HTTP)", () => {
         expect(card.quote).toBe("");
       }
       // Spare cards were asked for, about the quiz's topic, and no document was read.
-      expect(requestTopicCards).toHaveBeenCalledWith("Space quiz", "Questions about the solar system", 50);
+      expect(requestTopicCards).toHaveBeenCalledWith("Space quiz", "Questions about the solar system", 50, [], 3);
       expect(requestCards).not.toHaveBeenCalled();
       expect(await CustomQuizCardModel.countDocuments()).toBe(0);
     });
@@ -515,7 +528,8 @@ describe("Trivia from a document (HTTP)", () => {
       expect(res.status).toBe(200);
       expect(res.body.cards.map((c: any) => c.text)).toEqual(["Question 1?", "Question 2?", "Question 3?"]);
       // The model is told what exists, as well as being checked afterwards.
-      expect(requestCards).toHaveBeenCalledWith(MATERIAL, 4, ["Question 0?"]);
+      // General Trivia keeps two options: one wrong answer per card.
+      expect(requestCards).toHaveBeenCalledWith(MATERIAL, 4, ["Question 0?"], 1);
 
       const missing = await generate(admin, { topicId: "64b000000000000000000000" });
       expect(missing.status).toBe(404);

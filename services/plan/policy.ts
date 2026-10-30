@@ -1,5 +1,5 @@
 import ErrorHandler from "../../utils/ErrorHandler";
-import CustomQuizModel from "../../models/customQuiz.model";
+import CustomQuizModel, { PRIVATE_QUIZ_ORIGINS } from "../../models/customQuiz.model";
 import { getCustomQuizFreeLimit, getProPricing } from "../config/config.service";
 import { getPlan } from "./plan.service";
 
@@ -24,7 +24,7 @@ export async function assertCanCreateCustomQuiz(user: PlanUser): Promise<void> {
   const current = await CustomQuizModel.countDocuments({
     ownerId: String(user._id),
     deletedAt: null,
-    origin: { $ne: "ai" },
+    origin: { $nin: PRIVATE_QUIZ_ORIGINS },
   });
   if (current >= limit) {
     const pro = await getProPricing();

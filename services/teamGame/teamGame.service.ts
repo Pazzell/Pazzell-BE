@@ -11,6 +11,7 @@ import { getSubmitGraceMs } from "../config/config.service";
 import { isPastDeadline } from "../game/timing";
 import { boardFor, findWinningLine, MAX_TEAMS, MIN_TEAMS } from "./board";
 import { emitGameState, emitTeamMessage, moveToTeamRoom, WatchAccess } from "./realtime";
+import { shuffle } from "../trivia/mix";
 
 // The team game engine. Every change runs through `mutate`: load the game, settle a
 // question whose clock ran out, apply the change, save (retrying on a concurrent save),
@@ -663,6 +664,8 @@ export async function pickCell(code: string, user: Actor, cellIndex: any) {
     const pool = fresh.length ? fresh : left;
     if (!pool.length) throw new ErrorHandler("This quiz has run out of questions", 409, "NO_QUESTIONS_LEFT");
     const card = pool[Math.floor(Math.random() * pool.length)];
+    // Shown in a fresh random order, so the right answer is not always where it was typed.
+    const order = shuffle(card.options.map((_, i) => i));
 
     game.current = {
       cellIndex: index,
@@ -672,8 +675,8 @@ export async function pickCell(code: string, user: Actor, cellIndex: any) {
         type: card.type,
         imageUrl: card.imageUrl,
         text: card.text,
-        options: card.options,
-        correctOptionIndex: card.correctOptionIndex,
+        options: order.map((i) => card.options[i]),
+        correctOptionIndex: order.indexOf(card.correctOptionIndex),
         attribution: card.attribution,
       },
       servedAt: now,

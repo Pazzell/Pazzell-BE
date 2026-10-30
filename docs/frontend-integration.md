@@ -370,7 +370,10 @@ With `timerSeconds: 0` the question carries `"deadlineAt": null, "remainingMs": 
   the session was started with `practice: true`. Put the hand pointer or marker on that option.
   When the field is absent, show no marker. Never guess it on the client.
 - Outside practice there is no answer, no card id and nothing to infer one from. The cards and
-  the two options of each card are in random order.
+  the options of each card are in random order.
+- `options` has 2 entries for General Trivia, campaigns and AI generated trivia, and 4 for a
+  custom quiz (broadcast or personal; older custom quiz cards may still have 2). Lay out 4 as a
+  2 × 2 grid, labelled A to D.
 - `attribution` is the image credit for a picture fetched from an API, or `null`. When it is
   set, show it as small text with the image (the picture's licence requires it).
 - `type` is `image` (show `imageUrl`; `text` is an optional caption) or `definition` (show
@@ -383,7 +386,8 @@ With `timerSeconds: 0` the question carries `"deadlineAt": null, "remainingMs": 
 #### `POST /trivia/sessions/:id/answer`
 
 Body: `{ "questionIndex": 0, "optionIndex": 1 }` where `optionIndex` is the `index` of the
-chosen option as displayed (0 or 1). Send it as soon as the player taps an option.
+chosen option as displayed (0 to 3, one less than the number of options; anything else is
+`400 INVALID_OPTION`). Send it as soon as the player taps an option.
 
 ```json
 { "success": true, "questionIndex": 0, "outcome": "correct", "correctOptionIndex": 1,
@@ -452,6 +456,19 @@ Any logged-in user can create quizzes. The creator picks how each one is played 
 - **`team`**: hosted as a team game (7.6). It has no share link, and no one can play it alone
   through a link; the owner's own test play still works.
 
+A player can also write **personal trivia** (`origin: "personal"`): trivia they make by hand and
+play themselves, offered under **Create Trivia** next to AI generated trivia (7.5). It is a
+custom quiz with these differences:
+
+- Free for everyone, and not part of the freemium quiz limit below. It is never locked when Pro
+  ends.
+- Private: it cannot be published or shared (`409 PERSONAL_TRIVIA_NOT_SHAREABLE`) and is always
+  `mode: "broadcast"` (`400 INVALID_QUIZ_MODE` for `team`). Only its owner can play it.
+- The owner's plays are real plays (`isPreview: false`): they count in its stats and, for a
+  freemium player, toward the campaign interruption rule.
+- It is listed by `GET /custom-quizzes?origin=personal`, not in the plain list.
+- Its cards use the custom quiz format (7.3): pictures or short definitions with 4 options.
+
 - **Freemium:** 1 non-deleted quiz. **Pro:** unlimited. Enforced on the server at creation;
   the second attempt by a freemium user returns `403 UPGRADE_REQUIRED` with
   `details: { feature: "custom_quiz", limit: 1, current: 1, pro: { amount, currency, durationDays } }`.
@@ -470,8 +487,8 @@ Any logged-in user can create quizzes. The creator picks how each one is played 
 
 | Method | Path | Body | Purpose |
 | --- | --- | --- | --- |
-| POST | `/custom-quizzes` | `title`, `mode?` (`broadcast` or `team`, default `broadcast`), `description?`, `defaultTimerSeconds?` (1–15), `defaultCardCount?`, file `image?` or `coverImageUrl?` | Create a draft |
-| GET | `/custom-quizzes` | | The caller's quizzes, with `plan` and `limit` (`null` for Pro) |
+| POST | `/custom-quizzes` | `title`, `origin?` (`manual`, the default, or `personal`), `mode?` (`broadcast` or `team`, default `broadcast`), `description?`, `defaultTimerSeconds?` (1–15), `defaultCardCount?`, file `image?` or `coverImageUrl?` | Create a draft |
+| GET | `/custom-quizzes` | `?origin=personal` (optional) | The caller's quizzes to share or host, with `plan` and `limit` (`null` for Pro); with `?origin=personal`, their personal trivia instead |
 | GET | `/custom-quizzes/:id` | | Quiz + all cards with answers (review screen) |
 | GET | `/custom-quizzes/:id/preview` | | Same as above |
 | PATCH | `/custom-quizzes/:id` | any create field | Edit. Changing `mode` of a live quiz returns `409 QUIZ_LIVE`: unpublish it first |
@@ -527,15 +544,18 @@ locked, revoked, deleted or a team quiz. Render title, creator and a "Log in to 
 Then start the session with `{ "sourceType": "custom", "slug": "<slug>", "timerSeconds", "cardCount" }`.
 The campaign gate applies to it, and a completed play counts toward the player's campaign counter.
 
-### 7.3 Card format (the same for topics, custom quizzes and campaigns)
+### 7.3 Card format (topics, custom quizzes and campaigns)
 
 | Field | Rule |
 | --- | --- |
 | `type` | `"image"` or `"definition"` |
 | `text` | Required for `definition`; optional caption for `image`. Max 300 characters. An image caption asking "Which animal is this?", "Who is this footballer?" and the like is saved as the generic "What is this?" or "Who is this?"; other captions are kept |
 | image | Required for `image`: a multipart file field named `image`, or `imageUrl` returned by `POST /uploads/images` for the same user |
-| `options` | Exactly 2 non-empty, different strings, max 80 characters each. In multipart send it as a JSON string: `["Nigeria","Ghana"]` |
-| `correctOptionIndex` | `0` or `1` |
+| `options` | Non-empty, different strings, max 80 characters each: exactly **4** on a custom quiz card (broadcast, team or personal) and exactly **2** on a General Trivia topic card, a campaign card or an AI generated trivia card. In multipart send it as a JSON string: `["Nigeria","Ghana","Kenya","Togo"]` |
+| `correctOptionIndex` | The index of the correct option: `0` to `3` (or `0` to `1` for 2 options) |
+
+Custom quiz cards saved before quizzes moved to 4 options keep their 2 options and still play.
+Editing such a card without sending `options` keeps them; sending `options` needs all 4.
 
 Invalid cards return `400 INVALID_CARD`; in bulk the message names the row (`Card 3: …`) and
 `details.index` is its zero-based position. Editor responses return a card as
@@ -599,6 +619,8 @@ It can take a minute or two, so show progress and do not retry automatically.
   "usage": { "dailyLimit": 3, "usedToday": 2, "remaining": 1, "resetsAt": "2026-10-12T00:00:00.000Z" } }
 ```
 
+- Drafts for a custom quiz come with 4 options (the AI writes 3 wrong answers), with the right
+  one at a random position. The admin's drafts for a General Trivia topic (section 9) keep 2.
 - `cards` may hold fewer than `requested`: a card the document does not support, or that fails
   the blind check, is dropped.
 - From a description, `prompt` echoes it, `document` is `null` and every `quote` is `""`. A
@@ -726,6 +748,8 @@ never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
   the lobby only; someone with no team can still join one mid-game. Empty teams are dropped at
   start. Up to 6 teams of 20.
 - Questions are copied into the game when served, so editing the quiz mid-game changes nothing.
+  Their options (4 on a team quiz card made now, 2 on an older one) are shown in a fresh random
+  order each time.
 
 **Endpoints.** Each one returns `{ success, game }` with the state below, unless noted.
 
@@ -1212,6 +1236,8 @@ The wallet no longer exists: there is no balance, ledger, bank account or withdr
 | `TEAM_QUIZ_NO_SHARE_LINK` | 409 | regenerate share link | A team quiz is shared through its team game's join link |
 | `AI_TRIVIA_NOT_FOUND` | 404 | AI trivia | Unknown or not yours |
 | `AI_TRIVIA_NOT_SHAREABLE` | 409 | publish | An AI generated trivia has no share link |
+| `PERSONAL_TRIVIA_NOT_SHAREABLE` | 409 | publish | Personal trivia is only for its owner |
+| `INVALID_QUIZ_ORIGIN` | 400 | create a quiz | `origin` is not `manual` or `personal` |
 | `ALREADY_REVIEWED` | 409 | admin AI trivia review | `details.reviewStatus` |
 | `INVALID_STATUS` | 400 | admin AI trivia list | Bad `status` filter |
 | `INVALID_IMAGE_TYPE` / `IMAGE_REQUIRED` / `IMAGE_TOO_LARGE` / `LIMIT_FILE_SIZE` / `INVALID_IMAGE_URL` | 400 | uploads | See section 10 |

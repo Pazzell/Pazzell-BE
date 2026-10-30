@@ -6,12 +6,14 @@ import CustomQuizModel, {
   CUSTOM_QUIZ_MODES,
   CustomQuizMode,
   ICustomQuiz,
+  PRIVATE_QUIZ_ORIGINS,
 } from "../models/customQuiz.model";
 import CustomQuizCardModel from "../models/customQuizCard.model";
 import userModel from "../models/user.model";
 import { assertObjectId, cleanString, requireString, toInt } from "../utils/validators";
 import { resolveImage } from "../services/upload/image.service";
 import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
+import { QUIZ_CARD_OPTIONS, TOPIC_CARD_OPTIONS } from "../models/cardFields";
 import { cardCountBounds, cardMix, getPlayStats } from "../services/trivia/session.service";
 import { assertCanCreateCustomQuiz } from "../services/plan/policy";
 import { getPlan } from "../services/plan/plan.service";
@@ -43,6 +45,7 @@ const ownerQuiz = (quiz: any, cardCount: number) => {
     id: String(quiz._id),
     title: quiz.title,
     mode: quiz.mode || "broadcast",
+    origin: quiz.origin || "manual",
     description: quiz.description || null,
     coverImageUrl: quiz.coverImageUrl || null,
     status: quiz.status,
@@ -85,6 +88,11 @@ async function loadOwnedQuiz(req: Request): Promise<ICustomQuiz> {
   return quiz;
 }
 
+// AI generated trivia keeps the two options it was written with; every other custom quiz
+// (broadcast, team, personal) has four.
+const optionCountFor = (quiz: ICustomQuiz) =>
+  quiz.origin === "ai" ? TOPIC_CARD_OPTIONS : QUIZ_CARD_OPTIONS;
+
 function parseTimer(value: any): number {
   const timer = toInt(value);
   if (!isValidTimerSeconds(timer)) {
@@ -113,20 +121,33 @@ async function parseDefaultCardCount(value: any): Promise<number> {
   return count;
 }
 
+/** `origin` on create: "manual" (the default, a quiz for others) or "personal". */
+function parseCreateOrigin(value: any): "manual" | "personal" {
+  if (value === undefined || value === "manual" || value === "personal") return value ?? "manual";
+  throw new ErrorHandler('origin must be "manual" or "personal"', 400, "INVALID_QUIZ_ORIGIN");
+}
+
 // POST /custom-quizzes  (multipart with optional "image" cover, or JSON)
+// origin "personal" makes trivia the owner plays alone: free, private, never shared.
 export const createQuiz = CatchAsyncError(async (req: Request, res: Response) => {
   const user = req.user!;
   const ownerId = String(user._id);
-  await ensureQuizLocks(ownerId);
-  await assertCanCreateCustomQuiz(user);
-
   const body = req.body || {};
+  const origin = parseCreateOrigin(body.origin);
+  await ensureQuizLocks(ownerId);
+  if (origin === "manual") await assertCanCreateCustomQuiz(user);
+
+  const mode = body.mode === undefined ? "broadcast" : parseMode(body.mode);
+  if (origin === "personal" && mode !== "broadcast") {
+    throw new ErrorHandler("Personal trivia is played alone, not as a team game", 400, "INVALID_QUIZ_MODE");
+  }
   const title = requireString(body.title, "title", 80);
   const { minCards } = await getTriviaCardBounds();
   const quiz = await CustomQuizModel.create({
     ownerId,
     title,
-    mode: body.mode === undefined ? "broadcast" : parseMode(body.mode),
+    origin,
+    mode,
     description: cleanString(body.description, 300),
     coverImageUrl: await resolveImage(req.file, body.coverImageUrl, ownerId, "covers"),
     defaultTimerSeconds:
@@ -146,11 +167,13 @@ export const createQuiz = CatchAsyncError(async (req: Request, res: Response) =>
   res.status(201).json({ success: true, quiz: ownerQuiz(saved, 0) });
 });
 
-// GET /custom-quizzes — the caller's quizzes
+// GET /custom-quizzes — the caller's quizzes. ?origin=personal lists their personal trivia
+// instead (AI generated trivia has its own list at /ai-trivia).
 export const listMyQuizzes = CatchAsyncError(async (req: Request, res: Response) => {
   const ownerId = String(req.user!._id);
   await ensureQuizLocks(ownerId);
-  const quizzes = await CustomQuizModel.find({ ownerId, deletedAt: null, origin: { $ne: "ai" } })
+  const origin = req.query.origin === "personal" ? "personal" : { $nin: PRIVATE_QUIZ_ORIGINS };
+  const quizzes = await CustomQuizModel.find({ ownerId, deletedAt: null, origin })
     .sort({ createdAt: 1 })
     .lean();
   const counts = await CustomQuizCardModel.aggregate([
@@ -191,6 +214,9 @@ export const updateQuiz = CatchAsyncError(async (req: Request, res: Response) =>
   if (body.title !== undefined) quiz.title = requireString(body.title, "title", 80);
   if (body.mode !== undefined) {
     const mode = parseMode(body.mode);
+    if (quiz.origin === "personal" && mode !== "broadcast") {
+      throw new ErrorHandler("Personal trivia is played alone, not as a team game", 400, "INVALID_QUIZ_MODE");
+    }
     // Switching a live quiz would cut off a link people have, or open one nobody expects.
     if (mode !== (quiz.mode || "broadcast") && quiz.status === "live") {
       throw new ErrorHandler(
@@ -231,7 +257,14 @@ export const deleteQuiz = CatchAsyncError(async (req: Request, res: Response) =>
 // POST /custom-quizzes/:id/cards  (multipart with "image", or JSON)
 export const createCard = CatchAsyncError(async (req: Request, res: Response) => {
   const quiz = await loadOwnedQuiz(req);
-  const content = await buildCardContent(req.body, req.file, quiz.ownerId, "cards");
+  const content = await buildCardContent(
+    req.body,
+    req.file,
+    quiz.ownerId,
+    "cards",
+    undefined,
+    optionCountFor(quiz)
+  );
   const card = await CustomQuizCardModel.create({ quizId: String(quiz._id), ...content });
   res.status(201).json({ success: true, card: editorCard(card) });
 });
@@ -239,7 +272,7 @@ export const createCard = CatchAsyncError(async (req: Request, res: Response) =>
 // POST /custom-quizzes/:id/cards/bulk  { cards: [...] }
 export const bulkCreateCards = CatchAsyncError(async (req: Request, res: Response) => {
   const quiz = await loadOwnedQuiz(req);
-  const contents = await buildBulkCards(req.body, quiz.ownerId, "cards");
+  const contents = await buildBulkCards(req.body, quiz.ownerId, "cards", optionCountFor(quiz));
   const cards = await CustomQuizCardModel.insertMany(
     contents.map((content) => ({ quizId: String(quiz._id), ...content }))
   );
@@ -261,7 +294,14 @@ async function loadQuizCard(quiz: ICustomQuiz, cardId: string) {
 export const updateCard = CatchAsyncError(async (req: Request, res: Response) => {
   const quiz = await loadOwnedQuiz(req);
   const card = await loadQuizCard(quiz, req.params.cardId);
-  const content = await buildCardContent(req.body, req.file, quiz.ownerId, "cards", card);
+  const content = await buildCardContent(
+    req.body,
+    req.file,
+    quiz.ownerId,
+    "cards",
+    card,
+    optionCountFor(quiz)
+  );
   card.set(content);
   if (content.type === "definition") card.imageUrl = undefined;
   await card.save();
@@ -308,6 +348,13 @@ export const publishQuiz = CatchAsyncError(async (req: Request, res: Response) =
   assertNotLocked(quiz);
   if (quiz.origin === "ai") {
     throw new ErrorHandler("An AI generated trivia cannot be shared", 409, "AI_TRIVIA_NOT_SHAREABLE");
+  }
+  if (quiz.origin === "personal") {
+    throw new ErrorHandler(
+      "Personal trivia is just for you, so it cannot be published or shared",
+      409,
+      "PERSONAL_TRIVIA_NOT_SHAREABLE"
+    );
   }
 
   const min = await minCardsFor(quiz);
@@ -394,6 +441,8 @@ export const generateCards = CatchAsyncError(async (req: Request, res: Response)
     prompt: body.prompt,
     topic: body.topic,
     count: body.count,
+    // Drafts for a broadcast, team or personal quiz come with four options.
+    optionCount: QUIZ_CARD_OPTIONS,
   });
   res.status(200).json({ success: true, ...result });
 });

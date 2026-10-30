@@ -1,7 +1,7 @@
 import ErrorHandler from "../../utils/ErrorHandler";
 import { redis } from "../../utils/redis";
 import { isObjectId, requireString, toInt } from "../../utils/validators";
-import { ICardContent } from "../../models/cardFields";
+import { ICardContent, TOPIC_CARD_OPTIONS } from "../../models/cardFields";
 import CustomQuizModel, { ICustomQuiz } from "../../models/customQuiz.model";
 import CustomQuizCardModel from "../../models/customQuizCard.model";
 import TriviaTopicModel from "../../models/triviaTopic.model";
@@ -16,7 +16,12 @@ import {
   getProPricing,
 } from "../config/config.service";
 import * as ai from "../quizGen/ai";
-import { GENERATE_AVOID_MAX, GENERATE_MAX_COUNT, fingerprint } from "../quizGen/generate.service";
+import {
+  GENERATE_AVOID_MAX,
+  GENERATE_MAX_COUNT,
+  fingerprint,
+  placeAnswer,
+} from "../quizGen/generate.service";
 
 // AI generated trivia: a Pro player names a topic and describes the questions they want;
 // the AI writes the cards, a second request answers them blind, and the cards both
@@ -142,16 +147,13 @@ async function buildCards(
   for (const candidate of candidates) {
     const key = fingerprint(candidate.statement);
     if (!key || seen.has(key)) continue;
-    // The correct answer goes first or second at random; play shuffles the options again.
-    const correctOptionIndex = Math.random() < 0.5 ? 0 : 1;
-    const options =
-      correctOptionIndex === 0
-        ? [candidate.correctAnswer, candidate.wrongAnswer]
-        : [candidate.wrongAnswer, candidate.correctAnswer];
+    // AI generated trivia keeps two options, like the General Trivia it can be added to.
+    const placed = placeAnswer(candidate.correctAnswer, candidate.wrongAnswers, TOPIC_CARD_OPTIONS);
+    if (!placed) continue;
     try {
       cards.push(
         await buildCardContent(
-          { type: "definition", text: candidate.statement, options, correctOptionIndex },
+          { type: "definition", text: candidate.statement, ...placed },
           undefined,
           ownerId,
           "cards"
