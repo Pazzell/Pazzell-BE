@@ -3,7 +3,8 @@ import { AddressInfo } from "net";
 import { io as connectClient, Socket } from "socket.io-client";
 import { connectTestDB, closeTestDB } from "./setup";
 import { closeRedisConnection } from "../utils/redis";
-import { api, createUser, resetState, addQuizCards, TestUser } from "./helpers";
+import { api, createUser, createTopic, resetState, addQuizCards, TestUser } from "./helpers";
+import TriviaTopicModel from "../models/triviaTopic.model";
 import { app } from "../app";
 import TeamGameModel from "../models/teamGame.model";
 import CustomQuizCardModel from "../models/customQuizCard.model";
@@ -47,8 +48,24 @@ async function correctOption(code: string) {
   return game!.current!.card.correctOptionIndex;
 }
 
-/** The leader of the team in turn opens a cell and answers it right or wrong. */
-async function play(leader: TestUser, code: string, cell: number, right: boolean) {
+// Players by id, so a test can act as whoever leads the team in turn: the lead moves to
+// the next member after every turn.
+const players = new Map<string, TestUser>();
+const remember = (...users: TestUser[]) => users.forEach((u) => players.set(u.id, u));
+
+/** The current leader of the team in turn, from the database. */
+async function leaderInTurn(code: string): Promise<TestUser> {
+  const game = (await TeamGameModel.findOne({ code }).lean())!;
+  const team = game.teams.find((t) => t.id === game.turnTeamId)!;
+  return players.get(team.leaderId!)!;
+}
+
+/**
+ * The team of `member` plays its turn: its current leader opens a cell and answers it
+ * right or wrong. `member` only says which team is meant.
+ */
+async function play(member: TestUser, code: string, cell: number, right: boolean) {
+  const leader = (await leaderInTurn(code)) ?? member;
   expect((await pick(leader, code, cell)).status).toBe(200);
   const correct = await correctOption(code);
   const res = await answer(leader, code, right ? correct : 1 - correct);
@@ -62,6 +79,7 @@ async function startedGame() {
   const a = await createUser();
   const a2 = await createUser();
   const b = await createUser();
+  remember(host, a, a2, b);
   const code = await createGame(host);
   await join(a, code, "t1");
   await join(a2, code, "t1");
@@ -387,12 +405,123 @@ describe("Team games", () => {
       expect(joined.teams[1].members).toHaveLength(2);
     });
 
+    it("passes the lead to the next team member after each turn", async () => {
+      const { a, a2, b, code } = await startedGame();
+      const leaderOf = async (teamId: string) =>
+        (await TeamGameModel.findOne({ code }).lean())!.teams.find((t) => t.id === teamId)!.leaderId;
+
+      expect(await leaderOf("t1")).toBe(a.id);
+      await play(a, code, 0, false); // a leads A's first turn, wrong or right
+      expect(await leaderOf("t1")).toBe(a2.id);
+      expect(await leaderOf("t2")).toBe(b.id);
+
+      await play(b, code, 3, true); // a team of one keeps its only member as leader
+      expect(await leaderOf("t2")).toBe(b.id);
+
+      // A's next turn is a2's: a can no longer pick.
+      expect((await pick(a, code, 1)).body.code).toBe("NOT_LEADER");
+      await play(a2, code, 1, true);
+      expect(await leaderOf("t1")).toBe(a.id); // and round again
+    });
+
     it("uses the copied question even if the quiz is edited mid-game", async () => {
       const { a, code } = await startedGame();
       await pick(a, code, 0);
       const correct = await correctOption(code);
       await CustomQuizCardModel.deleteMany({});
       expect((await answer(a, code, correct)).body.game.lastPlay.outcome).toBe("correct");
+    });
+  });
+
+  describe("topic games", () => {
+    /** A self-serve game from a General Trivia topic, created by `creator`. */
+    async function topicGame(creator: TestUser, extra: Record<string, any> = {}, cards = 12) {
+      const topicId = await createTopic(cards, "Capitals");
+      const res = await api().post(base).set(creator.auth).send({ topicId, ...extra });
+      return { res, topicId, code: res.body.game?.code as string };
+    }
+
+    it("lets any player create one, play in it and start it", async () => {
+      const creator = await createUser();
+      const friend = await createUser();
+      const stranger = await createUser();
+      remember(creator, friend, stranger);
+
+      const { res, topicId, code } = await topicGame(creator, { teamCount: 2, timerSeconds: 15 });
+      expect(res.status).toBe(201);
+      expect(res.body.game).toMatchObject({
+        kind: "topic",
+        status: "lobby",
+        quiz: { id: null, title: "Capitals" },
+        topic: { id: topicId, name: "Capitals" },
+        host: { userId: creator.id },
+        timerSeconds: 15,
+        joinUrl: `https://app.pazzell.test/team/${code}`,
+      });
+      // The creator plays: already on Team A, as its leader.
+      expect(res.body.game.teams[0]).toMatchObject({ leaderId: creator.id });
+      expect(res.body.game.teams[0].members.map((m: any) => m.userId)).toEqual([creator.id]);
+
+      // They can switch team like anyone else.
+      expect((await join(creator, code, "t2")).body.game.teams[1].leaderId).toBe(creator.id);
+      expect((await join(creator, code, "t1")).status).toBe(200);
+
+      await join(friend, code, "t2");
+      expect((await start(friend, code)).body.code).toBe("NOT_HOST");
+      const started = (await start(creator, code)).body.game;
+      expect(started.status).toBe("playing");
+
+      // Questions come from the topic; nobody sees an answer before it is settled.
+      const opened = (await pick(creator, code, 4)).body.game;
+      expect(opened.current.question.text).toMatch(/^Statement number/);
+      expect(JSON.stringify(opened)).not.toContain("correctOptionIndex");
+      const correct = await correctOption(code);
+      expect((await answer(creator, code, correct)).body.game.teams[0].score).toBe(1);
+    });
+
+    it("needs an active topic with a question for every cell", async () => {
+      const creator = await createUser();
+      expect((await topicGame(creator, {}, 5)).res.body.code).toBe("NOT_ENOUGH_CARDS");
+      expect((await topicGame(creator, { teamCount: 3 }, 12)).res.body.code).toBe("NOT_ENOUGH_CARDS");
+
+      const hidden = await createTopic(12, "Hidden");
+      await TriviaTopicModel.updateOne({ _id: hidden }, { isActive: false });
+      const res = await api().post(base).set(creator.auth).send({ topicId: hidden });
+      expect(res.body.code).toBe("TOPIC_NOT_FOUND");
+      expect((await topicGame(creator, { timerSeconds: 45 })).res.body.code).toBe("INVALID_TIMER");
+    });
+
+    it("hands control to the next player when the creator leaves, and cancels an empty lobby", async () => {
+      const creator = await createUser();
+      const friend = await createUser();
+      const { code } = await topicGame(creator);
+      await join(friend, code, "t2");
+
+      const left = (await api().post(`${base}/${code}/leave`).set(creator.auth)).body.game;
+      expect(left.host).toMatchObject({ userId: friend.id });
+      expect(left.status).toBe("lobby");
+      expect((await start(friend, code)).body.code).toBe("NOT_ENOUGH_TEAMS"); // friend is host now
+
+      const empty = (await api().post(`${base}/${code}/leave`).set(friend.auth)).body.game;
+      expect(empty.status).toBe("cancelled");
+    });
+
+    it("has a public result anyone can share", async () => {
+      const creator = await createUser();
+      const friend = await createUser();
+      remember(creator, friend);
+      const { code } = await topicGame(creator);
+      await join(friend, code, "t2");
+      await start(creator, code);
+      await play(creator, code, 0, true);
+      await play(friend, code, 3, true);
+      await play(creator, code, 1, true);
+      await play(friend, code, 4, true);
+      await play(creator, code, 2, true);
+
+      const res = await api().get(`${base}/${code}/result`);
+      expect(res.status).toBe(200);
+      expect(res.body.result).toMatchObject({ kind: "topic", quiz: { title: "Capitals" }, winnerTeamId: "t1" });
     });
   });
 

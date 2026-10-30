@@ -1,13 +1,17 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import { ICardContent, cardContentFields } from "./cardFields";
 
-// A team game: a host's custom quiz played as tic-tac-toe between teams.
+// A team game played as tic-tac-toe between teams, from either
+//   - "quiz": a host's own team quiz; the host runs the game and does not play, or
+//   - "topic": a General Trivia topic; whoever creates it plays too and starts it.
 //   lobby -> playing -> finished   (or lobby -> cancelled)
 // Teams take turns. The leader of the team in turn picks a numbered cell, which serves a
-// question; the team deliberates in its own chat and the leader answers. A correct answer
-// scores the team a point and claims the cell. A full line wins; a full board goes to the
-// highest score. See services/teamGame/teamGame.service.ts.
+// question; the team deliberates in its own chat and the leader answers. The lead then
+// passes to the next member of that team. A correct answer scores the team a point and
+// claims the cell. A full line wins; a full board goes to the highest score.
+// See services/teamGame/teamGame.service.ts.
 export type TeamGameStatus = "lobby" | "playing" | "finished" | "cancelled";
+export type TeamGameKind = "quiz" | "topic";
 export type TeamGameEndReason = "line" | "board_full" | "host_ended";
 export type TeamPlayOutcome = "correct" | "wrong" | "timeout";
 
@@ -49,11 +53,15 @@ export interface ITeamPlay {
 
 export interface ITeamGame extends Document {
   code: string; // unguessable join token used in the link
+  kind: TeamGameKind;
+  // The quiz host, or for a topic game the player who controls start and end (the
+  // creator, or whoever took over when they left the lobby).
   hostId: string;
   hostName: string;
   hostAvatar?: string;
-  quizId: string;
-  quizTitle: string;
+  quizId?: string; // kind "quiz"
+  topicId?: string; // kind "topic"
+  quizTitle: string; // the quiz title or topic name shown to players
   coverImageUrl?: string;
   status: TeamGameStatus;
   timerSeconds: number;
@@ -127,10 +135,12 @@ const playSchema = new Schema<ITeamPlay>(
 const teamGameSchema: Schema<ITeamGame> = new mongoose.Schema(
   {
     code: { type: String, required: true, unique: true },
+    kind: { type: String, enum: ["quiz", "topic"], default: "quiz" },
     hostId: { type: String, required: true, index: true },
     hostName: { type: String, required: true },
     hostAvatar: { type: String },
-    quizId: { type: String, required: true },
+    quizId: { type: String },
+    topicId: { type: String },
     quizTitle: { type: String, required: true },
     coverImageUrl: { type: String },
     status: {
