@@ -1268,7 +1268,7 @@ Per user (per IP when logged out). Exceeding one returns `429 RATE_LIMITED`.
 
 | Variable | Why it matters to the frontend |
 | --- | --- |
-| `FRONTEND_URL` | Origin used to build `shareUrl` (`/q/:slug`), the payment return URL (`/payment/verify?reference=`) and the password-reset link (`/reset-password?token=`). The frontend must serve those three routes |
+| `FRONTEND_URL` | The site's public address, used to build `shareUrl` (`/q/:slug`), team game `joinUrl` and `resultUrl` (`/team/:code`), the payment return URL (`/payment/verify?reference=`) and the password-reset link (`/reset-password?token=`). The frontend must serve those routes. Set one address (`https://pazzell.com` in production); if several are listed, the first that is not localhost is used, and in production a link never points at localhost |
 
 **Backend**
 

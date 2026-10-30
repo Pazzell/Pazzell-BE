@@ -3,10 +3,10 @@ import ErrorHandler from "../../utils/ErrorHandler";
 import PaymentModel, { IPayment, PaymentPurpose } from "../../models/payment.model";
 import { paystackService } from "./paystack.service";
 import { getCampaignPricing, getProPricing } from "../config/config.service";
+import { frontendUrl } from "../config/frontendUrl";
 import { applyProPayment } from "../plan/plan.service";
 import { activateCampaignFromPayment } from "../campaign/campaign.service";
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
 interface CheckoutParams {
   user: { _id: any; email: string };
@@ -89,7 +89,7 @@ export async function startCheckout(params: CheckoutParams): Promise<CheckoutRes
       amount: pricing.amount,
       currency: pricing.currency,
       reference,
-      callbackUrl: `${FRONTEND_URL}/payment/verify?reference=${reference}`,
+      callbackUrl: `${frontendUrl()}/payment/verify?reference=${reference}`,
       metadata: {
         paymentId: String(payment._id),
         purpose: params.purpose,

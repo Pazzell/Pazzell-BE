@@ -1,6 +1,7 @@
 import axios from "axios";
 import { IMAGE_MAX_BYTES } from "../upload/image.service";
 import { PERSON_PROMPT, THING_PROMPT } from "./imagePrompt";
+import { frontendUrl } from "../config/frontendUrl";
 
 // Free image source for trivia: Wikidata picks the well-known things in a category,
 // Wikimedia Commons supplies the picture together with its licence and author.
@@ -10,7 +11,7 @@ const SPARQL_URL = "https://query.wikidata.org/sparql";
 const COMMONS_API_URL = "https://commons.wikimedia.org/w/api.php";
 
 const userAgent = () =>
-  `PazzellTrivia/1.0 (${process.env.WIKIMEDIA_CONTACT || process.env.FRONTEND_URL || "pazzell"})`;
+  `PazzellTrivia/1.0 (${process.env.WIKIMEDIA_CONTACT || frontendUrl()})`;
 
 export interface ImportCategory {
   key: string;

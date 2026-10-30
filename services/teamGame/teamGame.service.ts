@@ -9,6 +9,7 @@ import TeamGameMessageModel, { TEAM_MESSAGE_MAX } from "../../models/teamGameMes
 import { ensureQuizLocks } from "../customQuiz/quizLock.service";
 import { getSubmitGraceMs } from "../config/config.service";
 import { isPastDeadline } from "../game/timing";
+import { frontendUrl } from "../config/frontendUrl";
 import { boardFor, findWinningLine, MAX_TEAMS, MIN_TEAMS } from "./board";
 import { emitGameState, emitTeamMessage, moveToTeamRoom, WatchAccess } from "./realtime";
 
@@ -26,9 +27,8 @@ const CHAT_HISTORY = 50;
 const TEAM_NAMES = ["Team A", "Team B", "Team C", "Team D", "Team E", "Team F"];
 const TEAM_COLORS = ["#ef4444", "#3b82f6", "#22c55e", "#f59e0b", "#a855f7", "#ec4899"];
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
-const joinUrlFor = (code: string) => `${FRONTEND_URL}/team/${code}`;
-const resultUrlFor = (code: string) => `${FRONTEND_URL}/team/${code}/result`;
+const joinUrlFor = (code: string) => `${frontendUrl()}/team/${code}`;
+const resultUrlFor = (code: string) => `${frontendUrl()}/team/${code}/result`;
 
 // 72 bits, URL-safe: enough that join links cannot be guessed.
 const newCode = () => randomBytes(9).toString("base64url");

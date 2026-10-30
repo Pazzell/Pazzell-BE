@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { randomBytes } from "crypto";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
+import { frontendUrl } from "../services/config/frontendUrl";
 import CustomQuizModel, {
   CUSTOM_QUIZ_MODES,
   CustomQuizMode,
@@ -27,11 +28,10 @@ import {
   isValidTimerSeconds,
 } from "../services/config/config.service";
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
 // 128 bits of randomness, URL-safe: share links cannot be guessed or enumerated.
 const newShareSlug = () => randomBytes(16).toString("base64url");
-const shareUrlFor = (slug?: string) => (slug ? `${FRONTEND_URL}/q/${slug}` : null);
+const shareUrlFor = (slug?: string) => (slug ? `${frontendUrl()}/q/${slug}` : null);
 
 const isTeamQuiz = (quiz: { mode?: string }) => quiz.mode === "team";
 
