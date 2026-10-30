@@ -178,11 +178,19 @@ describe("Team games", () => {
       const res = await api()
         .patch(`${base}/${code}`)
         .set(host.auth)
-        .send({ teamCount: 3, timerSeconds: 45, teams: [{ id: "t1", name: "Owls" }] });
+        .send({ teamCount: 3, timerSeconds: 25, teams: [{ id: "t1", name: "Owls" }] });
       expect(res.status).toBe(200);
       expect(res.body.game.teams.map((t: any) => t.name)).toEqual(["Owls", "Team B", "Team C"]);
       expect(res.body.game.board).toMatchObject({ size: 4, lineLength: 3 });
-      expect(res.body.game.timerSeconds).toBe(45);
+      expect(res.body.game.timerSeconds).toBe(25);
+      for (const timerSeconds of [5, 10, 15, 20, 30]) {
+        const ok = await api().patch(`${base}/${code}`).set(host.auth).send({ timerSeconds });
+        expect(ok.body.game.timerSeconds).toBe(timerSeconds);
+      }
+      for (const timerSeconds of [0, 4, 12, 35, 60, 120]) {
+        const bad = await api().patch(`${base}/${code}`).set(host.auth).send({ timerSeconds });
+        expect(bad.body.code).toBe("INVALID_TIMER");
+      }
 
       // Shrinking takes the dropped team's players off it.
       const shrunk = await api().patch(`${base}/${code}`).set(host.auth).send({ teamCount: 2 });

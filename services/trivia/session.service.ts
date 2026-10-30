@@ -221,7 +221,7 @@ export async function startSession(
 
   // A replayed practice set in a new order, or else a random card set in random order,
   // mixed as the player asked (or else the topic's own share, or else the global one).
-  // Each card's two options are shuffled as well.
+  // Each card's options are shuffled as well.
   const selected = practised
     ? shuffle(practised)
     : pickMixedCards(
@@ -242,7 +242,7 @@ export async function startSession(
         correctOptionIndex: card.correctOptionIndex,
         attribution: card.attribution,
       },
-      optionOrder: Math.random() < 0.5 ? [0, 1] : [1, 0],
+      optionOrder: shuffle(card.options.map((_, index) => index)),
     }))
   );
 
@@ -416,7 +416,7 @@ export async function getCurrentQuestion(player: Player, sessionId: string) {
 }
 
 /**
- * Submits the answer for the current question. `optionIndex` is the position (0 or 1)
+ * Submits the answer for the current question. `optionIndex` is the position (0 to 3)
  * of the chosen option as it was displayed. Late submissions are timeouts. Submitting
  * again for a settled question returns the stored outcome and changes nothing.
  */
@@ -457,8 +457,12 @@ export async function submitAnswer(
     if (question.deadlineAt && isPastDeadline(question.deadlineAt, now, await getSubmitGraceMs())) {
       outcome = "timeout";
     } else {
-      if (optionIndex !== 0 && optionIndex !== 1) {
-        throw new ErrorHandler("optionIndex must be 0 or 1", 400, "INVALID_OPTION");
+      if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= question.optionOrder.length) {
+        throw new ErrorHandler(
+          `optionIndex must be from 0 to ${question.optionOrder.length - 1}`,
+          400,
+          "INVALID_OPTION"
+        );
       }
       selected = question.optionOrder[optionIndex];
       outcome = selected === question.card.correctOptionIndex ? "correct" : "wrong";

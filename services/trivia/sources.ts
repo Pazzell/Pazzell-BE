@@ -4,7 +4,7 @@ import { ICardContent } from "../../models/cardFields";
 import { TriviaSourceType } from "../../models/triviaAttempt.model";
 import TriviaTopicModel from "../../models/triviaTopic.model";
 import TriviaCardModel from "../../models/triviaCard.model";
-import CustomQuizModel from "../../models/customQuiz.model";
+import CustomQuizModel, { PRIVATE_QUIZ_ORIGINS } from "../../models/customQuiz.model";
 import CustomQuizCardModel from "../../models/customQuizCard.model";
 import CampaignModel from "../../models/campaign.model";
 import CampaignCardModel from "../../models/campaignCard.model";
@@ -102,8 +102,8 @@ export async function resolveSource(
       sourceType: "custom",
       sourceId: String(quiz._id),
       title: quiz.title,
-      // An AI generated trivia has no other players: its owner's plays are real plays.
-      isPreview: isOwner && quiz.origin !== "ai",
+      // AI generated and personal trivia have no other players: the owner's plays are real.
+      isPreview: isOwner && !PRIVATE_QUIZ_ORIGINS.includes(quiz.origin),
       defaults: { timerSeconds: quiz.defaultTimerSeconds, cardCount: quiz.defaultCardCount },
       brand: null,
       cards: toCards(cards),

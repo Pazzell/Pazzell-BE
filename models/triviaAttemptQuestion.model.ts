@@ -10,7 +10,7 @@ export interface ITriviaAttemptQuestion extends Document {
   quizIndex: number; // position in the quiz
   cardId: string;
   card: ICardContent; // snapshot, including the correct answer — server-side only
-  optionOrder: number[]; // display position -> original option index, e.g. [1, 0]
+  optionOrder: number[]; // display position -> original option index, e.g. [2, 0, 3, 1]
   servedAt?: Date;
   deadlineAt?: Date;
   answeredAt?: Date;

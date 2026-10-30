@@ -11,13 +11,15 @@ import { getSubmitGraceMs } from "../config/config.service";
 import { isPastDeadline } from "../game/timing";
 import { boardFor, findWinningLine, MAX_TEAMS, MIN_TEAMS } from "./board";
 import { emitGameState, emitTeamMessage, moveToTeamRoom, WatchAccess } from "./realtime";
+import { shuffle } from "../trivia/mix";
 
 // The team game engine. Every change runs through `mutate`: load the game, settle a
 // question whose clock ran out, apply the change, save (retrying on a concurrent save),
 // then push the new state to everyone watching. The server owns the clock and the
 // correct answers; clients only ever see the current question without its answer.
 
-export const TEAM_TIMER = { minSeconds: 10, maxSeconds: 120, defaultSeconds: 30 };
+// Seconds to answer in a team game: 5, 10, 15, 20, 25 or 30.
+export const TEAM_TIMER = { minSeconds: 5, maxSeconds: 30, stepSeconds: 5, defaultSeconds: 30 };
 export const MAX_TEAM_SIZE = 20;
 const MAX_PLAYERS = MAX_TEAMS * MAX_TEAM_SIZE;
 const TEAM_NAME_MAX = 30;
@@ -403,13 +405,19 @@ function parseTeamCount(value: any): number {
 
 function parseTimer(value: any): number {
   const seconds = toInt(value);
-  const { minSeconds, maxSeconds } = TEAM_TIMER;
-  if (seconds === undefined || !Number.isInteger(seconds) || seconds < minSeconds || seconds > maxSeconds) {
+  const { minSeconds, maxSeconds, stepSeconds } = TEAM_TIMER;
+  if (
+    seconds === undefined ||
+    !Number.isInteger(seconds) ||
+    seconds < minSeconds ||
+    seconds > maxSeconds ||
+    seconds % stepSeconds !== 0
+  ) {
     throw new ErrorHandler(
-      `timerSeconds must be a whole number from ${minSeconds} to ${maxSeconds}`,
+      `timerSeconds must be ${minSeconds} to ${maxSeconds} seconds in steps of ${stepSeconds}`,
       400,
       "INVALID_TIMER",
-      { minSeconds, maxSeconds }
+      { minSeconds, maxSeconds, stepSeconds }
     );
   }
   return seconds;
@@ -445,7 +453,9 @@ export async function createTeamGame(user: Actor, body: any) {
   const quiz = await playableQuiz(assertObjectId(body?.quizId, "quiz id"), ownerId);
   const teamCount = body?.teamCount === undefined ? MIN_TEAMS : parseTeamCount(body.teamCount);
   const fallbackTimer =
-    quiz.defaultTimerSeconds >= TEAM_TIMER.minSeconds && quiz.defaultTimerSeconds <= TEAM_TIMER.maxSeconds
+    quiz.defaultTimerSeconds >= TEAM_TIMER.minSeconds &&
+    quiz.defaultTimerSeconds <= TEAM_TIMER.maxSeconds &&
+    quiz.defaultTimerSeconds % TEAM_TIMER.stepSeconds === 0
       ? quiz.defaultTimerSeconds
       : TEAM_TIMER.defaultSeconds;
   const timerSeconds = body?.timerSeconds === undefined ? fallbackTimer : parseTimer(body.timerSeconds);
@@ -663,6 +673,8 @@ export async function pickCell(code: string, user: Actor, cellIndex: any) {
     const pool = fresh.length ? fresh : left;
     if (!pool.length) throw new ErrorHandler("This quiz has run out of questions", 409, "NO_QUESTIONS_LEFT");
     const card = pool[Math.floor(Math.random() * pool.length)];
+    // Shown in a fresh random order, so the right answer is not always where it was typed.
+    const order = shuffle(card.options.map((_, i) => i));
 
     game.current = {
       cellIndex: index,
@@ -672,8 +684,8 @@ export async function pickCell(code: string, user: Actor, cellIndex: any) {
         type: card.type,
         imageUrl: card.imageUrl,
         text: card.text,
-        options: card.options,
-        correctOptionIndex: card.correctOptionIndex,
+        options: order.map((i) => card.options[i]),
+        correctOptionIndex: order.indexOf(card.correctOptionIndex),
         attribution: card.attribution,
       },
       servedAt: now,

@@ -30,6 +30,9 @@ async function liveQuiz(owner: TestUser, title = "Live quiz") {
   return { id, slug: published.body.quiz.shareSlug as string };
 }
 
+// A quiz card has four options.
+const FOUR = ["a", "b", "c", "d"];
+
 describe("Custom trivia", () => {
   beforeAll(connectTestDB);
   afterEach(resetState);
@@ -93,7 +96,7 @@ describe("Custom trivia", () => {
       const added = await api()
         .post(`${base}/${id}/cards`)
         .set(user.auth)
-        .send({ type: "definition", text: "The fifth card", options: ["Yes", "No"], correctOptionIndex: 0 });
+        .send({ type: "definition", text: "The fifth card", options: ["Yes", "No", "Maybe", "Never"], correctOptionIndex: 0 });
       expect(added.status).toBe(201);
 
       const live = await publish(user, id);
@@ -103,16 +106,70 @@ describe("Custom trivia", () => {
       expect(live.body.quiz.shareUrl).toBe(`https://app.pazzell.test/q/${live.body.quiz.shareSlug}`);
     });
 
-    it("rejects cards that do not have exactly 2 options and a marked answer", async () => {
+    it("rejects cards that do not have exactly 4 options and a marked answer", async () => {
       const user = await createUser();
       const id = (await create(user)).body.quiz.id;
       const send = (card: any) => api().post(`${base}/${id}/cards`).set(user.auth).send(card);
-      expect((await send({ type: "definition", text: "x", options: ["a"], correctOptionIndex: 0 })).status).toBe(400);
+      expect((await send({ type: "definition", text: "x", options: ["a", "b"], correctOptionIndex: 0 })).status).toBe(400);
       expect((await send({ type: "definition", text: "x", options: ["a", "b", "c"], correctOptionIndex: 0 })).status).toBe(400);
-      expect((await send({ type: "definition", text: "x", options: ["a", "b"], correctOptionIndex: 2 })).status).toBe(400);
-      expect((await send({ type: "definition", text: "x", options: ["a", "a"], correctOptionIndex: 0 })).status).toBe(400);
-      expect((await send({ type: "definition", options: ["a", "b"], correctOptionIndex: 0 })).status).toBe(400);
-      expect((await send({ type: "image", options: ["a", "b"], correctOptionIndex: 0 })).status).toBe(400);
+      expect((await send({ type: "definition", text: "x", options: ["a", "b", "c", "d", "e"], correctOptionIndex: 0 })).status).toBe(400);
+      expect((await send({ type: "definition", text: "x", options: FOUR, correctOptionIndex: 4 })).status).toBe(400);
+      expect((await send({ type: "definition", text: "x", options: ["a", "b", "c", "A"], correctOptionIndex: 0 })).status).toBe(400);
+      expect((await send({ type: "definition", options: FOUR, correctOptionIndex: 0 })).status).toBe(400);
+      expect((await send({ type: "image", options: FOUR, correctOptionIndex: 0 })).status).toBe(400);
+
+      const ok = await send({ type: "definition", text: "x", options: FOUR, correctOptionIndex: 3 });
+      expect(ok.status).toBe(201);
+      expect(ok.body.card).toMatchObject({ options: FOUR, correctOptionIndex: 3 });
+    });
+
+    it("plays four-option cards with all four shuffled and any of them answerable", async () => {
+      const user = await createUser();
+      const id = (await create(user)).body.quiz.id;
+      const cards = Array.from({ length: 5 }, (_, i) => ({
+        type: "definition",
+        text: `Question ${i}`,
+        options: [`Right ${i}`, `Wrong ${i}`, `Other ${i}`, `Last ${i}`],
+        correctOptionIndex: 0,
+      }));
+      expect((await api().post(`${base}/${id}/cards/bulk`).set(user.auth).send({ cards })).status).toBe(201);
+
+      const started = await startTrivia(user, {
+        sourceType: "custom",
+        sourceId: id,
+        timerSeconds: 0,
+        cardCount: 5,
+        practice: true,
+      });
+      const sessionId = started.body.session.id;
+      const q = (await api().get(`/api/v1/trivia/sessions/${sessionId}/question`).set(user.auth)).body.question;
+      expect(q.options.map((o: any) => o.index)).toEqual([0, 1, 2, 3]);
+      expect(q.options[q.correctOptionIndex].text).toMatch(/^Right/);
+
+      const bad = await api()
+        .post(`/api/v1/trivia/sessions/${sessionId}/answer`)
+        .set(user.auth)
+        .send({ questionIndex: 0, optionIndex: 4 });
+      expect(bad.body.code).toBe("INVALID_OPTION");
+
+      const result = await playSession(user, sessionId, (i) => i % 2 === 0);
+      expect(result).toMatchObject({ correct: 3, total: 5 });
+    });
+
+    it("keeps an older 2-option card playable until its options are edited", async () => {
+      const user = await createUser();
+      const id = (await create(user)).body.quiz.id;
+      const [cardId] = await addQuizCards(id, 1); // stored with two options, as before
+      const card = `${base}/${id}/cards/${cardId}`;
+
+      const renamed = await api().patch(card).set(user.auth).send({ text: "Renamed" });
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.card.options).toHaveLength(2);
+
+      const two = await api().patch(card).set(user.auth).send({ options: ["a", "b"], correctOptionIndex: 0 });
+      expect(two.body.code).toBe("INVALID_CARD");
+      const four = await api().patch(card).set(user.auth).send({ options: FOUR, correctOptionIndex: 2 });
+      expect(four.body.card).toMatchObject({ options: FOUR, correctOptionIndex: 2 });
     });
 
     it("shows logged-out visitors a minimal landing only, never the cards", async () => {
@@ -242,6 +299,58 @@ describe("Custom trivia", () => {
     });
   });
 
+  describe("personal trivia", () => {
+    const personal = (user: TestUser, title = "Just for me", extra: Record<string, any> = {}) =>
+      create(user, title, { origin: "personal", ...extra });
+
+    it("is free and kept apart from the quizzes a player shares", async () => {
+      const user = await createUser(); // freemium: one shared quiz allowed
+      expect((await create(user)).status).toBe(201);
+      expect((await create(user, "Second")).body.code).toBe("UPGRADE_REQUIRED");
+
+      const mine = await personal(user);
+      expect(mine.status).toBe(201);
+      expect(mine.body.quiz).toMatchObject({ origin: "personal", mode: "broadcast", shareUrl: null });
+      expect((await personal(user, "And another")).status).toBe(201);
+
+      const shared = (await api().get(base).set(user.auth)).body.quizzes;
+      expect(shared.map((q: any) => q.title)).toEqual(["My quiz"]);
+      const own = (await api().get(`${base}?origin=personal`).set(user.auth)).body.quizzes;
+      expect(own.map((q: any) => q.title)).toEqual(["Just for me", "And another"]);
+
+      expect((await create(user, "x", { origin: "ai" })).body.code).toBe("INVALID_QUIZ_ORIGIN");
+      expect((await personal(user, "Team", { mode: "team" })).body.code).toBe("INVALID_QUIZ_MODE");
+    });
+
+    it("cannot be published or hosted, and only its owner can play it", async () => {
+      const owner = await createUser();
+      const id = (await personal(owner)).body.quiz.id;
+      const cards = Array.from({ length: 5 }, (_, i) => ({
+        type: "definition",
+        text: `Question ${i}`,
+        options: [`Right ${i}`, `Wrong ${i}`, `Other ${i}`, `Last ${i}`],
+        correctOptionIndex: 0,
+      }));
+      expect((await api().post(`${base}/${id}/cards/bulk`).set(owner.auth).send({ cards })).status).toBe(201);
+
+      expect((await publish(owner, id)).body.code).toBe("PERSONAL_TRIVIA_NOT_SHAREABLE");
+      expect((await api().patch(`${base}/${id}`).set(owner.auth).send({ mode: "team" })).body.code).toBe(
+        "INVALID_QUIZ_MODE"
+      );
+
+      const stranger = await createUser();
+      const theirs = await startTrivia(stranger, { sourceType: "custom", sourceId: id, timerSeconds: 5, cardCount: 5 });
+      expect(theirs.status).toBe(404);
+
+      const started = await startTrivia(owner, { sourceType: "custom", sourceId: id, timerSeconds: 5, cardCount: 5 });
+      expect(started.status).toBe(201);
+      expect(started.body.session.isPreview).toBe(false); // the owner's plays are real plays
+      await playSession(owner, started.body.session.id);
+      const stats = (await api().get(`${base}/${id}/stats`).set(owner.auth)).body.stats;
+      expect(stats).toMatchObject({ plays: 1 });
+    });
+  });
+
   describe("ownership and stats", () => {
     it("lets only the owner read, edit, publish or delete a quiz", async () => {
       const owner = await createUser();
@@ -258,7 +367,7 @@ describe("Custom trivia", () => {
         api().post(`${base}/${id}/unpublish`).set(other.auth),
         api().post(`${base}/${id}/share-link/regenerate`).set(other.auth),
         api().get(`${base}/${id}/stats`).set(other.auth),
-        api().post(`${base}/${id}/cards`).set(other.auth).send({ type: "definition", text: "x", options: ["a", "b"], correctOptionIndex: 0 }),
+        api().post(`${base}/${id}/cards`).set(other.auth).send({ type: "definition", text: "x", options: FOUR, correctOptionIndex: 0 }),
         api().patch(`${base}/${id}/cards/${cardId}`).set(other.auth).send({ text: "changed" }),
         api().delete(`${base}/${id}/cards/${cardId}`).set(other.auth),
       ];
@@ -318,7 +427,7 @@ describe("Custom trivia", () => {
       await api()
         .patch(`${base}/${id}/cards/${cards[0].id}`)
         .set(owner.auth)
-        .send({ options: ["New A", "New B"], correctOptionIndex: 1 });
+        .send({ options: ["New A", "New B", "New C", "New D"], correctOptionIndex: 1 });
       await api().post(`${base}/${id}/unpublish`).set(owner.auth);
 
       const result = await playSession(player, started.body.session.id);

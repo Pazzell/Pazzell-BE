@@ -76,16 +76,20 @@ describe("Image uploads", () => {
       .post(cards)
       .set(owner.auth)
       .field("type", "image")
-      .field("options", JSON.stringify(["Nigeria", "Ghana"]))
+      .field("options", JSON.stringify(["Nigeria", "Ghana", "Kenya", "Togo"]))
       .field("correctOptionIndex", "0")
       .attach("image", await image(300, 200), { filename: "flag.png", contentType: "image/png" });
     expect(multipart.status).toBe(201);
-    expect(multipart.body.card).toMatchObject({ type: "image", options: ["Nigeria", "Ghana"], correctOptionIndex: 0 });
+    expect(multipart.body.card).toMatchObject({
+      type: "image",
+      options: ["Nigeria", "Ghana", "Kenya", "Togo"],
+      correctOptionIndex: 0,
+    });
     expect(multipart.body.card.imageUrl).toMatch(/\.webp$/);
 
     const mine = (await upload(owner, await image(50, 50), "a.png", "image/png")).body.image.url;
     const theirs = (await upload(other, await image(50, 50), "b.png", "image/png")).body.image.url;
-    const body = (imageUrl: string) => ({ type: "image", imageUrl, options: ["A", "B"], correctOptionIndex: 1 });
+    const body = (imageUrl: string) => ({ type: "image", imageUrl, options: ["A", "B", "C", "D"], correctOptionIndex: 1 });
 
     expect((await api().post(cards).set(owner.auth).send(body(mine))).status).toBe(201);
     for (const foreign of [theirs, "https://evil.example/tracker.png", "javascript:alert(1)"]) {

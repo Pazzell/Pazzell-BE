@@ -77,10 +77,12 @@ export async function createTopic(cardCount = 12, name = "General") {
   return String(topic._id);
 }
 
-export async function addQuizCards(quizId: string, count: number) {
-  await CustomQuizCardModel.insertMany(
+/** Inserts quiz cards directly, with two options each as older quizzes have. Returns their ids. */
+export async function addQuizCards(quizId: string, count: number): Promise<string[]> {
+  const cards = await CustomQuizCardModel.insertMany(
     Array.from({ length: count }, (_, i) => ({ quizId, ...definitionCard(i) }))
   );
+  return cards.map((card) => String(card._id));
 }
 
 /** A campaign in the given state with enough cards to play. */
@@ -171,7 +173,10 @@ export async function playSession(
     last = await api()
       .post(`/api/v1/trivia/sessions/${sessionId}/answer`)
       .set(user.auth)
-      .send({ questionIndex: index, optionIndex: pick(index) ? correctPosition : 1 - correctPosition });
+      .send({
+        questionIndex: index,
+        optionIndex: pick(index) ? correctPosition : (correctPosition + 1) % stored!.optionOrder.length,
+      });
     if (last.body.completed) return last.body.result;
   }
   throw new Error("session did not finish");

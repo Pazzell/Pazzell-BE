@@ -1,4 +1,4 @@
-import CustomQuizModel from "../../models/customQuiz.model";
+import CustomQuizModel, { PRIVATE_QUIZ_ORIGINS } from "../../models/customQuiz.model";
 import userModel from "../../models/user.model";
 import { getCustomQuizFreeLimit } from "../config/config.service";
 
@@ -19,11 +19,12 @@ export async function syncQuizLocks(userId: string, now: Date = new Date()): Pro
   const isPro = isProAt(user.proUntil, now);
   const freeLimit = await getCustomQuizFreeLimit();
 
-  // AI generated trivia is not part of the limit: its owner keeps playing it after Pro ends.
+  // AI generated and personal trivia are not part of the limit: their owner keeps
+  // playing them after Pro ends.
   const quizzes = await CustomQuizModel.find({
     ownerId: userId,
     deletedAt: null,
-    origin: { $ne: "ai" },
+    origin: { $nin: PRIVATE_QUIZ_ORIGINS },
   })
     .sort({ createdAt: 1, _id: 1 })
     .select("status statusBeforeLock");

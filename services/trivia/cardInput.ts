@@ -1,24 +1,30 @@
 import ErrorHandler from "../../utils/ErrorHandler";
-import { CARD_OPTION_MAX, CARD_TEXT_MAX, ICardContent } from "../../models/cardFields";
+import {
+  CARD_OPTION_MAX,
+  CARD_TEXT_MAX,
+  ICardContent,
+  TOPIC_CARD_OPTIONS,
+} from "../../models/cardFields";
 import { ImageFolder, resolveImage } from "../upload/image.service";
 import { toInt } from "../../utils/validators";
 import { genericImagePrompt } from "./imagePrompt";
 
 // One validator for every kind of trivia card (admin topic, custom quiz, campaign):
-// an image or a short definition, exactly two options, one of them marked correct.
+// an image or a short definition, `count` options (2 for topics and campaigns, 4 for
+// custom quizzes), one of them marked correct.
 
-function parseOptions(raw: any): string[] {
+function parseOptions(raw: any, count: number): string[] {
   let value = raw;
   if (typeof value === "string") {
     // multipart forms send the array as a JSON string
     try {
       value = JSON.parse(value);
     } catch {
-      throw new ErrorHandler("options must be an array of exactly 2 strings", 400, "INVALID_CARD");
+      throw new ErrorHandler(`options must be an array of ${count} strings`, 400, "INVALID_CARD");
     }
   }
-  if (!Array.isArray(value) || value.length !== 2) {
-    throw new ErrorHandler("A card must have exactly 2 options", 400, "INVALID_CARD");
+  if (!Array.isArray(value) || value.length !== count) {
+    throw new ErrorHandler(`A card must have exactly ${count} options`, 400, "INVALID_CARD");
   }
   const options = value.map((o) => (typeof o === "string" ? o.trim() : ""));
   if (options.some((o) => !o || o.length > CARD_OPTION_MAX)) {
@@ -28,8 +34,12 @@ function parseOptions(raw: any): string[] {
       "INVALID_CARD"
     );
   }
-  if (options[0].toLowerCase() === options[1].toLowerCase()) {
-    throw new ErrorHandler("The two options must be different", 400, "INVALID_CARD");
+  if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) {
+    throw new ErrorHandler(
+      count === 2 ? "The two options must be different" : "The options must all be different",
+      400,
+      "INVALID_CARD"
+    );
   }
   return options;
 }
@@ -37,14 +47,16 @@ function parseOptions(raw: any): string[] {
 /**
  * Builds validated card content from a request body (JSON or multipart) and an optional
  * uploaded file. When `existing` is given this is an update: omitted fields keep their
- * current values, and the merged card is validated as a whole.
+ * current values, and the merged card is validated as a whole. New options must number
+ * `optionCount`; an existing card whose options are not sent keeps the ones it has.
  */
 export async function buildCardContent(
   body: any,
   file: { buffer: Buffer } | undefined,
   ownerId: string,
   folder: ImageFolder,
-  existing?: ICardContent
+  existing?: ICardContent,
+  optionCount: number = TOPIC_CARD_OPTIONS
 ): Promise<ICardContent> {
   const input = body || {};
   const type = input.type ?? existing?.type;
@@ -74,17 +86,27 @@ export async function buildCardContent(
     throw new ErrorHandler("An image card needs an image", 400, "INVALID_CARD");
   }
 
-  const options = input.options !== undefined ? parseOptions(input.options) : existing?.options;
+  const options =
+    input.options !== undefined ? parseOptions(input.options, optionCount) : existing?.options;
   if (!options) {
-    throw new ErrorHandler("A card must have exactly 2 options", 400, "INVALID_CARD");
+    throw new ErrorHandler(`A card must have exactly ${optionCount} options`, 400, "INVALID_CARD");
   }
 
   const correctOptionIndex =
     input.correctOptionIndex !== undefined
       ? toInt(input.correctOptionIndex)
       : existing?.correctOptionIndex;
-  if (correctOptionIndex !== 0 && correctOptionIndex !== 1) {
-    throw new ErrorHandler("correctOptionIndex must be 0 or 1", 400, "INVALID_CARD");
+  if (
+    correctOptionIndex === undefined ||
+    !Number.isInteger(correctOptionIndex) ||
+    correctOptionIndex < 0 ||
+    correctOptionIndex >= options.length
+  ) {
+    throw new ErrorHandler(
+      `correctOptionIndex must be from 0 to ${options.length - 1}`,
+      400,
+      "INVALID_CARD"
+    );
   }
 
   // A picture question asks "Who is this?" or "What is this?", never a narrower version.
@@ -99,7 +121,8 @@ export const BULK_CARD_LIMIT = 100;
 export async function buildBulkCards(
   body: any,
   ownerId: string,
-  folder: ImageFolder
+  folder: ImageFolder,
+  optionCount: number = TOPIC_CARD_OPTIONS
 ): Promise<ICardContent[]> {
   const rows = body?.cards;
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > BULK_CARD_LIMIT) {
@@ -112,7 +135,7 @@ export async function buildBulkCards(
   const cards: ICardContent[] = [];
   for (let i = 0; i < rows.length; i++) {
     try {
-      cards.push(await buildCardContent(rows[i], undefined, ownerId, folder));
+      cards.push(await buildCardContent(rows[i], undefined, ownerId, folder, undefined, optionCount));
     } catch (e: any) {
       throw new ErrorHandler(`Card ${i + 1}: ${e.message}`, 400, e.code || "INVALID_CARD", {
         index: i,

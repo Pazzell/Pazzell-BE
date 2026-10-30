@@ -5,7 +5,12 @@ import mongoose, { Document, Model, Schema } from "mongoose";
 export type CustomQuizStatus = "draft" | "live" | "unpublished" | "locked";
 // "ai": an AI generated trivia, written from a topic and a prompt (services/aiTrivia).
 // It is played by its owner only and stays outside the freemium quiz limit and its locks.
-export type CustomQuizOrigin = "manual" | "ai";
+// manual: a quiz the owner shares (broadcast) or hosts (team). ai: AI generated trivia.
+// personal: trivia the owner writes for themselves; never shared, never part of the
+// freemium quiz limit.
+export type CustomQuizOrigin = "manual" | "ai" | "personal";
+// Origins that are the owner's own trivia rather than a quiz for other people.
+export const PRIVATE_QUIZ_ORIGINS: CustomQuizOrigin[] = ["ai", "personal"];
 export type AiReviewStatus = "pending" | "approved" | "rejected";
 // "broadcast": shared with a link, each player plays alone and gets their own score.
 // "team": hosted as a team game (services/teamGame), with no solo share link.
@@ -57,7 +62,7 @@ const customQuizSchema: Schema<ICustomQuiz> = new mongoose.Schema(
     defaultTimerSeconds: { type: Number, required: true },
     defaultCardCount: { type: Number, required: true },
     deletedAt: { type: Date, default: null },
-    origin: { type: String, enum: ["manual", "ai"], default: "manual" },
+    origin: { type: String, enum: ["manual", "ai", "personal"], default: "manual" },
     aiTopicId: { type: String },
     aiTopicName: { type: String, maxlength: 60 },
     aiPrompt: { type: String, maxlength: 500 },
