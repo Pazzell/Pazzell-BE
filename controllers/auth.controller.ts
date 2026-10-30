@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
+import { frontendUrl } from "../services/config/frontendUrl";
 import UserModel from "../models/user.model";
 import BrandModel from "../models/brand.model";
 import { sendToken } from "../utils/jwt";
@@ -559,8 +560,7 @@ export const forgotPassword = CatchAsyncError(
       const resetToken = createResetToken(String(user._id));
 
       // Build reset link
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-      const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+      const resetLink = `${frontendUrl()}/reset-password?token=${resetToken}`;
 
       // Get user display name
       const userName = user.firstName || user.name || user.email.split("@")[0];
