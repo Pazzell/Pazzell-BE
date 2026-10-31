@@ -20,7 +20,7 @@ import {
   resetCampaignCounter,
 } from "../campaign/campaign.service";
 import { brandForAttempt, resolveSource, SourceCard, titleForAttempt } from "./sources";
-import { pickMixedCards, shuffle } from "./mix";
+import { pickFreshCards, shuffle } from "./mix";
 import { isObjectId } from "../../utils/validators";
 
 // One session engine for every kind of trivia (admin topics, custom quizzes, brand
@@ -76,6 +76,58 @@ async function publicSession(attempt: ITriviaAttempt) {
     startedAt: attempt.startedAt,
     completedAt: attempt.completedAt || null,
   };
+}
+
+// How many of a player's past sessions on one source are looked at; enough for any
+// topic to have been gone through many times over.
+const HISTORY_SESSIONS = 300;
+
+/**
+ * The cards of `cards` this player has already been asked in the current round on this
+ * source. A round ends once every card has been asked, and the next one starts empty,
+ * so a card only repeats after all the others have had their turn. Only questions that
+ * were actually shown count; a session left early leaves its unshown cards fresh.
+ */
+async function servedThisRound(
+  userId: string,
+  sourceKey: string,
+  cards: readonly SourceCard[],
+  excludeAttemptId: string
+): Promise<Set<string>> {
+  const attempts = await TriviaAttemptModel.find({ userId, sourceKey, _id: { $ne: excludeAttemptId } })
+    .sort({ createdAt: -1 })
+    .limit(HISTORY_SESSIONS)
+    .select("_id")
+    .lean();
+  if (!attempts.length) return new Set();
+  const order = new Map(attempts.map((a, i) => [String(a._id), attempts.length - i]));
+  const questions = await TriviaAttemptQuestionModel.find({
+    attemptId: { $in: [...order.keys()] },
+    servedAt: { $ne: null },
+  })
+    .select("attemptId cardId")
+    .lean();
+  // Session by session, oldest first: within a session the order is shuffled, so a
+  // session that finishes a round is taken as a whole.
+  const bySession = new Map<string, string[]>();
+  for (const question of questions) {
+    bySession.set(question.attemptId, [...(bySession.get(question.attemptId) ?? []), question.cardId]);
+  }
+  const sessions = [...bySession.entries()].sort((a, b) => order.get(a[0])! - order.get(b[0])!);
+
+  const current = new Set(cards.map((c) => c.id));
+  let served = new Set<string>();
+  for (const [, cardIds] of sessions) {
+    const asked = cardIds.filter((id) => current.has(id)); // cards since deleted drop out
+    const fresh = asked.filter((id) => !served.has(id));
+    if (served.size + new Set(fresh).size >= current.size) {
+      // This session finished the round; the repeats it needed open the next one.
+      served = new Set(asked.filter((id) => served.has(id)));
+    } else {
+      asked.forEach((id) => served.add(id));
+    }
+  }
+  return served;
 }
 
 /**
@@ -220,14 +272,16 @@ export async function startSession(
   }
 
   // A replayed practice set in a new order, or else a random card set in random order,
-  // mixed as the player asked (or else the topic's own share, or else the global one).
-  // Each card's options are shuffled as well.
+  // mixed as the player asked (or else the topic's own share, or else the global one),
+  // from the cards this player has not been asked yet in this round. Each card's options
+  // are shuffled as well.
   const selected = practised
     ? shuffle(practised)
-    : pickMixedCards(
+    : pickFreshCards(
         source.cards,
         cardCount,
-        chosenPercent ?? source.imagePercent ?? (await getTriviaImagePercent())
+        chosenPercent ?? source.imagePercent ?? (await getTriviaImagePercent()),
+        await servedThisRound(userId, sourceKey, source.cards, String(attempt._id))
       );
   await TriviaAttemptQuestionModel.insertMany(
     selected.map((card, quizIndex) => ({

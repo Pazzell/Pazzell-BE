@@ -333,6 +333,14 @@ Errors: `403 CAMPAIGN_REQUIRED` (see 8.3), `400 INVALID_TIMER`, `400 INVALID_PRA
 (`details: { available, min, max }`), `400 NO_CARDS`, `404 TOPIC_NOT_FOUND`,
 `404 QUIZ_NOT_FOUND`, `404 CAMPAIGN_NOT_AVAILABLE`, `400 INVALID_SOURCE`.
 
+**No repeats until everything has been asked.** Each player works through a topic's (or
+quiz's, or campaign's) cards in rounds: a new session draws only cards that player has not been
+asked yet in the current round. When fewer are left than the session needs, it takes all of them
+and tops up with cards already asked, and a new round starts. Only questions actually shown count,
+so cards left unshown in an ended session stay new. A replayed practice set (above) is the
+exception: it reuses its cards on purpose. Team games already never repeat a question within a
+game while an unasked one is left.
+
 **Card mix.** The player chooses the share of picture cards: send `imagePercent` (a whole
 number from 0, short definitions only, to 100, pictures only) when starting; anything else is
 `400 INVALID_IMAGE_PERCENT`. Without it the session uses the topic's own share if an admin set
