@@ -24,6 +24,8 @@ import { shuffle } from "../trivia/mix";
 // Seconds to answer in a team game: 5, 10, 15, 20, 25 or 30.
 export const TEAM_TIMER = { minSeconds: 5, maxSeconds: 30, stepSeconds: 5, defaultSeconds: 30 };
 export const MAX_TEAM_SIZE = 20;
+// Topic games: seconds the team in turn has to choose a question before it forfeits.
+export const PICK_SECONDS = 30;
 const MAX_PLAYERS = MAX_TEAMS * MAX_TEAM_SIZE;
 const TEAM_NAME_MAX = 30;
 const CHAT_HISTORY = 50;
@@ -100,6 +102,7 @@ export function publicState(game: ITeamGame, now = new Date()) {
       .filter((p) => !p.teamId)
       .map((p) => ({ userId: p.userId, name: p.name, avatar: p.avatar || null })),
     turnTeamId: game.turnTeamId ?? null,
+    pickDeadlineAt: game.pickDeadlineAt ?? null,
     current: current
       ? {
           cellIndex: current.cellIndex,
@@ -130,6 +133,7 @@ export function publicState(game: ITeamGame, now = new Date()) {
       : null,
     playCount: game.plays.length,
     winnerTeamId: game.winnerTeamId ?? null,
+    forfeitTeamId: game.forfeitTeamId ?? null,
     winningLine: game.winningLine?.length ? game.winningLine : null,
     isDraw: !!game.isDraw,
     endReason: game.endReason ?? null,
@@ -175,6 +179,7 @@ export function resultSummary(game: ITeamGame) {
     endReason: game.endReason ?? null,
     isDraw: !!game.isDraw,
     winnerTeamId: game.winnerTeamId ?? null,
+    forfeitTeamId: game.forfeitTeamId ?? null,
     board: {
       size: shape.size,
       lineLength: shape.lineLength,
@@ -204,15 +209,20 @@ async function loadGame(code: string): Promise<ITeamGame> {
 
 const timers = new Map<string, NodeJS.Timeout>();
 
-/** Arms (or clears) the timer that closes the open question when its clock runs out. */
+/**
+ * Arms (or clears) the timer for the game's next deadline: the open question's clock, or
+ * in a topic game the time the team in turn has to choose a question.
+ */
 async function scheduleDeadline(game: ITeamGame) {
   const id = String(game._id);
   const existing = timers.get(id);
   if (existing) clearTimeout(existing);
   timers.delete(id);
-  if (game.status !== "playing" || !game.current) return;
+  if (game.status !== "playing") return;
+  const deadline = game.current?.deadlineAt ?? game.pickDeadlineAt;
+  if (!deadline) return;
 
-  const delay = game.current.deadlineAt.getTime() - Date.now() + (await getSubmitGraceMs()) + 50;
+  const delay = deadline.getTime() - Date.now() + (await getSubmitGraceMs()) + 50;
   const timer = setTimeout(() => {
     timers.delete(id);
     mutate(game.code, () => undefined).catch(() => {});
@@ -223,7 +233,10 @@ async function scheduleDeadline(game: ITeamGame) {
 
 /** After a restart: give every running game its question clock back. */
 export async function rearmTeamGameTimers() {
-  const running = await TeamGameModel.find({ status: "playing", current: { $ne: null } });
+  const running = await TeamGameModel.find({
+    status: "playing",
+    $or: [{ current: { $ne: null } }, { pickDeadlineAt: { $ne: null } }],
+  });
   for (const game of running) await scheduleDeadline(game);
 }
 
@@ -253,9 +266,12 @@ async function mutate(code: string, change: Change): Promise<ITeamGame> {
 }
 
 async function settleExpired(game: ITeamGame, now: Date) {
-  if (game.status !== "playing" || !game.current) return;
-  if (isPastDeadline(game.current.deadlineAt, now, await getSubmitGraceMs())) {
-    resolvePlay(game, now, "timeout");
+  if (game.status !== "playing") return;
+  const grace = await getSubmitGraceMs();
+  if (game.current) {
+    if (isPastDeadline(game.current.deadlineAt, now, grace)) resolvePlay(game, now, "timeout");
+  } else if (game.pickDeadlineAt && isPastDeadline(game.pickDeadlineAt, now, grace)) {
+    forfeit(game, now);
   }
 }
 
@@ -349,12 +365,38 @@ function nextTurn(game: ITeamGame, afterTeamId: string): string {
   return afterTeamId;
 }
 
+/** Topic games: the team in turn has PICK_SECONDS to choose a question from now. */
+function openTurn(game: ITeamGame, now: Date) {
+  game.pickDeadlineAt = hostPlays(game) ? new Date(now.getTime() + PICK_SECONDS * 1000) : null;
+}
+
+/**
+ * The team in turn did not choose a question in time: the game is abandoned and goes to
+ * the best of the other teams (with two teams, simply the one that was waiting).
+ */
+function forfeit(game: ITeamGame, now: Date) {
+  const loser = game.turnTeamId!;
+  const others = game.teams.filter((t) => t.id !== loser);
+  const top = Math.max(...others.map((t) => t.score));
+  const best = others.filter((t) => t.score === top);
+  game.status = "finished";
+  game.finishedAt = now;
+  game.endReason = "forfeit";
+  game.forfeitTeamId = loser;
+  game.current = null;
+  game.turnTeamId = null;
+  game.pickDeadlineAt = null;
+  game.winnerTeamId = best.length === 1 ? best[0].id : null;
+  game.isDraw = best.length !== 1;
+}
+
 function finish(game: ITeamGame, now: Date, reason: TeamGameEndReason, winnerTeamId?: string, line?: number[]) {
   game.status = "finished";
   game.finishedAt = now;
   game.endReason = reason;
   game.current = null;
   game.turnTeamId = null;
+  game.pickDeadlineAt = null;
   if (winnerTeamId) {
     game.winnerTeamId = winnerTeamId;
     game.winningLine = line;
@@ -399,6 +441,7 @@ function resolvePlay(
   }
   // A missed cell keeps its number and gets a fresh question next time.
   game.turnTeamId = nextTurn(game, current.teamId);
+  openTurn(game, now);
 }
 
 type CardSource = { kind?: string; quizId?: string; topicId?: string };
@@ -731,6 +774,7 @@ export async function startTeamGame(code: string, user: Actor) {
     game.turnTeamId = game.teams[0].id;
     game.status = "playing";
     game.startedAt = now;
+    openTurn(game, now);
   });
   return publicState(game);
 }
@@ -772,6 +816,7 @@ export async function pickCell(code: string, user: Actor, cellIndex: any) {
     // Shown in a fresh random order, so the right answer is not always where it was typed.
     const order = shuffle(card.options.map((_, i) => i));
 
+    game.pickDeadlineAt = null;
     game.current = {
       cellIndex: index,
       teamId: game.turnTeamId!,
@@ -808,11 +853,22 @@ export async function answerQuestion(code: string, user: Actor, optionIndex: any
   return publicState(game);
 }
 
-/** Host: end the game now. Before start it is cancelled; mid-game the top score wins. */
+/**
+ * Host: end the game now. Before start it is cancelled; mid-game the top score wins. A topic
+ * game's host is playing too, so once it has started it runs until a team wins, the board
+ * fills, or a team forfeits by not choosing in time.
+ */
 export async function endTeamGame(code: string, user: Actor) {
   const game = await mutate(code, (game, now) => {
     assertHost(game, user);
     assertOpen(game);
+    if (game.status === "playing" && hostPlays(game)) {
+      throw new ErrorHandler(
+        "This game plays on until a team wins or the board is full",
+        409,
+        "GAME_CANNOT_END"
+      );
+    }
     if (game.status === "lobby") {
       game.status = "cancelled";
       game.finishedAt = now;

@@ -739,8 +739,16 @@ Tic-tac-toe between teams. A game (`kind`) is one of two:
 - **`topic`**: self-serve, from a **General Trivia topic**. Any player (free or Pro) picks a
   topic, the number of teams and the time to answer, creates the game and shares the link. The
   creator plays like everyone else: they start on Team A as its leader and can switch team in the
-  lobby. They are the game's `host` only in that they start it and can end it. If they leave,
-  control passes to the player who joined next; a lobby left empty is cancelled.
+  lobby. They are the game's `host` only in that they start it, and can cancel it while it is
+  still a lobby. If they leave, control passes to the player who joined next; a lobby left empty
+  is cancelled. **Once started, a topic game can't be ended** (`409 GAME_CANNOT_END`): it plays on
+  until a line, a full board, or a forfeit.
+  **30 seconds to choose:** each time a team's turn starts, it has 30 seconds to pick a cell
+  (`pickDeadlineAt`; `null` while a question is open, and always `null` in quiz games). If the
+  time runs out the game is abandoned: `endReason: "forfeit"`, `forfeitTeamId` is the team that
+  ran out of time, and the game goes to the best score among the other teams (with two teams,
+  the waiting team), a tie at the top among them being a draw. Show a countdown from
+  `pickDeadlineAt` and `serverTime`, and warn in the last seconds.
 - **`quiz`**: a host runs one of their own **team quizzes** (`mode: "team"`, published). The host
   shares the join link, runs the game and never plays (`403 HOST_CANNOT_PLAY`).
 
@@ -756,8 +764,9 @@ Tic-tac-toe between teams. A game (`kind`) is one of two:
 - The team talks it over in its own chat; only the leader can answer. A correct answer gives the
   team 1 point and the cell. A wrong answer, or no answer in time, leaves the cell open with a
   fresh question for the next pick. Either way the turn passes on.
-- A full line wins (`endReason: "line"`). A full board with no line, or the host ending the game
-  (`"host_ended"`), goes to the highest score; a tie at the top is a draw (`isDraw: true`).
+- A full line wins (`endReason: "line"`). A full board with no line, or the host ending a quiz
+  game (`"host_ended"`), goes to the highest score; a tie at the top is a draw (`isDraw: true`).
+  A topic game can also end by forfeit (`"forfeit"`, above).
 - The first player on a team leads it. **After each of the team's turns the lead passes to the
   next member** (in the order they joined), so everyone gets a go; a team of one keeps its only
   member. When a leader leaves, the longest-standing member takes over. The host can move players

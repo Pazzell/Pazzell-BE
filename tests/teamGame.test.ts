@@ -506,6 +506,82 @@ describe("Team games", () => {
       expect(empty.status).toBe("cancelled");
     });
 
+    /** A started 2-team topic game: the creator leads Team A, friend leads Team B. */
+    async function startedTopicGame() {
+      const creator = await createUser();
+      const friend = await createUser();
+      remember(creator, friend);
+      const { code } = await topicGame(creator);
+      await join(friend, code, "t2");
+      expect((await start(creator, code)).status).toBe(200);
+      return { creator, friend, code };
+    }
+
+    it("can't be stopped mid-game by its creator, only cancelled before it starts", async () => {
+      const creator = await createUser();
+      const { code: lobby } = await topicGame(creator);
+      expect((await api().post(`${base}/${lobby}/end`).set(creator.auth)).body.game.status).toBe("cancelled");
+
+      const { creator: host, code } = await startedTopicGame();
+      const res = await api().post(`${base}/${code}/end`).set(host.auth);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe("GAME_CANNOT_END");
+      expect((await api().get(`${base}/${code}`).set(host.auth)).body.game.status).toBe("playing");
+    });
+
+    it("gives the team in turn 30 seconds to choose, and the clock stops once it does", async () => {
+      const { creator, code } = await startedTopicGame();
+      const state = (await api().get(`${base}/${code}`).set(creator.auth)).body.game;
+      const left = new Date(state.pickDeadlineAt).getTime() - Date.now();
+      expect(left).toBeGreaterThan(25_000);
+      expect(left).toBeLessThanOrEqual(30_000);
+
+      const opened = (await pick(creator, code, 4)).body.game;
+      expect(opened.pickDeadlineAt).toBeNull();
+      const correct = await correctOption(code);
+      const after = (await answer(creator, code, correct)).body.game;
+      // Team B's turn now, with its own 30 seconds.
+      expect(after.turnTeamId).toBe("t2");
+      expect(new Date(after.pickDeadlineAt).getTime()).toBeGreaterThan(Date.now() + 25_000);
+    });
+
+    it("hands the game to the waiting team when the team in turn doesn't choose in time", async () => {
+      const { creator, friend, code } = await startedTopicGame();
+      // Team A scores first, then Team B lets its 30 seconds run out.
+      await play(creator, code, 4, true);
+      await TeamGameModel.updateOne({ code }, { pickDeadlineAt: new Date(Date.now() - 5000) });
+
+      const state = (await api().get(`${base}/${code}`).set(friend.auth)).body.game;
+      expect(state).toMatchObject({
+        status: "finished",
+        endReason: "forfeit",
+        forfeitTeamId: "t2",
+        winnerTeamId: "t1",
+        isDraw: false,
+        pickDeadlineAt: null,
+      });
+      expect((await pick(friend, code, 0)).body.code).toBe("GAME_NOT_PLAYING");
+      const result = (await api().get(`${base}/${code}/result`)).body.result;
+      expect(result).toMatchObject({ endReason: "forfeit", forfeitTeamId: "t2", winnerTeamId: "t1" });
+
+      // The waiting team wins even when the team that ran out of time was ahead.
+      const second = await startedTopicGame();
+      await play(second.creator, second.code, 0, false); // A misses
+      await play(second.friend, second.code, 4, true); // B leads 1-0
+      await play(second.creator, second.code, 1, false); // A misses; B to choose
+      await TeamGameModel.updateOne({ code: second.code }, { pickDeadlineAt: new Date(Date.now() - 5000) });
+      const won = (await api().get(`${base}/${second.code}`).set(second.creator.auth)).body.game;
+      expect(won.teams.find((t: any) => t.id === "t2").score).toBe(1);
+      expect(won).toMatchObject({ endReason: "forfeit", forfeitTeamId: "t2", winnerTeamId: "t1" });
+    });
+
+    it("leaves hosted quiz games without a choosing clock", async () => {
+      const { host, code } = await startedGame();
+      const state = (await api().get(`${base}/${code}`).set(host.auth)).body.game;
+      expect(state.pickDeadlineAt).toBeNull();
+      expect((await api().post(`${base}/${code}/end`).set(host.auth)).body.game.status).toBe("finished");
+    });
+
     it("has a public result anyone can share", async () => {
       const creator = await createUser();
       const friend = await createUser();

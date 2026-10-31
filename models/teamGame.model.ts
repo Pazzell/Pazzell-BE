@@ -12,7 +12,8 @@ import { ICardContent, cardContentFields } from "./cardFields";
 // See services/teamGame/teamGame.service.ts.
 export type TeamGameStatus = "lobby" | "playing" | "finished" | "cancelled";
 export type TeamGameKind = "quiz" | "topic";
-export type TeamGameEndReason = "line" | "board_full" | "host_ended";
+// forfeit: in a topic game, the team in turn did not choose a question in time.
+export type TeamGameEndReason = "line" | "board_full" | "host_ended" | "forfeit";
 export type TeamPlayOutcome = "correct" | "wrong" | "timeout";
 
 export interface ITeam {
@@ -72,9 +73,12 @@ export interface ITeamGame extends Document {
   lineLength?: number;
   cells: (string | null)[]; // the owning team id per cell, row by row
   turnTeamId?: string | null;
+  // Topic games only: when the team in turn must have chosen a question by.
+  pickDeadlineAt?: Date | null;
   current?: ICurrentQuestion | null;
   plays: ITeamPlay[];
   winnerTeamId?: string | null;
+  forfeitTeamId?: string | null; // the team that ran out of time to choose
   winningLine?: number[];
   isDraw?: boolean;
   endReason?: TeamGameEndReason;
@@ -155,12 +159,14 @@ const teamGameSchema: Schema<ITeamGame> = new mongoose.Schema(
     lineLength: { type: Number },
     cells: { type: [{ type: String, default: null }], default: [] },
     turnTeamId: { type: String, default: null },
+    pickDeadlineAt: { type: Date, default: null },
     current: { type: currentSchema, default: null },
     plays: { type: [playSchema], default: [] },
     winnerTeamId: { type: String, default: null },
+    forfeitTeamId: { type: String, default: null },
     winningLine: { type: [Number], default: undefined },
     isDraw: { type: Boolean },
-    endReason: { type: String, enum: ["line", "board_full", "host_ended"] },
+    endReason: { type: String, enum: ["line", "board_full", "host_ended", "forfeit"] },
     startedAt: { type: Date },
     finishedAt: { type: Date },
   },
