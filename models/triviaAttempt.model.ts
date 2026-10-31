@@ -66,6 +66,8 @@ triviaAttemptSchema.index(
   { userId: 1, sourceKey: 1 },
   { unique: true, partialFilterExpression: { active: true } }
 );
+// A player's past sessions on a source, oldest first: which cards they have already had.
+triviaAttemptSchema.index({ userId: 1, sourceKey: 1, createdAt: 1 });
 // Stats for a quiz or campaign
 triviaAttemptSchema.index({ sourceKey: 1, status: 1, isPreview: 1 });
 triviaAttemptSchema.index({ active: 1, startedAt: 1 });

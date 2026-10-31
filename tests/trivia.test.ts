@@ -80,6 +80,57 @@ describe("Trivia (admin topics)", () => {
     });
   });
 
+  describe("no repeats until every card has been asked", () => {
+    const cardsOf = async (id: string) =>
+      (await TriviaAttemptQuestionModel.find({ attemptId: id }).select("cardId").lean()).map((q) => q.cardId);
+    const playRound = async () => {
+      const started = await startDefault();
+      expect(started.status).toBe(201);
+      const id = started.body.session.id;
+      await playSession(user, id);
+      return cardsOf(id);
+    };
+
+    it("serves each player every card of a topic before any comes back", async () => {
+      const all = (await TriviaCardModel.find({ topicId }).select("_id").lean()).map((c) => String(c._id));
+      expect(all).toHaveLength(12);
+
+      const first = await playRound();
+      const second = await playRound();
+      // Ten different cards across the first two sessions of five.
+      expect(new Set([...first, ...second]).size).toBe(10);
+
+      // Only two are left unseen: the third session takes both, then three repeats.
+      const unseen = all.filter((id) => !first.includes(id) && !second.includes(id));
+      const third = await playRound();
+      expect(third).toEqual(expect.arrayContaining(unseen));
+      expect(new Set(third).size).toBe(5);
+
+      // A new round: the three repeats already count, so the next session is all new to it.
+      const fourth = await playRound();
+      const repeats = third.filter((id) => !unseen.includes(id));
+      expect(fourth.some((id) => repeats.includes(id))).toBe(false);
+
+      // Another player starts from the whole topic, unaffected.
+      const other = await createUser();
+      const theirs = await startTrivia(other, { sourceType: "topic", sourceId: topicId, timerSeconds: 5, cardCount: 5 });
+      expect(theirs.status).toBe(201);
+    });
+
+    it("keeps the cards a player was never shown fresh when they leave a session early", async () => {
+      const started = await startDefault();
+      const id = started.body.session.id;
+      await question(user, id); // only the first question is shown
+      await api().post(`${base}/${id}/abandon`).set(user.auth);
+      const shownFirst = (await TriviaAttemptQuestionModel.findOne({ attemptId: id, quizIndex: 0 }).lean())!.cardId;
+
+      // 11 unseen cards remain; the next two sessions of five never bring back the one shown.
+      const next = [...(await playRound()), ...(await playRound())];
+      expect(next).not.toContain(shownFirst);
+      expect(new Set(next).size).toBe(10);
+    });
+  });
+
   describe("replaying a practice", () => {
     const cardIds = async (id: string) =>
       (await TriviaAttemptQuestionModel.find({ attemptId: id }).sort({ quizIndex: 1 }).lean()).map((q) => q.cardId);

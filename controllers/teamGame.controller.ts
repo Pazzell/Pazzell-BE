@@ -20,7 +20,8 @@ import {
 
 const code = (req: Request) => String(req.params.code || "");
 
-// POST /team-games  { quizId, teamCount?, timerSeconds? } — host a game from your own quiz
+// POST /team-games  { quizId, teamCount?, timerSeconds? } — host a game from your own quiz,
+// or { topicId, teamCount?, timerSeconds? } — a self-serve game from a General Trivia topic
 export const createGame = CatchAsyncError(async (req: Request, res: Response) => {
   res.status(201).json({ success: true, game: await createTeamGame(req.user!, req.body) });
 });

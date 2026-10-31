@@ -333,6 +333,14 @@ Errors: `403 CAMPAIGN_REQUIRED` (see 8.3), `400 INVALID_TIMER`, `400 INVALID_PRA
 (`details: { available, min, max }`), `400 NO_CARDS`, `404 TOPIC_NOT_FOUND`,
 `404 QUIZ_NOT_FOUND`, `404 CAMPAIGN_NOT_AVAILABLE`, `400 INVALID_SOURCE`.
 
+**No repeats until everything has been asked.** Each player works through a topic's (or
+quiz's, or campaign's) cards in rounds: a new session draws only cards that player has not been
+asked yet in the current round. When fewer are left than the session needs, it takes all of them
+and tops up with cards already asked, and a new round starts. Only questions actually shown count,
+so cards left unshown in an ended session stay new. A replayed practice set (above) is the
+exception: it reuses its cards on purpose. Team games already never repeat a question within a
+game while an unasked one is left.
+
 **Card mix.** The player chooses the share of picture cards: send `imagePercent` (a whole
 number from 0, short definitions only, to 100, pictures only) when starting; anything else is
 `400 INVALID_IMAGE_PERCENT`. Without it the session uses the topic's own share if an admin set
@@ -726,25 +734,43 @@ freemium player these plays count toward the campaign interruption rule like Gen
 
 ### 7.6 Team games
 
-A host runs one of their own **team quizzes** (`mode: "team"`, published) as tic-tac-toe between
-teams. The host creates the game and shares the join link; other players join the teams. The host
-never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
+Tic-tac-toe between teams. A game (`kind`) is one of two:
+
+- **`topic`**: self-serve, from a **General Trivia topic**. Any player (free or Pro) picks a
+  topic, the number of teams and the time to answer, creates the game and shares the link. The
+  creator plays like everyone else: they start on Team A as its leader and can switch team in the
+  lobby. They are the game's `host` only in that they start it, and can cancel it while it is
+  still a lobby. If they leave, control passes to the player who joined next; a lobby left empty
+  is cancelled. **Once started, a topic game can't be ended** (`409 GAME_CANNOT_END`): it plays on
+  until a line, a full board, or a forfeit.
+  **30 seconds to choose:** each time a team's turn starts, it has 30 seconds to pick a cell
+  (`pickDeadlineAt`; `null` while a question is open, and always `null` in quiz games). If the
+  time runs out the game is abandoned: `endReason: "forfeit"`, `forfeitTeamId` is the team that
+  ran out of time, and the game goes to the best score among the other teams (with two teams,
+  the waiting team), a tie at the top among them being a draw. Show a countdown from
+  `pickDeadlineAt` and `serverTime`, and warn in the last seconds.
+- **`quiz`**: a host runs one of their own **team quizzes** (`mode: "team"`, published). The host
+  shares the join link, runs the game and never plays (`403 HOST_CANNOT_PLAY`).
+
 `lobby → playing → finished` (or `lobby → cancelled`). All routes are Auth unless marked.
 
 **Rules.**
 - The board grows with the teams that have players when the game starts: 2 teams play a 3×3
   board with 3 in a row; 3 teams play 4×4 with 3 in a row; 4 to 6 teams play 5×5 with 4 in a row.
-  The quiz needs at least one question per cell (9, 16 or 25).
+  The quiz or topic needs at least one question per cell (9, 16 or 25).
 - Teams take turns, in team order. The **leader** of the team in turn picks an open cell (its
   number is `index + 1`). That serves a random question and starts the clock (`timerSeconds`,
   5, 10, 15, 20, 25 or 30 seconds, the same for every question in the game; 30 by default).
 - The team talks it over in its own chat; only the leader can answer. A correct answer gives the
   team 1 point and the cell. A wrong answer, or no answer in time, leaves the cell open with a
   fresh question for the next pick. Either way the turn passes on.
-- A full line wins (`endReason: "line"`). A full board with no line, or the host ending the game
-  (`"host_ended"`), goes to the highest score; a tie at the top is a draw (`isDraw: true`).
-- The first player on a team leads it; when a leader leaves, the longest-standing member takes
-  over. The host can move players and choose leaders at any time. Players can switch teams in
+- A full line wins (`endReason: "line"`). A full board with no line, or the host ending a quiz
+  game (`"host_ended"`), goes to the highest score; a tie at the top is a draw (`isDraw: true`).
+  A topic game can also end by forfeit (`"forfeit"`, above).
+- The first player on a team leads it. **After each of the team's turns the lead passes to the
+  next member** (in the order they joined), so everyone gets a go; a team of one keeps its only
+  member. When a leader leaves, the longest-standing member takes over. The host can move players
+  and choose a leader at any time (the rotation carries on from there). Players can switch teams in
   the lobby only; someone with no team can still join one mid-game. Empty teams are dropped at
   start. Up to 6 teams of 20.
 - Questions are copied into the game when served, so editing the quiz mid-game changes nothing.
@@ -755,7 +781,8 @@ never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
 
 | Method | Path | Who | Body / notes |
 | --- | --- | --- | --- |
-| POST | `/team-games` | quiz owner | `{ quizId, teamCount? (2–6, default 2), timerSeconds? (5, 10, 15, 20, 25 or 30; default 30) }` → 201. The quiz must be a live team quiz (`409 NOT_A_TEAM_QUIZ`, `409 QUIZ_NOT_LIVE`) |
+| POST | `/team-games` | any player | `{ topicId, teamCount? (2–6, default 2), timerSeconds? (5, 10, 15, 20, 25 or 30; default 30) }` → 201, a topic game (`404 TOPIC_NOT_FOUND`; `400 NOT_ENOUGH_CARDS` when the topic has fewer questions than the board needs) |
+| POST | `/team-games` | quiz owner | `{ quizId, teamCount?, timerSeconds? }` → 201, a quiz game. The quiz must be a live team quiz (`409 NOT_A_TEAM_QUIZ`, `409 QUIZ_NOT_LIVE`) |
 | GET | `/team-games` | host | `{ games: [{ code, status, quizTitle, teamCount, playerCount, joinUrl, … }] }`, newest 20 |
 | GET | `/team-games/:code` | anyone logged in | The current state |
 | PATCH | `/team-games/:code` | host, lobby | `{ teamCount?, timerSeconds?, teams?: [{ id, name }] }` (names up to 30 characters) |
@@ -774,8 +801,9 @@ never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
 **State.**
 
 ```json
-{ "code": "q8Zk3vQ0a1b2", "status": "playing",
+{ "code": "q8Zk3vQ0a1b2", "status": "playing", "kind": "quiz",
   "quiz": { "id": "6704…", "title": "Capital cities", "coverImageUrl": null },
+  "topic": null,
   "host": { "userId": "66f1…", "name": "ada", "avatar": null },
   "timerSeconds": 30,
   "board": { "size": 3, "lineLength": 3,
@@ -798,7 +826,11 @@ never plays: they can't join a team (`403 HOST_CANNOT_PLAY`).
 countdown from `deadlineAt` and `serverTime`, as in section 2. The server closes an unanswered
 question itself when its clock runs out. Team ids are `t1`–`t6` and keep their colour all game.
 
-**Result card** (`GET …/result`): `{ code, quiz: { title, coverImageUrl }, host: { name, avatar },
+For a topic game, `kind` is `"topic"`, `quiz.id` is `null`, `quiz.title` is the topic's name and
+`topic` is `{ id, name }`. Show the start and end controls to `host.userId`; in a topic game that
+player is also on a team.
+
+**Result card** (`GET …/result`): `{ code, kind, quiz: { title, coverImageUrl }, host: { name, avatar },
 endReason, isDraw, winnerTeamId, board, winningLine, questionsPlayed, startedAt, finishedAt,
 resultUrl, teams: [{ id, name, color, score, cellsClaimed, questionsAnswered, correctAnswers,
 leaderName, isWinner, members: [{ name, avatar, isLeader }] }] }`, winner first. It carries names
