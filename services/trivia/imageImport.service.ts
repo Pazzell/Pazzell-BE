@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import ErrorHandler from "../../utils/ErrorHandler";
 import { assertObjectId, toInt } from "../../utils/validators";
-import { CARD_OPTION_MAX } from "../../models/cardFields";
+import { CARD_OPTIONS, CARD_OPTION_MAX } from "../../models/cardFields";
 import TriviaTopicModel, { ITriviaTopic } from "../../models/triviaTopic.model";
 import TriviaCardModel from "../../models/triviaCard.model";
 import { storeImage } from "../upload/image.service";
@@ -41,23 +41,32 @@ export async function onWhite(buffer: Buffer): Promise<Buffer> {
 const displayLabel = (label: string) => label.charAt(0).toUpperCase() + label.slice(1);
 
 /**
- * A wrong option for `entity`: another entry of the same category, of the same gender
- * when the category is people (otherwise the picture alone gives the answer away).
+ * The three wrong options for `entity`: its curated look-alike when it has one, then
+ * other entries of the same category. For people, entries of the same gender come first
+ * (otherwise the picture alone gives the answer away) and the rest only fill any gap.
+ * Undefined when the pool is too small to fill a card.
  */
-export function pickDistractor(
+export function pickDistractors(
   entity: WikidataEntity,
   pool: readonly WikidataEntity[],
   people: boolean
-): string | undefined {
-  const others = pool.filter(
-    (other) =>
-      other.id !== entity.id &&
-      other.label.toLowerCase() !== entity.label.toLowerCase() &&
-      other.label.length <= CARD_OPTION_MAX
-  );
-  const sameGender = people ? others.filter((other) => other.gender === entity.gender) : [];
-  const choice = shuffle(sameGender.length ? sameGender : others)[0];
-  return choice ? displayLabel(choice.label) : undefined;
+): string[] | undefined {
+  const needed = CARD_OPTIONS - 1;
+  const taken = new Set([entity.label.toLowerCase()]);
+  const picked: string[] = [];
+  const add = (label: string) => {
+    const key = label.toLowerCase();
+    if (picked.length >= needed || taken.has(key) || label.length > CARD_OPTION_MAX) return;
+    taken.add(key);
+    picked.push(label);
+  };
+  if (entity.wrong) add(entity.wrong);
+  const others = shuffle(pool.filter((other) => other.id !== entity.id));
+  if (people) {
+    for (const other of others) if (other.gender === entity.gender) add(displayLabel(other.label));
+  }
+  for (const other of others) add(displayLabel(other.label));
+  return picked.length === needed ? picked : undefined;
 }
 
 /** Alternates between the lists (first of each, second of each, ...), dropping repeats. */
@@ -188,8 +197,8 @@ export async function importImageCards(
       summary.skipped.unusableLicense++;
       return;
     }
-    const wrong = entity.wrong ?? pickDistractor(entity, entities, category.people);
-    if (!wrong) {
+    const wrongs = pickDistractors(entity, entities, category.people);
+    if (!wrongs) {
       summary.skipped.noWrongOption++;
       return;
     }
@@ -201,15 +210,16 @@ export async function importImageCards(
       summary.skipped.imageFailed++;
       return;
     }
-    const correctOptionIndex = Math.random() < 0.5 ? 0 : 1;
-    const correct = displayLabel(entity.label);
+    const correctOptionIndex = Math.floor(Math.random() * CARD_OPTIONS);
+    const options = [...wrongs];
+    options.splice(correctOptionIndex, 0, displayLabel(entity.label));
     try {
       await TriviaCardModel.create({
         topicId,
         type: "image",
         imageUrl,
         text: category.prompt,
-        options: correctOptionIndex === 0 ? [correct, wrong] : [wrong, correct],
+        options,
         correctOptionIndex,
         attribution: buildAttribution(image),
         source: IMPORT_SOURCE,

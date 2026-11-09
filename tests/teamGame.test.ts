@@ -68,7 +68,7 @@ async function play(member: TestUser, code: string, cell: number, right: boolean
   const leader = (await leaderInTurn(code)) ?? member;
   expect((await pick(leader, code, cell)).status).toBe(200);
   const correct = await correctOption(code);
-  const res = await answer(leader, code, right ? correct : 1 - correct);
+  const res = await answer(leader, code, right ? correct : (correct + 1) % 4);
   expect(res.status).toBe(200);
   return res.body.game;
 }
@@ -301,7 +301,7 @@ describe("Team games", () => {
 
       const opened = (await pick(a, code, 4)).body.game;
       expect(opened.current).toMatchObject({ cellIndex: 4, number: 5, teamId: "t1", timerSeconds: expect.any(Number) });
-      expect(opened.current.question.options).toHaveLength(2);
+      expect(opened.current.question.options).toHaveLength(4);
       // The answer never leaves the server while the question is open.
       expect(JSON.stringify(opened)).not.toContain("correctOptionIndex");
 
@@ -325,10 +325,11 @@ describe("Team games", () => {
       await pick(a, code, 0);
       const firstCard = (await TeamGameModel.findOne({ code }).lean())!.current!.cardId;
       const correct = await correctOption(code);
-      const missed = (await answer(a, code, 1 - correct)).body.game;
+      const wrong = (correct + 1) % 4;
+      const missed = (await answer(a, code, wrong)).body.game;
       expect(missed.board.cells[0].owner).toBeNull();
       expect(missed.teams[0].score).toBe(0);
-      expect(missed.lastPlay).toMatchObject({ outcome: "wrong", optionIndex: 1 - correct, correctOptionIndex: correct });
+      expect(missed.lastPlay).toMatchObject({ outcome: "wrong", optionIndex: wrong, correctOptionIndex: correct });
       expect(missed.turnTeamId).toBe("t2");
 
       await pick(b, code, 0);

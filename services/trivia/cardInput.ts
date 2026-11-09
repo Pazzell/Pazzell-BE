@@ -2,18 +2,17 @@ import ErrorHandler from "../../utils/ErrorHandler";
 import {
   CARD_OPTION_MAX,
   CARD_TEXT_MAX,
+  CARD_OPTIONS,
   ICardContent,
-  TOPIC_CARD_OPTIONS,
 } from "../../models/cardFields";
 import { ImageFolder, resolveImage } from "../upload/image.service";
 import { toInt } from "../../utils/validators";
 import { genericImagePrompt } from "./imagePrompt";
 
 // One validator for every kind of trivia card (admin topic, custom quiz, campaign):
-// an image or a short definition, `count` options (2 for topics and campaigns, 4 for
-// custom quizzes), one of them marked correct.
+// an image or a short definition, four options, one of them marked correct.
 
-function parseOptions(raw: any, count: number): string[] {
+function parseOptions(raw: any, count: number = CARD_OPTIONS): string[] {
   let value = raw;
   if (typeof value === "string") {
     // multipart forms send the array as a JSON string
@@ -36,7 +35,7 @@ function parseOptions(raw: any, count: number): string[] {
   }
   if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) {
     throw new ErrorHandler(
-      count === 2 ? "The two options must be different" : "The options must all be different",
+      "The options must all be different",
       400,
       "INVALID_CARD"
     );
@@ -48,15 +47,14 @@ function parseOptions(raw: any, count: number): string[] {
  * Builds validated card content from a request body (JSON or multipart) and an optional
  * uploaded file. When `existing` is given this is an update: omitted fields keep their
  * current values, and the merged card is validated as a whole. New options must number
- * `optionCount`; an existing card whose options are not sent keeps the ones it has.
+ * four; an existing card whose options are not sent keeps the ones it has.
  */
 export async function buildCardContent(
   body: any,
   file: { buffer: Buffer } | undefined,
   ownerId: string,
   folder: ImageFolder,
-  existing?: ICardContent,
-  optionCount: number = TOPIC_CARD_OPTIONS
+  existing?: ICardContent
 ): Promise<ICardContent> {
   const input = body || {};
   const type = input.type ?? existing?.type;
@@ -87,9 +85,9 @@ export async function buildCardContent(
   }
 
   const options =
-    input.options !== undefined ? parseOptions(input.options, optionCount) : existing?.options;
+    input.options !== undefined ? parseOptions(input.options) : existing?.options;
   if (!options) {
-    throw new ErrorHandler(`A card must have exactly ${optionCount} options`, 400, "INVALID_CARD");
+    throw new ErrorHandler(`A card must have exactly ${CARD_OPTIONS} options`, 400, "INVALID_CARD");
   }
 
   const correctOptionIndex =
@@ -121,8 +119,7 @@ export const BULK_CARD_LIMIT = 100;
 export async function buildBulkCards(
   body: any,
   ownerId: string,
-  folder: ImageFolder,
-  optionCount: number = TOPIC_CARD_OPTIONS
+  folder: ImageFolder
 ): Promise<ICardContent[]> {
   const rows = body?.cards;
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > BULK_CARD_LIMIT) {
@@ -135,7 +132,7 @@ export async function buildBulkCards(
   const cards: ICardContent[] = [];
   for (let i = 0; i < rows.length; i++) {
     try {
-      cards.push(await buildCardContent(rows[i], undefined, ownerId, folder, undefined, optionCount));
+      cards.push(await buildCardContent(rows[i], undefined, ownerId, folder));
     } catch (e: any) {
       throw new ErrorHandler(`Card ${i + 1}: ${e.message}`, 400, e.code || "INVALID_CARD", {
         index: i,

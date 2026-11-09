@@ -1,7 +1,7 @@
 import ErrorHandler from "../../utils/ErrorHandler";
 import { redis } from "../../utils/redis";
 import { isObjectId, requireString, toInt } from "../../utils/validators";
-import { ICardContent, TOPIC_CARD_OPTIONS } from "../../models/cardFields";
+import { ICardContent } from "../../models/cardFields";
 import CustomQuizModel, { ICustomQuiz } from "../../models/customQuiz.model";
 import CustomQuizCardModel from "../../models/customQuizCard.model";
 import TriviaTopicModel from "../../models/triviaTopic.model";
@@ -147,8 +147,7 @@ async function buildCards(
   for (const candidate of candidates) {
     const key = fingerprint(candidate.statement);
     if (!key || seen.has(key)) continue;
-    // AI generated trivia keeps two options, like the General Trivia it can be added to.
-    const placed = placeAnswer(candidate.correctAnswer, candidate.wrongAnswers, TOPIC_CARD_OPTIONS);
+    const placed = placeAnswer(candidate.correctAnswer, candidate.wrongAnswers);
     if (!placed) continue;
     try {
       cards.push(

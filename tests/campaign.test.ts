@@ -83,7 +83,7 @@ describe("Brand campaigns", () => {
             cards: Array.from({ length: cards }, (_, i) => ({
               type: "definition",
               text: `Acme fact ${i}`,
-              options: ["True", "False"],
+              options: ["True", "False", "Sometimes", "Never"],
               correctOptionIndex: 0,
             })),
           });
@@ -461,7 +461,7 @@ describe("Brand campaigns", () => {
       const player = await createUser();
       const otherBrand = await createUser({ role: "brand" });
       const id = await createCampaign(brand.id, { status: "draft" });
-      const cardBody = { type: "definition", text: "x", options: ["a", "b"], correctOptionIndex: 0 };
+      const cardBody = { type: "definition", text: "x", options: ["a", "b", "c", "d"], correctOptionIndex: 0 };
 
       expect((await api().post(brandBase).set(player.auth).send({ title: "T" })).status).toBe(403);
       expect((await api().get(brandBase).set(player.auth)).status).toBe(403);

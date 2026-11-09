@@ -10,7 +10,7 @@ import {
   interleaveEntities,
   isAllowedLicense,
   onWhite,
-  pickDistractor,
+  pickDistractors,
 } from "../services/trivia/imageImport.service";
 import * as wikimedia from "../services/trivia/wikimedia";
 
@@ -86,16 +86,37 @@ describe("Image import rules", () => {
     );
   });
 
-  it("picks a wrong option of the same gender for people, never the answer itself", () => {
+  it("picks three wrong options, same gender first for people, never the answer itself", () => {
+    const female = "Q6581072";
+    const male = "Q6581097";
     const pool = [
-      { id: "Q1", label: "Ada", fileName: "a.jpg", gender: "Q6581072" },
-      { id: "Q2", label: "Bola", fileName: "b.jpg", gender: "Q6581072" },
-      { id: "Q3", label: "Chidi", fileName: "c.jpg", gender: "Q6581097" },
-      { id: "Q4", label: "ada", fileName: "d.jpg", gender: "Q6581072" },
+      { id: "Q1", label: "Ada", fileName: "a.jpg", gender: female },
+      { id: "Q2", label: "Bola", fileName: "b.jpg", gender: female },
+      { id: "Q3", label: "Chidi", fileName: "c.jpg", gender: male },
+      { id: "Q4", label: "ada", fileName: "d.jpg", gender: female },
+      { id: "Q5", label: "Dayo", fileName: "e.jpg", gender: female },
+      { id: "Q6", label: "Emeka", fileName: "f.jpg", gender: male },
     ];
-    for (let i = 0; i < 20; i++) expect(pickDistractor(pool[0], pool, true)).toBe("Bola");
-    expect(pickDistractor(pool[2], pool, true)).not.toBe("Chidi"); // falls back to the rest
-    expect(pickDistractor(pool[0], [pool[0]], true)).toBeUndefined();
+    for (let i = 0; i < 20; i++) {
+      const picked = pickDistractors(pool[0], pool, true)!;
+      expect(picked).toHaveLength(3);
+      // Two other women exist, so the third has to be a man; "ada" is the answer itself.
+      expect(picked.slice(0, 2).sort()).toEqual(["Bola", "Dayo"]);
+      expect(["Chidi", "Emeka"]).toContain(picked[2]);
+    }
+    expect(pickDistractors(pool[0], pool.slice(0, 3), true)).toBeUndefined(); // too few
+  });
+
+  it("puts a curated look-alike first among the wrong options", () => {
+    const pool = [
+      { id: "a", label: "Treble clef", fileName: "t.svg", wrong: "Bass clef" },
+      { id: "b", label: "Bass clef", fileName: "b.svg" },
+      { id: "c", label: "Staff", fileName: "s.svg" },
+      { id: "d", label: "Sharp", fileName: "x.svg" },
+    ];
+    const picked = pickDistractors(pool[0], pool, false)!;
+    expect(picked[0]).toBe("Bass clef");
+    expect(picked.slice(1).sort()).toEqual(["Sharp", "Staff"]);
   });
 });
 
@@ -180,7 +201,7 @@ describe("POST /admin/trivia/import", () => {
     // Our own stored copy, never the source's URL.
     expect(lion.imageUrl).toMatch(/^https:\/\/storage\.pazzell\.test\/pazzell\/cards\/[0-9a-f-]{36}\.webp$/);
     expect(lion.options[lion.correctOptionIndex]).toBe("Lion");
-    expect(["Zebra", "Hippo", "Okapi"]).toContain(lion.options[1 - lion.correctOptionIndex]);
+    expect([...lion.options].sort()).toEqual(["Hippo", "Lion", "Okapi", "Zebra"]);
   });
 
   it("never imports the same subject into a topic twice", async () => {
@@ -231,7 +252,7 @@ describe("POST /admin/trivia/import", () => {
     expect(questions.find((q) => q.type === "definition").attribution).toBeNull();
   });
 
-  it("imports music symbols from a fixed list, with the look-alike as the wrong option", async () => {
+  it("imports music symbols from a fixed list, with the look-alike among the wrong options", async () => {
     jest.restoreAllMocks();
     const category = wikimedia.getImportCategory("music-symbols-beginner")!;
     // No request is made: the list is in the code.
@@ -250,7 +271,8 @@ describe("POST /admin/trivia/import", () => {
     const treble = (await TriviaCardModel.findOne({ sourceRef: "commons:Music-GClef.svg" }).lean())!;
     expect(treble.text).toBe("What is this?");
     expect(treble.options[treble.correctOptionIndex]).toBe("Treble clef");
-    expect(treble.options[1 - treble.correctOptionIndex]).toBe("Bass clef");
+    expect(treble.options).toHaveLength(4);
+    expect(treble.options).toContain("Bass clef");
   });
 
   it("mixes home-country and worldwide people unless a country is named", async () => {

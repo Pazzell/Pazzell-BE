@@ -379,9 +379,9 @@ With `timerSeconds: 0` the question carries `"deadlineAt": null, "remainingMs": 
   When the field is absent, show no marker. Never guess it on the client.
 - Outside practice there is no answer, no card id and nothing to infer one from. The cards and
   the options of each card are in random order.
-- `options` has 2 entries for General Trivia, campaigns and AI generated trivia, and 4 for a
-  custom quiz (broadcast or personal; older custom quiz cards may still have 2). Lay out 4 as a
-  2 × 2 grid, labelled A to D.
+- `options` has 4 entries on every kind of trivia (General Trivia, campaigns, AI generated
+  trivia and custom quizzes). Lay them out as a 2 × 2 grid, labelled A to D. Cards saved before
+  every card had 4 options may still have 2, so handle any count from 2 to 4.
 - `attribution` is the image credit for a picture fetched from an API, or `null`. When it is
   set, show it as small text with the image (the picture's licence requires it).
 - `type` is `image` (show `imageUrl`; `text` is an optional caption) or `definition` (show
@@ -559,10 +559,11 @@ The campaign gate applies to it, and a completed play counts toward the player's
 | `type` | `"image"` or `"definition"` |
 | `text` | Required for `definition`; optional caption for `image`. Max 300 characters. An image caption asking "Which animal is this?", "Who is this footballer?" and the like is saved as the generic "What is this?" or "Who is this?"; other captions are kept |
 | image | Required for `image`: a multipart file field named `image`, or `imageUrl` returned by `POST /uploads/images` for the same user |
-| `options` | Non-empty, different strings, max 80 characters each: exactly **4** on a custom quiz card (broadcast, team or personal) and exactly **2** on a General Trivia topic card, a campaign card or an AI generated trivia card. In multipart send it as a JSON string: `["Nigeria","Ghana","Kenya","Togo"]` |
-| `correctOptionIndex` | The index of the correct option: `0` to `3` (or `0` to `1` for 2 options) |
+| `options` | Exactly **4** non-empty, different strings, max 80 characters each, on every card (General Trivia topic, campaign, custom quiz or AI generated trivia). In multipart send it as a JSON string: `["Nigeria","Ghana","Kenya","Togo"]` |
+| `correctOptionIndex` | The index of the correct option: `0` to `3` |
 
-Custom quiz cards saved before quizzes moved to 4 options keep their 2 options and still play.
+Cards saved before every card had 4 options keep their 2 options and still play. Editing one
+without sending `options` keeps them; sending new `options` needs all 4.
 Editing such a card without sending `options` keeps them; sending `options` needs all 4.
 
 Invalid cards return `400 INVALID_CARD`; in bulk the message names the row (`Card 3: …`) and
@@ -627,8 +628,9 @@ It can take a minute or two, so show progress and do not retry automatically.
   "usage": { "dailyLimit": 3, "usedToday": 2, "remaining": 1, "resetsAt": "2026-10-12T00:00:00.000Z" } }
 ```
 
-- Drafts for a custom quiz come with 4 options (the AI writes 3 wrong answers), with the right
-  one at a random position. The admin's drafts for a General Trivia topic (section 9) keep 2.
+- Every draft comes with 4 options (the AI writes 3 wrong answers), with the right one at a
+  random position. The same goes for the admin's drafts for a General Trivia topic (section 9)
+  and for AI generated trivia (7.5).
 - `cards` may hold fewer than `requested`: a card the document does not support, or that fails
   the blind check, is dropped.
 - From a description, `prompt` echoes it, `document` is `null` and every `quote` is `""`. A
@@ -814,7 +816,8 @@ Tic-tac-toe between teams. A game (`kind`) is one of two:
   "turnTeamId": "t2",
   "current": { "cellIndex": 4, "number": 5, "teamId": "t2", "servedAt": "…", "deadlineAt": "…", "timerSeconds": 30,
                "question": { "type": "definition", "imageUrl": null, "text": "Capital of Kenya", "attribution": null,
-                             "options": [{ "index": 0, "text": "Nairobi" }, { "index": 1, "text": "Mombasa" }] } },
+                             "options": [{ "index": 0, "text": "Nairobi" }, { "index": 1, "text": "Mombasa" },
+                                         { "index": 2, "text": "Kisumu" }, { "index": 3, "text": "Nakuru" }] } },
   "lastPlay": { "cellIndex": 0, "number": 1, "teamId": "t1", "outcome": "correct",
                 "optionIndex": 0, "correctOptionIndex": 0, "at": "…" },
   "playCount": 1, "winnerTeamId": null, "winningLine": null, "isDraw": false, "endReason": null,
@@ -1048,7 +1051,9 @@ For bulk entry with images: upload each image with `POST /uploads/images`, then 
 
 Image cards can also be fetched automatically. The server looks up the best-known entries of a
 category on Wikidata, downloads each picture from Wikimedia Commons into our own storage, and
-adds it to a topic as an image card with two options. No API key is needed.
+adds it to a topic as an image card with four options: the right name and three other entries
+of the same category (of the same gender first, for people; a music symbol's look-alike is
+always one of them). No API key is needed.
 
 | Method | Path | Notes |
 | --- | --- | --- |
@@ -1092,22 +1097,24 @@ the seed script.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/admin/trivia/starter` | `{ topics: [ { slug, name, description, topicId, total, missing } ] }` |
+| GET | `/admin/trivia/starter` | `{ topics: [ { slug, name, description, topicId, total, missing, outdated } ] }` |
 | POST | `/admin/trivia/starter` | `{ slugs? }` |
 
 - `topicId` is `null` until the topic exists; `missing` is how many of its `total` built-in
-  questions are not in the topic yet.
+  questions are not in the topic yet; `outdated` is how many it holds with the 2 options they
+  were first loaded with, unedited. Loading the topic again gives those their 4 options.
 - `slugs`: which topics to load. Without it every topic is loaded. A topic that does not
   exist is created.
 - Only the questions a topic does not already have are added (matched by their text), so the
   call is safe to repeat. A built-in question an admin deleted comes back on the next load; one
-  an admin edited (options only) is left as it is.
+  an admin edited (options only) is left as it is. `upgraded` counts the outdated questions that
+  were given 4 options.
 
 ```json
 { "success": true,
-  "loaded": { "created": 44,
+  "loaded": { "created": 44, "upgraded": 0,
               "topics": [ { "slug": "music-theory-beginner", "name": "Music Theory: Beginner",
-                            "topicId": "6701…", "topicCreated": true, "created": 44 } ] } }
+                            "topicId": "6701…", "topicCreated": true, "created": 44, "upgraded": 0 } ] } }
 ```
 
 Error: `400 INVALID_STARTER_TOPIC`.
