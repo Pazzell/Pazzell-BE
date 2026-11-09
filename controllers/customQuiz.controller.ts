@@ -14,7 +14,6 @@ import userModel from "../models/user.model";
 import { assertObjectId, cleanString, requireString, toInt } from "../utils/validators";
 import { resolveImage } from "../services/upload/image.service";
 import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
-import { QUIZ_CARD_OPTIONS, TOPIC_CARD_OPTIONS } from "../models/cardFields";
 import { cardCountBounds, cardMix, getPlayStats } from "../services/trivia/session.service";
 import { assertCanCreateCustomQuiz } from "../services/plan/policy";
 import { getPlan } from "../services/plan/plan.service";
@@ -87,11 +86,6 @@ async function loadOwnedQuiz(req: Request): Promise<ICustomQuiz> {
   if (!quiz) throw new ErrorHandler("Quiz not found", 404, "QUIZ_NOT_FOUND");
   return quiz;
 }
-
-// AI generated trivia keeps the two options it was written with; every other custom quiz
-// (broadcast, team, personal) has four.
-const optionCountFor = (quiz: ICustomQuiz) =>
-  quiz.origin === "ai" ? TOPIC_CARD_OPTIONS : QUIZ_CARD_OPTIONS;
 
 function parseTimer(value: any): number {
   const timer = toInt(value);
@@ -257,14 +251,7 @@ export const deleteQuiz = CatchAsyncError(async (req: Request, res: Response) =>
 // POST /custom-quizzes/:id/cards  (multipart with "image", or JSON)
 export const createCard = CatchAsyncError(async (req: Request, res: Response) => {
   const quiz = await loadOwnedQuiz(req);
-  const content = await buildCardContent(
-    req.body,
-    req.file,
-    quiz.ownerId,
-    "cards",
-    undefined,
-    optionCountFor(quiz)
-  );
+  const content = await buildCardContent(req.body, req.file, quiz.ownerId, "cards");
   const card = await CustomQuizCardModel.create({ quizId: String(quiz._id), ...content });
   res.status(201).json({ success: true, card: editorCard(card) });
 });
@@ -272,7 +259,7 @@ export const createCard = CatchAsyncError(async (req: Request, res: Response) =>
 // POST /custom-quizzes/:id/cards/bulk  { cards: [...] }
 export const bulkCreateCards = CatchAsyncError(async (req: Request, res: Response) => {
   const quiz = await loadOwnedQuiz(req);
-  const contents = await buildBulkCards(req.body, quiz.ownerId, "cards", optionCountFor(quiz));
+  const contents = await buildBulkCards(req.body, quiz.ownerId, "cards");
   const cards = await CustomQuizCardModel.insertMany(
     contents.map((content) => ({ quizId: String(quiz._id), ...content }))
   );
@@ -294,14 +281,7 @@ async function loadQuizCard(quiz: ICustomQuiz, cardId: string) {
 export const updateCard = CatchAsyncError(async (req: Request, res: Response) => {
   const quiz = await loadOwnedQuiz(req);
   const card = await loadQuizCard(quiz, req.params.cardId);
-  const content = await buildCardContent(
-    req.body,
-    req.file,
-    quiz.ownerId,
-    "cards",
-    card,
-    optionCountFor(quiz)
-  );
+  const content = await buildCardContent(req.body, req.file, quiz.ownerId, "cards", card);
   card.set(content);
   if (content.type === "definition") card.imageUrl = undefined;
   await card.save();
@@ -441,8 +421,6 @@ export const generateCards = CatchAsyncError(async (req: Request, res: Response)
     prompt: body.prompt,
     topic: body.topic,
     count: body.count,
-    // Drafts for a broadcast, team or personal quiz come with four options.
-    optionCount: QUIZ_CARD_OPTIONS,
   });
   res.status(200).json({ success: true, ...result });
 });

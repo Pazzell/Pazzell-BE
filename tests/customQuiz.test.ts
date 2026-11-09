@@ -159,7 +159,7 @@ describe("Custom trivia", () => {
     it("keeps an older 2-option card playable until its options are edited", async () => {
       const user = await createUser();
       const id = (await create(user)).body.quiz.id;
-      const [cardId] = await addQuizCards(id, 1); // stored with two options, as before
+      const [cardId] = await addQuizCards(id, 1, true); // stored with two options, as before
       const card = `${base}/${id}/cards/${cardId}`;
 
       const renamed = await api().patch(card).set(user.auth).send({ text: "Renamed" });

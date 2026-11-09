@@ -61,8 +61,14 @@ export async function resetState() {
 export const definitionCard = (n: number) => ({
   type: "definition" as const,
   text: `Statement number ${n}`,
-  options: [`Right ${n}`, `Wrong ${n}`],
+  options: [`Right ${n}`, `Wrong ${n}`, `Other ${n}`, `Last ${n}`],
   correctOptionIndex: 0,
+});
+
+/** A card as it was saved before every card had four options. */
+export const twoOptionCard = (n: number) => ({
+  ...definitionCard(n),
+  options: [`Right ${n}`, `Wrong ${n}`],
 });
 
 export async function createTopic(cardCount = 12, name = "General") {
@@ -77,10 +83,18 @@ export async function createTopic(cardCount = 12, name = "General") {
   return String(topic._id);
 }
 
-/** Inserts quiz cards directly, with two options each as older quizzes have. Returns their ids. */
-export async function addQuizCards(quizId: string, count: number): Promise<string[]> {
+/**
+ * Inserts quiz cards directly, with four options each (two with `twoOptions`, as cards
+ * saved before every card had four). Returns their ids.
+ */
+export async function addQuizCards(
+  quizId: string,
+  count: number,
+  twoOptions = false
+): Promise<string[]> {
+  const card = twoOptions ? twoOptionCard : definitionCard;
   const cards = await CustomQuizCardModel.insertMany(
-    Array.from({ length: count }, (_, i) => ({ quizId, ...definitionCard(i) }))
+    Array.from({ length: count }, (_, i) => ({ quizId, ...card(i) }))
   );
   return cards.map((card) => String(card._id));
 }

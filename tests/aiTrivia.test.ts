@@ -25,7 +25,7 @@ const PROMPT = "Hard questions about the emperors of the first century";
 const candidate = (i: number): ai.TopicCardCandidate => ({
   statement: `Question ${i}?`,
   correctAnswer: `Right ${i}`,
-  wrongAnswers: [`Wrong ${i}`],
+  wrongAnswers: [`Wrong ${i}`, `Other ${i}`, `Last ${i}`],
 });
 /** The option a perfect checker picks for each question. */
 const rightOption = (questions: { options: string[] }[]) =>
@@ -126,7 +126,7 @@ describe("AI generated trivia", () => {
     it("keeps only the cards the blind check agrees with", async () => {
       answerCards.mockImplementation(async (_topic, questions) => {
         const picked: (number | null)[] = rightOption(questions);
-        picked[0] = 1 - (picked[0] as number); // the checker picks the other option
+        picked[0] = ((picked[0] as number) + 1) % 4; // the checker picks another option
         picked[1] = null; // the checker is not sure
         return picked;
       });
@@ -144,7 +144,7 @@ describe("AI generated trivia", () => {
         cards: [
           candidate(0),
           { ...candidate(1), statement: "QUESTION 0?" }, // the same question again
-          { ...candidate(2), wrongAnswers: ["right 2"] }, // both options the same
+          { ...candidate(2), wrongAnswers: ["right 2", "Other 2", "Last 2"] }, // a wrong answer repeats the right one
           { ...candidate(3), correctAnswer: "x".repeat(81) }, // option too long
           candidate(4),
         ],

@@ -230,7 +230,7 @@ describe("Trivia (admin topics)", () => {
       const started = await startDefault({ practice: true });
       const id = started.body.session.id;
       const first = await question(user, id);
-      const wrong = await answer(user, id, 0, 1 - first.body.question.correctOptionIndex);
+      const wrong = await answer(user, id, 0, (first.body.question.correctOptionIndex + 1) % 4);
       expect(wrong.body.outcome).toBe("wrong");
 
       await question(user, id);
@@ -276,21 +276,21 @@ describe("Trivia (admin topics)", () => {
           expect(keys.has(leaked)).toBe(false);
         }
       }
-      expect(q.body.question.options.map((o: any) => o.index)).toEqual([0, 1]);
+      expect(q.body.question.options.map((o: any) => o.index)).toEqual([0, 1, 2, 3]);
       expect(Object.keys(q.body.question.options[0]).sort()).toEqual(["index", "text"]);
       expect(q.headers["cache-control"]).toBe("no-store");
     });
 
     it("does not reveal the answer through option order", async () => {
-      // Across many sessions the correct option must land in both positions.
+      // Across many sessions the correct option must land in every position.
       const positions = new Set<number>();
-      for (let i = 0; i < 6 && positions.size < 2; i++) {
+      for (let i = 0; i < 10 && positions.size < 4; i++) {
         const player = await createUser();
         const s = await startTrivia(player, { sourceType: "topic", sourceId: topicId, timerSeconds: 5, cardCount: 12 });
         const rows = await TriviaAttemptQuestionModel.find({ attemptId: s.body.session.id }).lean();
         rows.forEach((r) => positions.add(r.optionOrder.indexOf(r.card.correctOptionIndex)));
       }
-      expect(positions.size).toBe(2);
+      expect(positions.size).toBe(4);
     });
 
     it("scores correct and wrong answers on the server and reports the total", async () => {
@@ -389,7 +389,7 @@ describe("Trivia (admin topics)", () => {
       expect(skip.body.code).toBe("NOT_CURRENT_QUESTION");
 
       const right = await correctPosition(id, 0);
-      const first = await answer(user, id, 0, 1 - right);
+      const first = await answer(user, id, 0, (right + 1) % 4);
       expect(first.body.outcome).toBe("wrong");
       const retry = await answer(user, id, 0, right);
       expect(retry.body.outcome).toBe("wrong"); // idempotent: the stored outcome stands
@@ -453,8 +453,8 @@ describe("Trivia (admin topics)", () => {
           cards: Array.from({ length: 6 }, (_, i) => ({
             type: "definition",
             text: `Fact ${i}`,
-            options: ["Yes", "No"],
-            correctOptionIndex: i % 2,
+            options: ["Yes", "No", "Maybe", "Never"],
+            correctOptionIndex: i % 4,
           })),
         });
       expect(bulk.status).toBe(201);
@@ -467,10 +467,18 @@ describe("Trivia (admin topics)", () => {
       expect(invalid.status).toBe(400);
       expect(invalid.body.code).toBe("INVALID_CARD");
 
+      // General Trivia cards have four options, like every other card.
+      const two = await api()
+        .post(`/api/v1/admin/trivia/topics/${id}/cards`)
+        .set(admin.auth)
+        .send({ type: "definition", text: "Two options", options: ["a", "b"], correctOptionIndex: 0 });
+      expect(two.status).toBe(400);
+      expect(two.body.message).toBe("A card must have exactly 4 options");
+
       const noCorrect = await api()
         .post(`/api/v1/admin/trivia/topics/${id}/cards`)
         .set(admin.auth)
-        .send({ type: "definition", text: "No answer", options: ["a", "b"] });
+        .send({ type: "definition", text: "No answer", options: ["a", "b", "c", "d"] });
       expect(noCorrect.status).toBe(400);
 
       const preview = await api().get(`/api/v1/admin/trivia/topics/${id}`).set(admin.auth);

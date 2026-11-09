@@ -1,5 +1,5 @@
 import ErrorHandler from "../../utils/ErrorHandler";
-import { CARD_OPTION_MAX, CARD_TEXT_MAX } from "../../models/cardFields";
+import { CARD_OPTIONS, CARD_OPTION_MAX, CARD_TEXT_MAX } from "../../models/cardFields";
 import * as ai from "../ai";
 
 // The prompts and schemas for every AI request the game makes. Which AI answers them is
@@ -11,7 +11,7 @@ export const isAiConfigured = (): boolean => ai.isAiConfigured();
 export interface CardCandidate {
   statement: string;
   correctAnswer: string;
-  // One wrong answer for a 2-option card, three for a 4-option quiz card.
+  // Three wrong answers: a card has four options.
   wrongAnswers: string[];
   quote: string;
 }
@@ -66,8 +66,8 @@ const asString = (value: any): string => (typeof value === "string" ? value.trim
 const asStrings = (value: any): string[] =>
   Array.isArray(value) ? value.map(asString).filter(Boolean) : [];
 
-const wrongAnswersAsked = (wrongCount: number) =>
-  `Give each card exactly ${wrongCount} wrong answer${wrongCount === 1 ? "" : "s"}.`;
+const WRONG_ANSWERS = CARD_OPTIONS - 1;
+const wrongAnswersAsked = () => `Give each card exactly ${WRONG_ANSWERS} wrong answers.`;
 
 const unavailable = () =>
   new ErrorHandler(
@@ -104,8 +104,7 @@ async function ask(
 export async function requestCards(
   text: string,
   count: number,
-  avoid: string[] = [],
-  wrongCount = 1
+  avoid: string[] = []
 ): Promise<GeneratedCards> {
   const input = await ask(
     {
@@ -113,7 +112,7 @@ export async function requestCards(
       description: "Saves the trivia cards written from the document.",
       system: SYSTEM_PROMPT,
       content:
-        `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document. ${wrongAnswersAsked(wrongCount)}` +
+        `<document>\n${text}\n</document>\n\nWrite ${count} trivia cards from this document. ${wrongAnswersAsked()}` +
         (avoid.length
           ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
               .map((question) => `- ${question}`)
@@ -245,8 +244,7 @@ export async function requestTopicCards(
   topic: string,
   prompt: string,
   count: number,
-  avoid: string[] = [],
-  wrongCount = 1
+  avoid: string[] = []
 ): Promise<GeneratedTopicCards> {
   const input = await ask(
     {
@@ -254,7 +252,7 @@ export async function requestTopicCards(
       description: "Saves the trivia cards written for the topic.",
       system: TOPIC_SYSTEM_PROMPT,
       content:
-        `<topic>\n${topic}\n</topic>\n\n<description>\n${prompt}\n</description>\n\nWrite ${count} trivia cards. ${wrongAnswersAsked(wrongCount)}` +
+        `<topic>\n${topic}\n</topic>\n\n<description>\n${prompt}\n</description>\n\nWrite ${count} trivia cards. ${wrongAnswersAsked()}` +
         (avoid.length
           ? `\n\nThese questions already exist. Do not write a card that tests the same fact as any of them:\n${avoid
               .map((question) => `- ${question}`)

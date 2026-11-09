@@ -32,11 +32,12 @@ describe("Seed script", () => {
       const cards = await TriviaCardModel.find({ topicId: String(topic._id) }).lean();
       expect(cards.length).toBeGreaterThanOrEqual(20);
       for (const card of cards) {
-        expect(card.options).toHaveLength(2);
-        expect([0, 1]).toContain(card.correctOptionIndex);
+        expect(card.options).toHaveLength(4);
+        expect(new Set(card.options.map((o) => o.toLowerCase())).size).toBe(4);
+        expect([0, 1, 2, 3]).toContain(card.correctOptionIndex);
       }
-      // The right answer is not always in the same position.
-      expect(new Set(cards.map((c) => c.correctOptionIndex)).size).toBe(2);
+      // The right answer moves through every position.
+      expect(new Set(cards.map((c) => c.correctOptionIndex)).size).toBe(4);
     }
 
     const stored = await ConfigModel.find({}).lean();

@@ -47,8 +47,9 @@ describe("Starter questions (/admin/trivia/starter)", () => {
     const first = cards.find((c) => c.text === football.cards[0][0])!;
     expect(first.type).toBe("definition");
     expect(first.options[first.correctOptionIndex]).toBe(football.cards[0][1]);
-    // The right answer is not always in the same position.
-    expect(new Set(cards.map((c) => c.correctOptionIndex)).size).toBe(2);
+    expect(first.options).toHaveLength(4);
+    // The right answer moves through every position.
+    expect(new Set(cards.map((c) => c.correctOptionIndex)).size).toBe(4);
 
     const after = (await list(admin.auth)).body.topics.find((t: any) => t.slug === "football");
     expect(after).toMatchObject({ topicId: String(topic!._id), missing: 0 });
@@ -81,6 +82,36 @@ describe("Starter questions (/admin/trivia/starter)", () => {
     expect((await TriviaCardModel.findById(cards[2]._id).lean())!.options).toEqual(["Mine", "Theirs"]);
 
     expect((await load(admin.auth, { slugs: ["football"] })).body.loaded.created).toBe(0);
+  });
+
+  it("gives starter questions loaded with two options all four, unless the admin edited them", async () => {
+    const admin = await createUser({ role: "admin" });
+    await load(admin.auth, { slugs: ["football"] });
+    const topicId = String((await TriviaTopicModel.findOne({ slug: "football" }).lean())!._id);
+    const byText = (text: string) => TriviaCardModel.findOne({ topicId, text });
+    const [kickOff, length, keeper] = football.cards;
+
+    // Two cards as they were stored before four options, and one the admin reworded.
+    await byText(kickOff[0]).updateOne({ options: [kickOff[2], kickOff[1]], correctOptionIndex: 1 });
+    await byText(length[0]).updateOne({ options: [length[1], length[2]], correctOptionIndex: 0 });
+    await byText(keeper[0]).updateOne({ options: [keeper[1], "Anyone"], correctOptionIndex: 0 });
+
+    const listed = (await list(admin.auth)).body.topics.find((t: any) => t.slug === "football");
+    expect(listed).toMatchObject({ missing: 0, outdated: 2 });
+
+    const res = await load(admin.auth, { slugs: ["football"] });
+    expect(res.body.loaded).toMatchObject({
+      created: 0,
+      upgraded: 2,
+      topics: [{ slug: "football", created: 0, upgraded: 2 }],
+    });
+    for (const seed of [kickOff, length]) {
+      const card = (await byText(seed[0]).lean())!;
+      expect([...card.options].sort()).toEqual(seed.slice(1).sort());
+      expect(card.options[card.correctOptionIndex]).toBe(seed[1]);
+    }
+    expect((await byText(keeper[0]).lean())!.options).toEqual([keeper[1], "Anyone"]);
+    expect((await load(admin.auth, { slugs: ["football"] })).body.loaded.upgraded).toBe(0);
   });
 
   it("loads everything when no topics are named", async () => {
