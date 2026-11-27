@@ -63,17 +63,37 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
 
-      # --- Image storage (S3) ---
+      # --- Image storage (Firebase) ---
+      # The service account also enables Firebase idToken sign-in.
+      # Copy each value from the service-account JSON (Firebase console > Project settings >
+      # Service accounts > Generate new private key). PRIVATE_KEY can be pasted with real
+      # line breaks or with \n escapes; both work.
       - key: STORAGE_PROVIDER
-        value: aws
-      - key: AWS_REGION
+        value: firebase
+      - key: FIREBASE_STORAGE_BUCKET
         sync: false
-      - key: AWS_ACCESS_KEY_ID
+      - key: TYPE
+        value: service_account
+      - key: PROJECT_ID
         sync: false
-      - key: AWS_SECRET_ACCESS_KEY
+      - key: PRIVATE_KEY_ID
         sync: false
-      - key: AWS_S3_BUCKET_NAME
+      - key: PRIVATE_KEY
         sync: false
+      - key: CLIENT_EMAIL
+        sync: false
+      - key: CLIENT_ID
+        sync: false
+      - key: CLIENT_CERT_URL
+        sync: false
+      - key: AUTH_URI
+        value: https://accounts.google.com/o/oauth2/auth
+      - key: TOKEN_URI
+        value: https://oauth2.googleapis.com/token
+      - key: AUTH_PROVIDER_CERT_URL
+        value: https://www.googleapis.com/oauth2/v1/certs
+      - key: UNIVERSE_DOMAIN
+        value: googleapis.com
 
       # --- Email ---
       - key: EMAIL_PROVIDER
