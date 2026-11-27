@@ -3,13 +3,15 @@ import userModel, { IUser } from "../models/user.model";
 import ErrorHandler from "../utils/ErrorHandler";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import jwt, { Secret, JwtPayload } from "jsonwebtoken";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
-import LeaderboardModel from "../models/leaderboard.model";
-import { bucket } from "../firebaseConfig";
+import BrandModel from "../models/brand.model";
+import CampaignModel from "../models/campaign.model";
+import { storeImage } from "../services/upload/image.service";
+import { getPlan } from "../services/plan/plan.service";
+import { parseHttpUrl } from "../utils/validators";
 
 import ejs from "ejs";
 import path from "path";
-import sendMail from "../utils/sendEmail";
+import { getEmailService } from "../services/email/emailFactory";
 import { redis } from "../utils/redis";
 
 import "dotenv/config";
@@ -63,7 +65,7 @@ export const registerUser = CatchAsyncError(
 
       //send email to user
       try {
-        await sendMail({
+        await getEmailService().sendMail({
           email: user.email,
           subject: "Activate your account",
           template: "activation-mail.ejs",
@@ -268,25 +270,19 @@ export const updateAccessToken = CatchAsyncError(
 export const getUserInfo = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const userId = req.user?._id as string;
-
-      const userJson = await redis.get(userId);
-
-      if (userJson) {
-        const user = JSON.parse(userJson);
-
-        res.status(200).json({
-          success: true,
-          user,
-        });
-      }
+      // req.user is read fresh from MongoDB by isAuthenticated
+      res.status(200).json({
+        success: true,
+        user: req.user,
+        plan: getPlan(req.user),
+      });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 400));
     }
   }
 );
 
-// Get gamer profile with full analytics
+// Get gamer profile
 export const getGamerProfile = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -302,114 +298,6 @@ export const getGamerProfile = CatchAsyncError(
         return next(new ErrorHandler("User not found", 404));
       }
 
-      // Calculate current week's leaderboard position
-      const now = new Date();
-      const dayOfWeek = now.getDay();
-      const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-
-      const weekStart = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate() - daysFromMonday
-      );
-      weekStart.setHours(0, 0, 0, 0);
-
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 6);
-      weekEnd.setHours(23, 59, 59, 999);
-
-      // Get current week's leaderboard for position
-      const weeklyLeaderboard = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            firstTimeSolved: true,
-            timestamp: { $gte: weekStart, $lte: weekEnd },
-          },
-        },
-        {
-          $group: {
-            _id: "$userId",
-            puzzlesSolved: { $sum: 1 },
-            points: { $sum: "$pointsEarned" },
-          },
-        },
-        { $sort: { puzzlesSolved: -1, points: -1 } },
-      ]);
-
-      // Find user's weekly leaderboard position
-      let weeklyLeaderboardPosition = null;
-      const weeklyUserIndex = weeklyLeaderboard.findIndex(
-        (entry: any) => entry._id.toString() === userId.toString()
-      );
-      if (weeklyUserIndex !== -1) {
-        weeklyLeaderboardPosition = weeklyUserIndex + 1;
-      }
-
-      // Get all-time leaderboard for position
-      const allTimeLeaderboard = await PuzzleAttemptModel.aggregate([
-        {
-          $match: {
-            firstTimeSolved: true,
-          },
-        },
-        {
-          $group: {
-            _id: "$userId",
-            puzzlesSolved: { $sum: 1 },
-            points: { $sum: "$pointsEarned" },
-          },
-        },
-        { $sort: { points: -1, puzzlesSolved: -1 } },
-      ]);
-
-      // Find user's all-time leaderboard position
-      let allTimeLeaderboardPosition = null;
-      const allTimeUserIndex = allTimeLeaderboard.findIndex(
-        (entry: any) => entry._id.toString() === userId.toString()
-      );
-      if (allTimeUserIndex !== -1) {
-        allTimeLeaderboardPosition = allTimeUserIndex + 1;
-      }
-
-      // Calculate weekly analytics from puzzle attempts
-      const weeklyAttempts = await PuzzleAttemptModel.find({
-        userId: userId,
-        timestamp: { $gte: weekStart, $lte: weekEnd },
-      }).lean();
-
-      const weeklyStats = weeklyAttempts.reduce(
-        (acc, attempt) => {
-          if (attempt.firstTimeSolved) {
-            acc.puzzlesSolved += 1;
-          }
-          acc.totalPoints += attempt.pointsEarned || 0;
-          acc.totalTime += attempt.timeTaken || 0;
-          acc.totalMoves += attempt.movesTaken || 0;
-          acc.attempts += 1;
-          if (attempt.solved) {
-            acc.successfulAttempts += 1;
-          }
-          return acc;
-        },
-        {
-          puzzlesSolved: 0,
-          totalPoints: 0,
-          totalEarnings: 0,
-          totalTime: 0,
-          totalMoves: 0,
-          attempts: 0,
-          successfulAttempts: 0,
-          successRate: 0,
-        }
-      );
-
-      // Calculate success rate
-      weeklyStats.successRate =
-        weeklyStats.attempts > 0
-          ? weeklyStats.successfulAttempts / weeklyStats.attempts
-          : 0;
-      weeklyStats.totalEarnings = weeklyStats.totalPoints; // Points = Earnings
-
       res.status(200).json({
         success: true,
         profile: {
@@ -421,31 +309,12 @@ export const getGamerProfile = CatchAsyncError(
           avatar: user.avatar,
           role: user.role,
           isVerified: user.isVerified,
-          analytics: {
-            lifetime: {
-              puzzlesSolved: user.analytics?.lifetime?.puzzlesSolved || 0,
-              totalPoints: user.analytics?.lifetime?.totalPoints || 0,
-              totalEarnings: user.analytics?.lifetime?.totalEarnings || 0,
-              totalTime: user.analytics?.lifetime?.totalTime || 0,
-              totalMoves: user.analytics?.lifetime?.totalMoves || 0,
-              attempts: user.analytics?.lifetime?.attempts || 0,
-              successRate: user.analytics?.lifetime?.successRate || 0,
-              leaderboardPosition: allTimeLeaderboardPosition,
-            },
-            weekly: {
-              weekStart: weekStart.toISOString().slice(0, 10),
-              weekEnd: weekEnd.toISOString().slice(0, 10),
-              puzzlesSolved: weeklyStats.puzzlesSolved,
-              totalPoints: weeklyStats.totalPoints,
-              totalEarnings: weeklyStats.totalEarnings,
-              totalTime: weeklyStats.totalTime,
-              totalMoves: weeklyStats.totalMoves,
-              attempts: weeklyStats.attempts,
-              successRate: Math.round(weeklyStats.successRate * 100) / 100,
-              leaderboardPosition: weeklyLeaderboardPosition,
-            },
+          plan: getPlan(user),
+          notifications: (user as any).notifications || {
+            emailNotifications: true,
+            newCampaignAlerts: true,
+            weeklyDigest: true,
           },
-          puzzlesSolved: user.puzzlesSolved,
           createdAt: (user as any).createdAt,
           updatedAt: (user as any).updatedAt,
         },
@@ -473,12 +342,10 @@ export const getBrandProfile = CatchAsyncError(
       }
 
       // Get brand details
-      const BrandModel = require("../models/brand.model").default;
       const brandProfile = await BrandModel.findOne({ userId }).lean();
 
       // Get campaign count only (not the full list for better performance)
-      const PuzzleCampaignModel = require("../models/puzzleCampaign.model").default;
-      const totalCampaigns = await PuzzleCampaignModel.countDocuments({
+      const totalCampaigns = await CampaignModel.countDocuments({
         brandId: userId,
       });
 
@@ -498,6 +365,8 @@ export const getBrandProfile = CatchAsyncError(
             ? {
                 companyEmail: brandProfile.companyEmail,
                 companyName: brandProfile.companyName,
+                logoUrl: brandProfile.logoUrl || null,
+                websiteUrl: brandProfile.websiteUrl || null,
                 verified: brandProfile.verified,
                 totalCampaigns,
               }
@@ -552,21 +421,10 @@ export const updateGamerProfile = CatchAsyncError(
       const uploadedFile: any = (req as any).file;
 
       if (uploadedFile) {
-        // File was uploaded - upload to Firebase Storage
-        const now = Date.now();
-        const avatarName = `avatars/${userId}-${now}-${uploadedFile.originalname}`;
-
-        const fileRef = bucket.file(avatarName);
-        await fileRef.save(uploadedFile.buffer, {
-          resumable: false,
-          contentType: uploadedFile.mimetype,
-        });
-        await fileRef.makePublic();
-
-        updateData.avatar = `https://storage.googleapis.com/${bucket.name}/${avatarName}`;
+        updateData.avatar = (await storeImage(uploadedFile, userId, "avatars")).url;
       } else if (avatar && typeof avatar === "string") {
         // URL was provided as string
-        updateData.avatar = avatar;
+        updateData.avatar = parseHttpUrl(avatar, "avatar");
       }
 
       // Check if there's anything to update
@@ -601,8 +459,6 @@ export const updateGamerProfile = CatchAsyncError(
           avatar: updatedUser.avatar,
           role: updatedUser.role,
           isVerified: updatedUser.isVerified,
-          analytics: updatedUser.analytics,
-          puzzlesSolved: updatedUser.puzzlesSolved,
         },
       });
     } catch (error: any) {
@@ -621,7 +477,7 @@ export const updateBrandProfile = CatchAsyncError(
         return next(new ErrorHandler("Access denied. Brand profile only.", 403));
       }
 
-      const { name, avatar, companyName } = req.body;
+      const { name, avatar, companyName, websiteUrl } = req.body;
 
       // Build update object for user model with only provided fields
       const userUpdateData: any = {};
@@ -635,26 +491,28 @@ export const updateBrandProfile = CatchAsyncError(
       // Handle avatar upload (file or URL)
       const uploadedFile: any = (req as any).file;
 
+      // The brand logo doubles as the account avatar ("avatar" file field or URL)
+      const brandUpdateData: any = {};
       if (uploadedFile) {
-        // File was uploaded - upload to Firebase Storage
-        const now = Date.now();
-        const avatarName = `avatars/${userId}-${now}-${uploadedFile.originalname}`;
-
-        const fileRef = bucket.file(avatarName);
-        await fileRef.save(uploadedFile.buffer, {
-          resumable: false,
-          contentType: uploadedFile.mimetype,
-        });
-        await fileRef.makePublic();
-
-        userUpdateData.avatar = `https://storage.googleapis.com/${bucket.name}/${avatarName}`;
+        userUpdateData.avatar = (await storeImage(uploadedFile, userId, "logos")).url;
+        brandUpdateData.logoUrl = userUpdateData.avatar;
       } else if (avatar && typeof avatar === "string") {
         // URL was provided as string
-        userUpdateData.avatar = avatar;
+        userUpdateData.avatar = parseHttpUrl(avatar, "avatar");
+        brandUpdateData.logoUrl = userUpdateData.avatar;
+      }
+      if (userUpdateData.companyName) {
+        brandUpdateData.companyName = userUpdateData.companyName;
+      }
+      if (websiteUrl !== undefined && websiteUrl !== "") {
+        brandUpdateData.websiteUrl = parseHttpUrl(websiteUrl, "websiteUrl");
       }
 
       // Check if there's anything to update
-      if (Object.keys(userUpdateData).length === 0) {
+      if (
+        Object.keys(userUpdateData).length === 0 &&
+        Object.keys(brandUpdateData).length === 0
+      ) {
         return next(new ErrorHandler("No valid fields provided for update", 400));
       }
 
@@ -667,14 +525,11 @@ export const updateBrandProfile = CatchAsyncError(
         return next(new ErrorHandler("User not found", 404));
       }
 
-      // If companyName is updated, also update brand profile
-      if (companyName) {
-        const BrandModel = require("../models/brand.model").default;
-        await BrandModel.findOneAndUpdate(
-          { userId },
-          { companyName: companyName.trim() }
-        );
-      }
+      const brandProfile = await BrandModel.findOneAndUpdate(
+        { userId },
+        { $set: brandUpdateData },
+        { new: true }
+      );
 
       // Update redis cache if exists
       try {
@@ -694,100 +549,145 @@ export const updateBrandProfile = CatchAsyncError(
           role: updatedUser.role,
           companyName: updatedUser.companyName,
           isVerified: updatedUser.isVerified,
+          logoUrl: brandProfile?.logoUrl || null,
+          websiteUrl: brandProfile?.websiteUrl || null,
         },
       });
     } catch (error: any) {
-      return next(new ErrorHandler(error.message, 400));
+      return next(new ErrorHandler(error.message, Number(error.statusCode) || 400));
     }
   }
 );
 
-// Get all gamers
-export const getAllGamers = CatchAsyncError(
+// PATCH /profile/change-password
+export const changePassword = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Find all users who are NOT brands or admins (includes users with role 'gamer' or no role set)
-      const gamerUsers = await userModel.find({
-        role: { $nin: ["brand", "admin"] }
-      })
-        .select("_id firstName lastName username email avatar isVerified analytics puzzlesSolved createdAt")
-        .lean();
+      const userId = req.user?._id as string;
+      const { currentPassword, newPassword } = req.body;
 
-      const gamers = gamerUsers.map((gamer) => ({
-        _id: gamer._id,
-        firstName: gamer.firstName,
-        lastName: gamer.lastName,
-        username: gamer.username,
-        email: gamer.email,
-        avatar: gamer.avatar,
-        isVerified: gamer.isVerified,
-        analytics: gamer.analytics,
-        totalPuzzlesSolved: gamer.puzzlesSolved?.length || 0,
-        createdAt: (gamer as any).createdAt,
-      }));
+      if (!currentPassword || !newPassword) {
+        return next(
+          new ErrorHandler("currentPassword and newPassword are required", 400)
+        );
+      }
+      if (newPassword.length < 6) {
+        return next(
+          new ErrorHandler("New password must be at least 6 characters", 400)
+        );
+      }
 
-      res.status(200).json({ success: true, gamers });
-    } catch (error: any) {
-      return next(new ErrorHandler(error.message, 400));
-    }
-  }
-);
+      const user = await userModel.findById(userId).select("+password");
+      if (!user) return next(new ErrorHandler("User not found", 404));
 
-// Clear all gamer data (Admin only)
-export const clearAllGamerData = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { confirm } = req.body;
-
-      if (!confirm || confirm !== true) {
+      if (!user.password) {
         return next(
           new ErrorHandler(
-            "Please confirm this action by sending { confirm: true } in the request body",
+            "This account uses Google Sign-In and has no password set",
             400
           )
         );
       }
 
-      // Delete all puzzle attempts
-      const puzzleAttemptsDeleted = await PuzzleAttemptModel.deleteMany({});
+      const isMatch = await user.comparePassword!(currentPassword);
+      if (!isMatch) {
+        return next(new ErrorHandler("Current password is incorrect", 401));
+      }
 
-      // Reset all gamer analytics to zero
-      const usersUpdateResult = await userModel.updateMany(
-        { role: { $nin: ["brand", "admin"] } },
-        {
-          $set: {
-            "analytics.lifetime.puzzlesSolved": 0,
-            "analytics.lifetime.totalPoints": 0,
-            "analytics.lifetime.totalEarnings": 0,
-            "analytics.lifetime.totalTime": 0,
-            "analytics.lifetime.totalMoves": 0,
-            "analytics.lifetime.attempts": 0,
-            "analytics.lifetime.successRate": 0,
-            "analytics.daily": {
-              date: new Date().toISOString().slice(0, 10),
-              puzzlesSolved: 0,
-            },
-            puzzlesSolved: [],
-          },
-        }
-      );
+      user.password = newPassword;
+      await user.save();
 
-      // Clear all leaderboard records
-      const leaderboardsDeleted = await LeaderboardModel.deleteMany({});
+      res
+        .status(200)
+        .json({ success: true, message: "Password changed successfully" });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+// PATCH /profile/notifications
+export const updateNotifications = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id as string;
+      const { emailNotifications, newCampaignAlerts, weeklyDigest } = req.body;
+
+      const update: Record<string, boolean> = {};
+      if (typeof emailNotifications === "boolean")
+        update["notifications.emailNotifications"] = emailNotifications;
+      if (typeof newCampaignAlerts === "boolean")
+        update["notifications.newCampaignAlerts"] = newCampaignAlerts;
+      if (typeof weeklyDigest === "boolean")
+        update["notifications.weeklyDigest"] = weeklyDigest;
+
+      if (Object.keys(update).length === 0) {
+        return next(
+          new ErrorHandler("No valid notification fields provided", 400)
+        );
+      }
+
+      const updated = await userModel
+        .findByIdAndUpdate(userId, { $set: update }, { new: true })
+        .select("notifications");
+
+      if (!updated) return next(new ErrorHandler("User not found", 404));
 
       res.status(200).json({
         success: true,
-        message: "All gamer data cleared successfully",
-        summary: {
-          puzzleAttemptsDeleted: puzzleAttemptsDeleted.deletedCount,
-          usersReset: usersUpdateResult.modifiedCount,
-          leaderboardsCleared: leaderboardsDeleted.deletedCount,
-        },
+        message: "Notification preferences saved",
+        notifications: updated.notifications,
       });
     } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to clear gamer data: ${error.message}`, 500)
-      );
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+// DELETE /profile/account — requires password confirmation
+export const deleteAccount = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id as string;
+      const { password } = req.body;
+
+      if (!password) {
+        return next(
+          new ErrorHandler("Password is required to delete your account", 400)
+        );
+      }
+
+      const user = await userModel.findById(userId).select("+password");
+      if (!user) return next(new ErrorHandler("User not found", 404));
+
+      if (!user.password) {
+        return next(
+          new ErrorHandler(
+            "This account uses Google Sign-In. Contact support to delete your account.",
+            400
+          )
+        );
+      }
+
+      const isMatch = await user.comparePassword!(password);
+      if (!isMatch) {
+        return next(new ErrorHandler("Incorrect password", 401));
+      }
+
+      await userModel.findByIdAndDelete(userId);
+
+      // Clear session cookies and redis
+      res.cookie("access_token", "", { maxAge: 1 });
+      res.cookie("refresh_token", "", { maxAge: 1 });
+      try {
+        await redis.del(userId);
+      } catch (_) {}
+
+      res
+        .status(200)
+        .json({ success: true, message: "Account deleted successfully" });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
     }
   }
 );

@@ -1,5 +1,4 @@
 import express from "express";
-import multer from "multer";
 import {
   registerUser,
   activateUser,
@@ -11,18 +10,17 @@ import {
   getBrandProfile,
   updateGamerProfile,
   updateBrandProfile,
-  getAllGamers,
-  clearAllGamerData
+  changePassword,
+  updateNotifications,
+  deleteAccount,
 } from "../controllers/user.controller";
-import { isAuthenticated, authorizeRoles } from "../utils/auth";
+import { isAuthenticated } from "../utils/auth";
+import { imageUpload } from "../services/upload/image.service";
 
 const userRouter = express.Router();
 
-// Configure multer for avatar uploads
-const upload = multer({ storage: multer.memoryStorage() });
-
-// Get all gamers
-userRouter.get("/gamers", getAllGamers);
+// Avatar / brand logo uploads: jpg, png or webp, validated and resized server-side
+const upload = imageUpload;
 
 userRouter.post("/registration", registerUser);
 
@@ -48,7 +46,9 @@ userRouter.put("/profile/gamer", isAuthenticated, upload.single("avatar"), updat
 // Update brand profile (with optional avatar upload)
 userRouter.put("/profile/brand", isAuthenticated, upload.single("avatar"), updateBrandProfile);
 
-// Clear all gamer data (Admin only)
-userRouter.post("/admin/clear-all-data", isAuthenticated, authorizeRoles("admin"), clearAllGamerData);
+// Settings endpoints
+userRouter.patch("/profile/change-password", isAuthenticated, changePassword);
+userRouter.patch("/profile/notifications", isAuthenticated, updateNotifications);
+userRouter.delete("/profile/account", isAuthenticated, deleteAccount);
 
 export default userRouter;

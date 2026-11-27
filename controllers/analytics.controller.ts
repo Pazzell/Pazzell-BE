@@ -1,28 +1,26 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
+import TriviaAttemptModel from "../models/triviaAttempt.model";
 import { redis } from "../utils/redis";
 
 // Get global app analytics
 export const getAppAnalytics = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // 1. Total games played (all-time count of puzzle attempts)
-      const totalGamesPlayed = await PuzzleAttemptModel.countDocuments();
+      // 1. Total games played (all-time count of finished trivia sessions — one that
+      // is only started, or was abandoned, never counts; neither does an owner test play).
+      const completed = { status: "completed", isPreview: false };
+      const totalGamesPlayed = await TriviaAttemptModel.countDocuments(completed);
 
-      // 2. Total games played today (count of puzzle attempts created today)
+      // 2. Total games played today (keyed off completedAt, not startedAt)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
+      const today = { ...completed, completedAt: { $gte: todayStart, $lte: todayEnd } };
 
-      const gamesPlayedToday = await PuzzleAttemptModel.countDocuments({
-        timestamp: {
-          $gte: todayStart,
-          $lte: todayEnd,
-        },
-      });
+      const gamesPlayedToday = await TriviaAttemptModel.countDocuments(today);
 
       // 3. Currently playing (users actively in a game right now)
       const currentlyPlayingSet = await redis.smembers("users:currently_playing");
@@ -52,22 +50,19 @@ export const startPlayingGame = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user?._id as string;
-      const { campaignId } = req.body;
+      // What is being played, e.g. "topic:<id>" or "campaign:<id>" (informational only)
+      const game = typeof req.body?.game === "string" ? req.body.game.slice(0, 80) : "game";
 
       if (!userId) {
         return next(new ErrorHandler("User not authenticated", 401));
-      }
-
-      if (!campaignId) {
-        return next(new ErrorHandler("Campaign ID is required", 400));
       }
 
       // Add user to "currently playing" set with expiry (auto-remove after 1 hour)
       await redis.sadd("users:currently_playing", userId);
       await redis.expire("users:currently_playing", 3600); // 1 hour
 
-      // Store which campaign they're playing
-      await redis.set(`user:${userId}:playing`, campaignId, "EX", 3600);
+      // Store what they're playing
+      await redis.set(`user:${userId}:playing`, game, "EX", 3600);
 
       res.status(200).json({
         success: true,
@@ -92,7 +87,7 @@ export const stopPlayingGame = CatchAsyncError(
       // Remove user from "currently playing" set
       await redis.srem("users:currently_playing", userId);
 
-      // Remove the campaign they were playing
+      // Remove what they were playing
       await redis.del(`user:${userId}:playing`);
 
       res.status(200).json({

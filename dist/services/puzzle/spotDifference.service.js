@@ -21,7 +21,7 @@ function generateSpotDifferenceImage(originalBuffer) {
         const w = image.getWidth();
         const h = image.getHeight();
         // Create several small colored stickers/rectangles to composite onto the image
-        const variants = 8; // number of differences
+        const variants = 24; // number of differences (tripled from original 8)
         for (let i = 0; i < variants; i++) {
             const size = Math.max(12, Math.floor(Math.min(w, h) * (0.03 + Math.random() * 0.06)));
             const x = Math.floor(Math.random() * Math.max(1, w - size - 10)) + 5;

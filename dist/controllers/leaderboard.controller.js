@@ -12,89 +12,46 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getAllTimeLeaderboard = exports.getLeaderboardByWeek = exports.getLeaderboardByMonth = exports.getMonthlyLeaderboard = exports.getWeeklyLeaderboard = void 0;
+exports.getAllTimeLeaderboard = exports.getLeaderboardByWeek = exports.getWeeklyLeaderboard = void 0;
 const catchAsyncError_1 = require("../middlewares/catchAsyncError");
 const ErrorHandler_1 = __importDefault(require("../utils/ErrorHandler"));
-const puzzleAttempt_model_1 = __importDefault(require("../models/puzzleAttempt.model"));
-const leaderboard_model_1 = __importDefault(require("../models/leaderboard.model"));
 const user_model_1 = __importDefault(require("../models/user.model"));
-const MONTHLY_PRIZES = [
-    100000, 60000, 50000, 40000, 35000, 30000, 25000, 20000, 15000, 10000,
-];
-// Get current week's leaderboard
-exports.getWeeklyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const now = new Date();
-        // Calculate current week's start (Monday) and end (Sunday)
-        const dayOfWeek = now.getDay();
-        const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Sunday is 0, Monday is 1
-        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysFromMonday);
-        weekStart.setHours(0, 0, 0, 0);
-        const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
-        weekEnd.setHours(23, 59, 59, 999);
-        // DEBUG: Count all attempts regardless of week
-        const totalAttempts = yield puzzleAttempt_model_1.default.countDocuments({
-            firstTimeSolved: true,
-        });
-        // DEBUG: Count attempts in current week
-        const weekAttempts = yield puzzleAttempt_model_1.default.countDocuments({
-            firstTimeSolved: true,
-            timestamp: { $gte: weekStart, $lte: weekEnd },
-        });
-        // count firstTimeSolved attempts that occurred this week grouped by user
-        const agg = yield puzzleAttempt_model_1.default.aggregate([
-            {
-                $match: {
-                    firstTimeSolved: true,
-                    timestamp: { $gte: weekStart, $lte: weekEnd },
-                },
-            },
-            {
-                $group: {
-                    _id: "$userId",
-                    puzzlesSolved: { $sum: 1 },
-                    points: { $sum: "$pointsEarned" },
-                    avgTime: { $avg: "$timeTaken" },
-                },
-            },
-            { $sort: { points: -1, avgTime: 1, puzzlesSolved: -1 } },
-            { $limit: 100 },
-        ]);
-        const entries = agg.map((a) => ({
-            userId: a._id,
-            puzzlesSolved: a.puzzlesSolved,
-            points: a.points,
-            avgTime: a.avgTime || null,
-        }));
-        // Create week key
-        const weekKey = `${weekStart.toISOString().slice(0, 10)}_to_${weekEnd
-            .toISOString()
-            .slice(0, 10)}`;
-        // upsert leaderboard document for this week
-        yield leaderboard_model_1.default.findOneAndUpdate({ type: "weekly", date: weekKey }, { type: "weekly", date: weekKey, entries }, { upsert: true });
-        // Fetch user details for each entry
-        const entriesWithUserDetails = yield Promise.all(entries.map((entry, index) => __awaiter(void 0, void 0, void 0, function* () {
+const weekBoundary_1 = require("../utils/weekBoundary");
+const leaderboard_service_1 = require("../services/leaderboard.service");
+const pointsLedger_service_1 = require("../services/points/pointsLedger.service");
+function buildWeeklyResponseEntries(weekStart, weekEnd, weekKey) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const entries = yield (0, leaderboard_service_1.getUnifiedWeeklyEntries)(weekStart, weekEnd, weekKey);
+        const hiddenIds = yield (0, leaderboard_service_1.getHiddenUserIds)();
+        const visible = entries.filter((e) => !hiddenIds.has(String(e.userId))).slice(0, 100);
+        return Promise.all(visible.map((entry, index) => __awaiter(this, void 0, void 0, function* () {
             const user = yield user_model_1.default.findById(entry.userId)
                 .select("firstName lastName username avatar")
                 .lean();
             return {
                 position: index + 1,
                 userId: entry.userId,
-                fullName: user
-                    ? `${user.firstName} ${user.lastName}`
-                    : "Unknown User",
+                fullName: user ? `${user.firstName} ${user.lastName}` : "Unknown User",
                 username: (user === null || user === void 0 ? void 0 : user.username) || "",
                 avatar: (user === null || user === void 0 ? void 0 : user.avatar) || "",
                 puzzlesSolved: entry.puzzlesSolved,
                 points: entry.points,
-                avgCompletionTimeMs: entry.avgTime || null,
-                avgCompletionTimeSec: entry.avgTime
-                    ? Math.round(entry.avgTime / 1000)
+                avgCompletionTimeMs: entry.avgCompletionTimeMs,
+                avgCompletionTimeSec: entry.avgCompletionTimeMs
+                    ? Math.round(entry.avgCompletionTimeMs / 1000)
                     : null,
-                amountEarned: entry.points, // Points = amount earned
             };
         })));
+    });
+}
+// Get current week's leaderboard. Aggregates points weekly and resets at week
+// end (a live query bounded by the week range — no explicit reset job needed).
+// Tiebreaker: lower average completion time ranks higher, computed from first
+// completions only within the week (see services/leaderboard.service.ts).
+exports.getWeeklyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { weekStart, weekEnd, weekKey } = (0, weekBoundary_1.getWeekBounds)();
+        const entriesWithUserDetails = yield buildWeeklyResponseEntries(weekStart, weekEnd, weekKey);
         res.status(200).json({
             success: true,
             leaderboard: {
@@ -104,172 +61,19 @@ exports.getWeeklyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res,
                 totalPlayers: entriesWithUserDetails.length,
                 entries: entriesWithUserDetails,
             },
-            debug: {
-                totalAttemptsWithFirstTimeSolved: totalAttempts,
-                attemptsInCurrentWeek: weekAttempts,
-                weekStartFull: weekStart.toISOString(),
-                weekEndFull: weekEnd.toISOString(),
-                currentDate: now.toISOString(),
-            },
         });
     }
     catch (error) {
         return next(new ErrorHandler_1.default(error.message, 400));
     }
 }));
-// Get current month's leaderboard (monthly)
-exports.getMonthlyLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const now = new Date();
-        const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-        // Try to fetch existing monthly leaderboard
-        const board = yield leaderboard_model_1.default.findOne({
-            type: "monthly",
-            date: monthKey,
-        });
-        let entries = [];
-        if (board && board.entries && board.entries.length) {
-            entries = board.entries.map((e, idx) => ({
-                position: idx + 1,
-                userId: e.userId,
-                points: e.points,
-                puzzlesSolved: e.puzzlesSolved || 0,
-                prizeAmount: MONTHLY_PRIZES[idx] || 0,
-            }));
-        }
-        const entriesWithUserDetails = yield Promise.all(entries.map((entry) => __awaiter(void 0, void 0, void 0, function* () {
-            const user = yield user_model_1.default.findById(entry.userId)
-                .select("firstName lastName username avatar")
-                .lean();
-            return {
-                position: entry.position,
-                userId: entry.userId,
-                fullName: user
-                    ? `${user.firstName} ${user.lastName}`
-                    : "Unknown User",
-                username: (user === null || user === void 0 ? void 0 : user.username) || "",
-                avatar: (user === null || user === void 0 ? void 0 : user.avatar) || "",
-                puzzlesSolved: entry.puzzlesSolved,
-                points: entry.points,
-                prizeAmount: entry.prizeAmount,
-            };
-        })));
-        res.status(200).json({
-            success: true,
-            leaderboard: {
-                type: "monthly",
-                monthKey,
-                totalPlayers: entriesWithUserDetails.length,
-                entries: entriesWithUserDetails,
-                jackpot: {
-                    amount: 65000,
-                    note: "Top 10 qualify for ₦65,000 Jackpot Draw",
-                },
-            },
-        });
-    }
-    catch (error) {
-        return next(new ErrorHandler_1.default(error.message, 400));
-    }
-}));
-// Get monthly leaderboard by monthKey (YYYY-MM)
-exports.getLeaderboardByMonth = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const { monthKey } = req.params; // e.g., "2026-04"
-        const board = yield leaderboard_model_1.default.findOne({
-            type: "monthly",
-            date: monthKey,
-        });
-        if (!board) {
-            return res
-                .status(200)
-                .json({
-                success: true,
-                leaderboard: {
-                    type: "monthly",
-                    monthKey,
-                    totalPlayers: 0,
-                    entries: [],
-                },
-            });
-        }
-        const entries = board.entries.map((e, idx) => ({
-            position: idx + 1,
-            userId: e.userId,
-            points: e.points,
-            puzzlesSolved: e.puzzlesSolved || 0,
-            prizeAmount: MONTHLY_PRIZES[idx] || 0,
-        }));
-        const entriesWithUserDetails = yield Promise.all(entries.map((entry) => __awaiter(void 0, void 0, void 0, function* () {
-            const user = yield user_model_1.default.findById(entry.userId)
-                .select("firstName lastName username avatar")
-                .lean();
-            return {
-                position: entry.position,
-                userId: entry.userId,
-                fullName: user
-                    ? `${user.firstName} ${user.lastName}`
-                    : "Unknown User",
-                username: (user === null || user === void 0 ? void 0 : user.username) || "",
-                avatar: (user === null || user === void 0 ? void 0 : user.avatar) || "",
-                puzzlesSolved: entry.puzzlesSolved,
-                points: entry.points,
-                prizeAmount: entry.prizeAmount,
-            };
-        })));
-        res
-            .status(200)
-            .json({
-            success: true,
-            leaderboard: {
-                type: "monthly",
-                monthKey,
-                totalPlayers: entriesWithUserDetails.length,
-                entries: entriesWithUserDetails,
-            },
-        });
-    }
-    catch (error) {
-        return next(new ErrorHandler_1.default(error.message, 400));
-    }
-}));
-// Get leaderboard for a specific week
+// Get leaderboard for a specific past (or current) week — computed live from
+// source data, same as the current-week endpoint above.
 exports.getLeaderboardByWeek = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { weekKey } = req.params; // Format: "2025-01-06_to_2025-01-12"
-        const board = yield leaderboard_model_1.default.findOne({
-            type: "weekly",
-            date: weekKey,
-        });
-        if (!board) {
-            return res.status(200).json({
-                success: true,
-                leaderboard: {
-                    type: "weekly",
-                    weekKey,
-                    totalPlayers: 0,
-                    entries: [],
-                },
-            });
-        }
-        // Fetch user details for each entry
-        const entriesWithUserDetails = yield Promise.all(board.entries.map((entry, index) => __awaiter(void 0, void 0, void 0, function* () {
-            const user = yield user_model_1.default.findById(entry.userId)
-                .select("firstName lastName username avatar")
-                .lean();
-            return {
-                position: index + 1,
-                userId: entry.userId,
-                fullName: user
-                    ? `${user.firstName} ${user.lastName}`
-                    : "Unknown User",
-                username: (user === null || user === void 0 ? void 0 : user.username) || "",
-                avatar: (user === null || user === void 0 ? void 0 : user.avatar) || "",
-                puzzlesSolved: entry.puzzlesSolved,
-                points: entry.points,
-                amountEarned: entry.points, // Points = amount earned
-            };
-        })));
+        const { weekKey } = req.params;
+        const { weekStart, weekEnd } = (0, weekBoundary_1.parseWeekKey)(weekKey);
+        const entriesWithUserDetails = yield buildWeeklyResponseEntries(weekStart, weekEnd, weekKey);
         res.status(200).json({
             success: true,
             leaderboard: {
@@ -284,34 +88,31 @@ exports.getLeaderboardByWeek = (0, catchAsyncError_1.CatchAsyncError)((req, res,
         return next(new ErrorHandler_1.default(error.message, 400));
     }
 }));
-// Get all-time leaderboard
+// Get all-time leaderboard (lifetime PointsLedger totals — session
+// completions + referral/winner-share bonuses)
 exports.getAllTimeLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // Aggregate all puzzle attempts (no time filter) and compute avg completion time
-        const agg = yield puzzleAttempt_model_1.default.aggregate([
-            {
-                $match: {
-                    firstTimeSolved: true,
-                },
-            },
-            {
-                $group: {
-                    _id: "$userId",
-                    puzzlesSolved: { $sum: 1 },
-                    points: { $sum: "$pointsEarned" },
-                    avgTime: { $avg: "$timeTaken" },
-                },
-            },
-            { $sort: { points: -1, avgTime: 1, puzzlesSolved: -1 } },
-            { $limit: 100 },
-        ]);
-        const entries = agg.map((a) => ({
-            userId: a._id,
-            puzzlesSolved: a.puzzlesSolved,
+        const agg = yield (0, pointsLedger_service_1.getAllTimePointsAggregate)();
+        agg.sort((a, b) => {
+            var _a, _b;
+            if (b.points !== a.points)
+                return b.points - a.points;
+            const aTime = (_a = a.avgCompletionTimeMs) !== null && _a !== void 0 ? _a : Infinity;
+            const bTime = (_b = b.avgCompletionTimeMs) !== null && _b !== void 0 ? _b : Infinity;
+            if (aTime !== bTime)
+                return aTime - bTime;
+            return b.sessionCompletions - a.sessionCompletions;
+        });
+        const top100 = agg.slice(0, 100);
+        const hiddenIds = yield (0, leaderboard_service_1.getHiddenUserIds)();
+        const entries = top100
+            .filter((a) => !hiddenIds.has(String(a.userId)))
+            .map((a) => ({
+            userId: a.userId,
+            puzzlesSolved: a.sessionCompletions,
             points: a.points,
-            avgTime: a.avgTime || null,
+            avgTime: a.avgCompletionTimeMs,
         }));
-        // Fetch user details for each entry
         const entriesWithUserDetails = yield Promise.all(entries.map((entry, index) => __awaiter(void 0, void 0, void 0, function* () {
             const user = yield user_model_1.default.findById(entry.userId)
                 .select("firstName lastName avatar username")
@@ -330,7 +131,6 @@ exports.getAllTimeLeaderboard = (0, catchAsyncError_1.CatchAsyncError)((req, res
                 avgCompletionTimeSec: entry.avgTime
                     ? Math.round(entry.avgTime / 1000)
                     : null,
-                amountEarned: entry.points, // Points = amount earned
             };
         })));
         res.status(200).json({

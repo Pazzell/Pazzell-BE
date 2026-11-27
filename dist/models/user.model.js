@@ -44,6 +44,16 @@ const userSchema = new mongoose_1.default.Schema({
         },
     },
     puzzlesSolved: [{ type: String }],
+    notifications: {
+        emailNotifications: { type: Boolean, default: true },
+        referralBonusAlerts: { type: Boolean, default: true },
+        leaderboardUpdates: { type: Boolean, default: true },
+        newCampaignAlerts: { type: Boolean, default: true },
+        weeklyDigest: { type: Boolean, default: true },
+    },
+    privacy: {
+        showOnLeaderboard: { type: Boolean, default: true },
+    },
 }, { timestamps: true });
 userSchema.methods.SignAccessToken = function () {
     // Normalize ACCESS_TOKEN_EXPIRE: allow numeric (hours) or string like '1d'/'24h'

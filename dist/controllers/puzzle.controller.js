@@ -48,7 +48,6 @@ exports.getPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) => _
             puzzle: {
                 puzzleId: campaign._id,
                 puzzleImageUrl: campaign.puzzleImageUrl,
-                originalImageUrl: campaign.originalImageUrl,
                 questions: campaign.questions.map((q) => ({
                     question: q.question,
                     choices: q.choices,
@@ -89,9 +88,9 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 firstTime = true;
         }
         const FIXED_POINTS = {
-            spot_the_difference: 2,
-            card_matching: 3,
-            sliding_puzzle: 4,
+            spot_the_difference: 1,
+            card_matching: 1,
+            sliding_puzzle: 2,
             word_hunt: 1,
         };
         const pointsEarned = firstTime ? FIXED_POINTS[campaign.gameType] || 0 : 0;
@@ -120,8 +119,6 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 userDoc.analytics.lifetime.puzzlesSolved =
                     (userDoc.analytics.lifetime.puzzlesSolved || 0) +
                         (firstTime ? 1 : 0);
-                userDoc.analytics.lifetime.totalPoints =
-                    (userDoc.analytics.lifetime.totalPoints || 0) + pointsEarned;
             }
             // successRate = puzzlesSolved / attempts
             if (userDoc.analytics.lifetime.attempts > 0) {
@@ -134,7 +131,9 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                 userDoc.puzzlesSolved.push(id);
             }
             yield userDoc.save();
-            // If this is the user's first successful solve, mark any referral as successful
+            // If this is the user's first successful solve, mark any referral as
+            // successful and credit points to the referrer.
+            const REFERRAL_POINTS = 3;
             try {
                 if (firstTime && userId) {
                     const referral = yield referral_model_1.default.findOne({
@@ -144,6 +143,7 @@ exports.submitPuzzle = (0, catchAsyncError_1.CatchAsyncError)((req, res, next) =
                     if (referral) {
                         referral.successful = true;
                         referral.successfulAt = new Date();
+                        referral.pointsAwarded = REFERRAL_POINTS;
                         yield referral.save();
                         // record referral event
                         yield referralEvent_model_1.default.create({

@@ -2,16 +2,11 @@
 
 export interface PaymentInitializeParams {
   email: string;
-  amount: number; // Amount in Naira
+  amount: number; // major units of `currency` (converted to minor units for the gateway)
   reference: string;
   currency: string;
   callbackUrl: string;
-  metadata: {
-    campaignId: string;
-    brandId: string;
-    packageType: string;
-    transactionId: string;
-  };
+  metadata: Record<string, any>;
 }
 
 export interface PaymentInitializeResponse {
@@ -24,9 +19,12 @@ export interface PaymentInitializeResponse {
 
 export interface PaymentVerifyResponse {
   success: boolean;
+  // "failed" is terminal (failed / abandoned / reversed); "pending" may still succeed
   status: "success" | "failed" | "pending";
   reference: string;
-  amount: number;
+  amount: number; // major units
+  currency: string;
+  paidAt?: Date;
   rawResponse?: any;
 }
 

@@ -26,6 +26,11 @@ userRouter.get("/profile/brand", auth_1.isAuthenticated, user_controller_1.getBr
 userRouter.put("/profile/gamer", auth_1.isAuthenticated, upload.single("avatar"), user_controller_1.updateGamerProfile);
 // Update brand profile (with optional avatar upload)
 userRouter.put("/profile/brand", auth_1.isAuthenticated, upload.single("avatar"), user_controller_1.updateBrandProfile);
+// Settings endpoints
+userRouter.patch("/profile/change-password", auth_1.isAuthenticated, user_controller_1.changePassword);
+userRouter.patch("/profile/notifications", auth_1.isAuthenticated, user_controller_1.updateNotifications);
+userRouter.patch("/profile/privacy", auth_1.isAuthenticated, user_controller_1.updatePrivacy);
+userRouter.delete("/profile/account", auth_1.isAuthenticated, user_controller_1.deleteAccount);
 // Clear all gamer data (Admin only)
 userRouter.post("/admin/clear-all-data", auth_1.isAuthenticated, (0, auth_1.authorizeRoles)("admin"), user_controller_1.clearAllGamerData);
 exports.default = userRouter;

@@ -1,21 +1,21 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
+import { frontendUrl } from "../services/config/frontendUrl";
 import UserModel from "../models/user.model";
 import BrandModel from "../models/brand.model";
 import { sendToken } from "../utils/jwt";
 import admin from "firebase-admin";
 // ensure firebase admin is initialized (firebaseConfig reads env and calls initializeApp)
-import "../firebaseConfig";
+import { isFirebaseConfigured } from "../firebaseConfig";
+import { GoogleProfile, verifyGoogleAccessToken } from "../services/auth/googleToken";
 import jwt from "jsonwebtoken";
 import { Secret } from "jsonwebtoken";
 import path from "path";
 import ejs from "ejs";
-import sendMail from "../utils/sendEmail";
+import { getEmailService } from "../services/email/emailFactory";
 import { createActivationToken } from "./user.controller";
 import { generateUsername, generateAvatar } from "../utils/userHelpers";
-import ReferralModel from "../models/referral.model";
-import ReferralEventModel from "../models/referralEvent.model";
 
 // Interface for password reset token payload
 interface IResetTokenPayload {
@@ -33,115 +33,85 @@ const createResetToken = (userId: string): string => {
   return token;
 };
 
-// Google OAuth sign-in (client provides profile info or idToken)
+// Google sign-in, which also signs a new player up. The client sends the Google access
+// token from the OAuth popup (`googleAccessToken`) or a Firebase `idToken`; either is
+// verified server-side and the profile comes from Google, never from the request body.
 export const googleAuth = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Accept either a firebase idToken or a minimal profile payload
-      const { idToken, email, name, avatar, googleId, givenName, familyName } =
-        req.body;
+    const { googleAccessToken, idToken } = req.body || {};
 
-      let profile: {
-        email: string;
-        name?: string;
-        picture?: string;
-        uid?: string;
-      } | null = null;
-
-      if (idToken) {
-        // verify with firebase-admin
-        const decoded = await admin.auth().verifyIdToken(idToken);
-        profile = {
-          email: decoded.email || "",
-          name: decoded.name,
-          picture: decoded.picture,
-          uid: decoded.uid,
-        };
-      } else if (email && googleId) {
-        profile = { email, name, picture: avatar, uid: googleId };
-      } else {
-        return next(new ErrorHandler("Invalid Google payload", 400));
+    let profile: GoogleProfile;
+    if (typeof googleAccessToken === "string" && googleAccessToken) {
+      profile = await verifyGoogleAccessToken(googleAccessToken);
+    } else if (typeof idToken === "string" && idToken) {
+      if (!isFirebaseConfigured()) {
+        return next(new ErrorHandler("Google sign-in is not configured", 503, "GOOGLE_NOT_CONFIGURED"));
       }
-
-      let user = await UserModel.findOne({ email: profile.email });
-      if (!user) {
-        // Prefer explicit givenName/familyName if provided by client
-        let firstName = givenName || "";
-        let lastName = familyName || "";
-
-        if (!firstName) {
-          const fullName = profile.name || profile.email.split("@")[0];
-          const nameParts = fullName.split(" ");
-          firstName = nameParts[0] || fullName;
-          lastName = nameParts.slice(1).join(" ") || "";
-        }
-
-        const username = await generateUsername(profile.email);
-        const avatar =
-          profile.picture ||
-          generateAvatar(`${firstName} ${lastName}`.trim() || profile.email);
-
-        user = await UserModel.create({
-          firstName,
-          lastName,
-          username,
-          email: profile.email,
-          avatar,
-          googleId: profile.uid,
-          role: "gamer",
-          isVerified: true,
-        });
-        // capture referral if provided in request body
-        try {
-          const { referrerId, referrerUsername, referralCode } = req.body;
-          const refLookup = referrerId || referrerUsername || referralCode;
-          if (refLookup) {
-            const refUser = await UserModel.findOne({
-              $or: [
-                { _id: refLookup },
-                { username: refLookup },
-                { email: refLookup },
-              ],
-            });
-            if (refUser && String(refUser._id) !== String(user._id)) {
-              try {
-                await ReferralModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                });
-                await ReferralEventModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                  eventType: "signup",
-                });
-              } catch (e) {
-                // ignore duplicate or other errors
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Referral capture failed during Google signup", e);
-        }
-      } else {
-        // ensure googleId is stored
-        if (!user.googleId && profile.uid) {
-          user.googleId = profile.uid;
-          await user.save();
-        }
+      let decoded: admin.auth.DecodedIdToken;
+      try {
+        decoded = await admin.auth().verifyIdToken(idToken);
+      } catch {
+        return next(
+          new ErrorHandler("Google sign-in could not be verified. Please try again.", 401, "GOOGLE_TOKEN_INVALID")
+        );
       }
-
-      // Mark user as online after successful Google login
-      const redis = require("../utils/redis").redis;
-      await redis.sadd("users:online", String(user._id));
-      await redis.expire("users:online", 300); // 5 minutes expiry
-      await redis.set(`user:${user._id}:last_active`, Date.now(), "EX", 300);
-
-      sendToken(user, 200, res);
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Google authentication failed: ${error.message}`, 500)
-      );
+      if (!decoded.email || !decoded.email_verified) {
+        return next(
+          new ErrorHandler("Your Google account has no verified email address", 400, "GOOGLE_EMAIL_UNVERIFIED")
+        );
+      }
+      profile = {
+        googleId: decoded.uid,
+        email: decoded.email.toLowerCase(),
+        name: decoded.name,
+        picture: decoded.picture,
+      };
+    } else {
+      return next(new ErrorHandler("googleAccessToken is required", 400, "GOOGLE_TOKEN_REQUIRED"));
     }
+
+    // Emails were stored as typed, so match an existing account regardless of case.
+    let user = await UserModel.findOne({ email: profile.email }).collation({ locale: "en", strength: 2 });
+    if (!user) {
+      let firstName = profile.givenName || "";
+      let lastName = profile.familyName || "";
+
+      if (!firstName) {
+        const fullName = profile.name || profile.email.split("@")[0];
+        const nameParts = fullName.split(" ");
+        firstName = nameParts[0] || fullName;
+        lastName = nameParts.slice(1).join(" ") || "";
+      }
+
+      const username = await generateUsername(profile.email);
+      const avatar =
+        profile.picture ||
+        generateAvatar(`${firstName} ${lastName}`.trim() || profile.email);
+
+      user = await UserModel.create({
+        firstName,
+        lastName,
+        username,
+        email: profile.email,
+        avatar,
+        googleId: profile.googleId,
+        role: "gamer",
+        isVerified: true,
+      });
+    } else if (!user.googleId || !user.isVerified) {
+      // Google has confirmed the address, so the account is linked and verified.
+      user.googleId = user.googleId || profile.googleId;
+      user.isVerified = true;
+      await user.save();
+    }
+
+    // Mark user as online after successful Google login
+    const redis = require("../utils/redis").redis;
+    await redis.sadd("users:online", String(user._id));
+    await redis.expire("users:online", 300); // 5 minutes expiry
+    await redis.set(`user:${user._id}:last_active`, Date.now(), "EX", 300);
+
+    sendToken(user, 200, res);
   }
 );
 
@@ -190,7 +160,7 @@ export const registerGamer = CatchAsyncError(
           path.join(__dirname, "../mails/activation-mail.ejs"),
           data
         );
-        await sendMail({
+        await getEmailService().sendMail({
           email,
           subject: "Verify your gamer account",
           template: "activation-mail.ejs",
@@ -198,7 +168,7 @@ export const registerGamer = CatchAsyncError(
         });
 
         // Only create user AFTER email is successfully sent
-        const user = await UserModel.create({
+        await UserModel.create({
           firstName,
           lastName: lastName || "",
           username,
@@ -208,38 +178,6 @@ export const registerGamer = CatchAsyncError(
           role: "gamer",
           isVerified: false,
         });
-
-        // capture referral at signup
-        try {
-          const { referrerId, referrerUsername, referralCode } = req.body;
-          const refLookup = referrerId || referrerUsername || referralCode;
-          if (refLookup) {
-            const refUser = await UserModel.findOne({
-              $or: [
-                { _id: refLookup },
-                { username: refLookup },
-                { email: refLookup },
-              ],
-            });
-            if (refUser && String(refUser._id) !== String(user._id)) {
-              try {
-                await ReferralModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                });
-                await ReferralEventModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                  eventType: "signup",
-                });
-              } catch (e) {
-                // ignore duplicate or other errors
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Referral capture failed during signup", e);
-        }
 
         res.status(201).json({
           success: true,
@@ -312,7 +250,6 @@ export const activateUser = CatchAsyncError(
               userId: existingUser._id,
               companyEmail: email,
               companyName,
-              campaigns: [],
             });
           }
         }
@@ -339,38 +276,6 @@ export const activateUser = CatchAsyncError(
           role: "gamer",
           isVerified: true,
         });
-        // capture referral if activation token included referrer info
-        try {
-          const { referrerId, referrerUsername, referralCode } =
-            decoded.user as any;
-          const refLookup = referrerId || referrerUsername || referralCode;
-          if (refLookup) {
-            const refUser = await UserModel.findOne({
-              $or: [
-                { _id: refLookup },
-                { username: refLookup },
-                { email: refLookup },
-              ],
-            });
-            if (refUser && String(refUser._id) !== String(user._id)) {
-              try {
-                await ReferralModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                });
-                await ReferralEventModel.create({
-                  referrerId: String(refUser._id),
-                  referredUserId: String(user._id),
-                  eventType: "signup",
-                });
-              } catch (e) {
-                // ignore duplicate or other errors
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Referral capture failed during activation signup", e);
-        }
       } else if (role === "brand") {
         const { name, companyName } = decoded.user;
 
@@ -388,7 +293,6 @@ export const activateUser = CatchAsyncError(
           userId: user._id,
           companyEmail: email,
           companyName,
-          campaigns: [],
         });
       } else {
         return next(new ErrorHandler("Invalid account type", 400));
@@ -484,7 +388,7 @@ export const registerBrand = CatchAsyncError(
           path.join(__dirname, "../mails/activation-mail.ejs"),
           data
         );
-        await sendMail({
+        await getEmailService().sendMail({
           email,
           subject: "Activate your brand account",
           template: "activation-mail.ejs",
@@ -506,7 +410,6 @@ export const registerBrand = CatchAsyncError(
           userId: user._id,
           companyEmail: email,
           companyName,
-          campaigns: [],
         });
 
         res.status(201).json({
@@ -599,7 +502,7 @@ export const resendActivation = CatchAsyncError(
       const data = { user: { name: displayName }, activationCode };
 
       // Send activation email
-      await sendMail({
+      await getEmailService().sendMail({
         email: user.email,
         subject: "Verify your account",
         template: "activation-mail.ejs",
@@ -657,8 +560,7 @@ export const forgotPassword = CatchAsyncError(
       const resetToken = createResetToken(String(user._id));
 
       // Build reset link
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-      const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+      const resetLink = `${frontendUrl()}/reset-password?token=${resetToken}`;
 
       // Get user display name
       const userName = user.firstName || user.name || user.email.split("@")[0];
@@ -667,9 +569,9 @@ export const forgotPassword = CatchAsyncError(
       const data = { user: { name: userName }, resetLink };
 
       try {
-        await sendMail({
+        await getEmailService().sendMail({
           email: user.email,
-          subject: "Reset Your Password - Tex Resolve",
+          subject: "Reset Your Password - Pazzell",
           template: "reset-password.ejs",
           data,
         });

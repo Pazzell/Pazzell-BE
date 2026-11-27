@@ -1,643 +1,410 @@
 import { Request, Response, NextFunction } from "express";
 import { CatchAsyncError } from "../middlewares/catchAsyncError";
 import ErrorHandler from "../utils/ErrorHandler";
-import PuzzleCampaignModel from "../models/puzzleCampaign.model";
-import PuzzleAttemptModel from "../models/puzzleAttempt.model";
-import UserModel from "../models/user.model";
-import PackageModel from "../models/package.model";
+import CampaignModel, { ICampaign } from "../models/campaign.model";
+import CampaignCardModel from "../models/campaignCard.model";
 import BrandModel from "../models/brand.model";
+import PaymentModel from "../models/payment.model";
+import {
+  assertObjectId,
+  cleanString,
+  parseHttpUrl,
+  requireString,
+  toInt,
+} from "../utils/validators";
+import { resolveImage } from "../services/upload/image.service";
+import { buildBulkCards, buildCardContent, editorCard } from "../services/trivia/cardInput";
+import { cardCountBounds } from "../services/trivia/session.service";
+import { startCheckout } from "../services/payment/payment.service";
+import {
+  getCampaignMinCards,
+  getCampaignPricing,
+  getTimerRange,
+  isValidTimerSeconds,
+} from "../services/config/config.service";
+import {
+  getCampaignGateState,
+  campaignTimerSeconds,
+  getCampaignStats,
+  isServable,
+  pickCampaignForPlayer,
+  publicCampaign,
+  recordUrlClick,
+} from "../services/campaign/campaign.service";
 
-// Helper function to check and update expired campaigns
-const updateExpiredCampaigns = async () => {
-  const now = new Date();
-  await PuzzleCampaignModel.updateMany(
-    {
-      status: "active",
-      paymentStatus: "paid",
-      endDate: { $lt: now },
-    },
-    {
-      $set: { status: "ended" },
-    }
-  );
-};
+// A pending checkout younger than this is handed back instead of opening a second one,
+// so an impatient double click cannot charge a brand twice for the same campaign.
+const CHECKOUT_REUSE_MS = 30 * 60 * 1000;
 
-// Get active campaigns only (with brand name included)
-export const getActiveCampaigns = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
+const brandCampaign = (campaign: any, cardCount: number) => ({
+  id: String(campaign._id),
+  brandName: campaign.brandName,
+  logoUrl: campaign.logoUrl,
+  websiteUrl: campaign.websiteUrl,
+  ctaText: campaign.ctaText || null,
+  title: campaign.title,
+  description: campaign.description || null,
+  coverImageUrl: campaign.coverImageUrl || null,
+  tags: campaign.tags || [],
+  timerSeconds: campaignTimerSeconds(campaign),
+  // A live campaign past its end date reads as ended even before the scheduler runs.
+  status:
+    campaign.status === "live" && !isServable(campaign) ? "ended" : campaign.status,
+  startsAt: campaign.startsAt || null,
+  endsAt: campaign.endsAt || null,
+  moderationReason: campaign.moderationReason || null,
+  cardCount,
+  createdAt: campaign.createdAt,
+  updatedAt: campaign.updatedAt,
+});
 
-      const { gameType } = req.query;
-
-      // Build filter for active campaigns only
-      const filter: any = { status: "active" };
-      const validGameTypes = [
-        "sliding_puzzle",
-        "card_matching",
-        "spot_the_difference",
-        "word_hunt",
-      ];
-      if (gameType && validGameTypes.includes(gameType as string)) {
-        filter.gameType = gameType;
-      }
-
-      const campaigns = await PuzzleCampaignModel.find(filter)
-        .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
-        )
-        .lean();
-
-      // Fetch brand names and package names for all campaigns
-      const campaignsWithBrand = await Promise.all(
-        campaigns.map(async (campaign) => {
-          const brand = await UserModel.findById(campaign.brandId)
-            .select("name companyName")
-            .lean();
-          const packageData = await PackageModel.findById(campaign.packageId)
-            .select("name")
-            .lean();
-          return {
-            _id: campaign._id,
-            brandId: campaign.brandId,
-            packageId: campaign.packageId,
-            packageName: packageData?.name || null,
-            brandName: brand?.companyName || brand?.name || "Unknown Brand",
-            gameType: campaign.gameType,
-            title: campaign.title,
-            description: campaign.description,
-            brandUrl: campaign.brandUrl,
-            campaignUrl: campaign.campaignUrl,
-            videoUrl: (campaign as any).videoUrl || null,
-            puzzleImageUrl: campaign.puzzleImageUrl,
-            originalImageUrl: campaign.originalImageUrl,
-            timeLimit: campaign.timeLimit,
-            questions: campaign.questions,
-            words: campaign.words,
-            status: campaign.status,
-            paymentStatus: (campaign as any).paymentStatus || "unpaid",
-            packageType: (campaign as any).packageType || null,
-            totalBudget: (campaign as any).totalBudget || 0,
-            dailyAllocation: (campaign as any).dailyAllocation || 0,
-            budgetRemaining: (campaign as any).budgetRemaining || 0,
-            budgetUsed: (campaign as any).budgetUsed || 0,
-            transactionId: (campaign as any).transactionId || null,
-            startDate: campaign.startDate,
-            endDate: campaign.endDate,
-            createdAt: (campaign as any).createdAt,
-          };
-        })
-      );
-
-      res.status(200).json({ success: true, campaigns: campaignsWithBrand });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to fetch active campaigns: ${error.message}`,
-          500
-        )
-      );
-    }
-  }
-);
-
-// Get all campaigns (with brand name included)
-export const getAllCampaigns = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
-
-      const { gameType, status, paymentStatus } = req.query;
-
-      // Build filter
-      const filter: any = {};
-      const validGameTypes = [
-        "sliding_puzzle",
-        "card_matching",
-        "spot_the_difference",
-        "word_hunt",
-      ];
-      if (gameType && validGameTypes.includes(gameType as string)) {
-        filter.gameType = gameType;
-      }
-
-      // Filter by status if provided
-      const validStatuses = ["active", "ended", "draft"];
-      if (status && validStatuses.includes(status as string)) {
-        filter.status = status;
-      }
-
-      // Filter by paymentStatus if provided
-      const validPaymentStatuses = ["unpaid", "paid", "partial"];
-      if (
-        paymentStatus &&
-        validPaymentStatuses.includes(paymentStatus as string)
-      ) {
-        filter.paymentStatus = paymentStatus;
-      }
-
-      const campaigns = await PuzzleCampaignModel.find(filter)
-        .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
-        )
-        .lean();
-
-      // Fetch brand names and package names for all campaigns
-      const campaignsWithBrand = await Promise.all(
-        campaigns.map(async (campaign) => {
-          const brand = await UserModel.findById(campaign.brandId)
-            .select("name companyName")
-            .lean();
-          const packageData = await PackageModel.findById(campaign.packageId)
-            .select("name")
-            .lean();
-          return {
-            _id: campaign._id,
-            brandId: campaign.brandId,
-            packageId: campaign.packageId,
-            packageName: packageData?.name || null,
-            brandName: brand?.companyName || brand?.name || "Unknown Brand",
-            gameType: campaign.gameType,
-            title: campaign.title,
-            description: campaign.description,
-            brandUrl: campaign.brandUrl,
-            campaignUrl: campaign.campaignUrl,
-            videoUrl: (campaign as any).videoUrl || null,
-            puzzleImageUrl: campaign.puzzleImageUrl,
-            originalImageUrl: campaign.originalImageUrl,
-            timeLimit: campaign.timeLimit,
-            questions: campaign.questions,
-            words: campaign.words,
-            status: campaign.status,
-            paymentStatus: (campaign as any).paymentStatus || "unpaid",
-            packageType: (campaign as any).packageType || null,
-            totalBudget: (campaign as any).totalBudget || 0,
-            dailyAllocation: (campaign as any).dailyAllocation || 0,
-            budgetRemaining: (campaign as any).budgetRemaining || 0,
-            budgetUsed: (campaign as any).budgetUsed || 0,
-            transactionId: (campaign as any).transactionId || null,
-            startDate: campaign.startDate,
-            endDate: campaign.endDate,
-            createdAt: (campaign as any).createdAt,
-          };
-        })
-      );
-
-      res.status(200).json({ success: true, campaigns: campaignsWithBrand });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to fetch campaigns: ${error.message}`, 500)
-      );
-    }
-  }
-);
-
-// Get campaigns by brandId
-export const getCampaignsByBrand = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
-
-      const { brandId } = req.params;
-
-      const campaigns = await PuzzleCampaignModel.find({ brandId })
-        .select(
-          "_id brandId packageId gameType title description brandUrl campaignUrl videoUrl puzzleImageUrl originalImageUrl timeLimit questions words status paymentStatus packageType totalBudget dailyAllocation budgetRemaining budgetUsed transactionId startDate endDate createdAt"
-        )
-        .lean();
-
-      if (!campaigns || campaigns.length === 0) {
-        return res.status(200).json({ success: true, campaigns: [] });
-      }
-
-      // Fetch brand name
-      const brand = await UserModel.findById(brandId)
-        .select("name companyName")
-        .lean();
-      const brandName = brand?.companyName || brand?.name || "Unknown Brand";
-
-      // Fetch package names for all campaigns
-      const campaignsWithBrand = await Promise.all(
-        campaigns.map(async (campaign) => {
-          const packageData = await PackageModel.findById(campaign.packageId)
-            .select("name")
-            .lean();
-          return {
-            _id: campaign._id,
-            brandId: campaign.brandId,
-            packageId: campaign.packageId,
-            packageName: packageData?.name || null,
-            brandName,
-            gameType: campaign.gameType,
-            title: campaign.title,
-            description: campaign.description,
-            brandUrl: campaign.brandUrl,
-            campaignUrl: campaign.campaignUrl,
-            videoUrl: (campaign as any).videoUrl || null,
-            puzzleImageUrl: campaign.puzzleImageUrl,
-            originalImageUrl: campaign.originalImageUrl,
-            timeLimit: campaign.timeLimit,
-            questions: campaign.questions,
-            words: campaign.words,
-            status: campaign.status,
-            paymentStatus: (campaign as any).paymentStatus || "unpaid",
-            packageType: (campaign as any).packageType || null,
-            totalBudget: (campaign as any).totalBudget || 0,
-            dailyAllocation: (campaign as any).dailyAllocation || 0,
-            budgetRemaining: (campaign as any).budgetRemaining || 0,
-            budgetUsed: (campaign as any).budgetUsed || 0,
-            transactionId: (campaign as any).transactionId || null,
-            startDate: campaign.startDate,
-            endDate: campaign.endDate,
-            createdAt: (campaign as any).createdAt,
-          };
-        })
-      );
-
-      res.status(200).json({ success: true, campaigns: campaignsWithBrand });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to fetch campaigns for brand: ${error.message}`,
-          500
-        )
-      );
-    }
-  }
-);
-
-// Get single campaign by campaignId (with brand name)
-export const getCampaignById = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Update expired campaigns before fetching
-      await updateExpiredCampaigns();
-
-      const { campaignId } = req.params;
-      const campaign = await PuzzleCampaignModel.findById(campaignId).lean();
-
-      if (!campaign) {
-        return next(new ErrorHandler("Campaign not found", 404));
-      }
-
-      // Fetch brand name and package name
-      const brand = await UserModel.findById(campaign.brandId)
-        .select("name companyName")
-        .lean();
-      const brandName = brand?.companyName || brand?.name || "Unknown Brand";
-      const packageData = await PackageModel.findById(campaign.packageId)
-        .select("name")
-        .lean();
-
-      res.status(200).json({
-        success: true,
-        campaign: {
-          _id: campaign._id,
-          brandId: campaign.brandId,
-          packageId: campaign.packageId,
-          packageName: packageData?.name || null,
-          brandName,
-          gameType: campaign.gameType,
-          title: campaign.title,
-          description: campaign.description,
-          brandUrl: campaign.brandUrl,
-          campaignUrl: campaign.campaignUrl,
-          videoUrl: (campaign as any).videoUrl || null,
-          puzzleImageUrl: campaign.puzzleImageUrl,
-          originalImageUrl: campaign.originalImageUrl,
-          questions: campaign.questions.map((q: any) => ({
-            question: q.question,
-            choices: q.choices,
-            correctIndex: q.correctIndex,
-          })),
-          words: campaign.words,
-          timeLimit: campaign.timeLimit,
-          status: campaign.status,
-          paymentStatus: (campaign as any).paymentStatus || "unpaid",
-          packageType: (campaign as any).packageType || null,
-          totalBudget: (campaign as any).totalBudget || 0,
-          dailyAllocation: (campaign as any).dailyAllocation || 0,
-          budgetRemaining: (campaign as any).budgetRemaining || 0,
-          budgetUsed: (campaign as any).budgetUsed || 0,
-          transactionId: (campaign as any).transactionId || null,
-          startDate: campaign.startDate,
-          endDate: campaign.endDate,
-          createdAt: (campaign as any).createdAt,
-        },
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to fetch campaign details: ${error.message}`,
-          500
-        )
-      );
-    }
-  }
-);
-
-// Check if current user has completed a campaign
-export const checkCampaignCompletion = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { campaignId } = req.params;
-      const user = req.user as any;
-      const userId = user && user._id ? String(user._id) : undefined;
-
-      if (!userId) {
-        return next(new ErrorHandler("User not authenticated", 401));
-      }
-
-      // Check if user has already solved this campaign
-      const previousAttempt = await PuzzleAttemptModel.findOne({
-        userId: userId,
-        campaignId: campaignId,
-        solved: true,
-      }).lean();
-
-      const hasCompletedByCurrentUser = !!previousAttempt;
-
-      res.status(200).json({
-        success: true,
-        hasCompletedByCurrentUser,
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to check campaign completion status: ${error.message}`,
-          500
-        )
-      );
-    }
-  }
-);
-
-// Submit campaign result along with quiz answers
-interface ISubmitBody {
-  timeTaken: number; // ms
-  movesTaken: number;
-  solved: boolean;
-  answers: number[]; // indexes selected for questions
+/** Loads a campaign owned by the calling brand. 404 for any other brand. */
+async function loadOwnedCampaign(req: Request): Promise<ICampaign> {
+  const campaign = await CampaignModel.findOne({
+    _id: assertObjectId(req.params.id, "campaign id"),
+    brandId: String(req.user!._id),
+  });
+  if (!campaign) throw new ErrorHandler("Campaign not found", 404, "CAMPAIGN_NOT_FOUND");
+  return campaign;
 }
 
-export const submitCampaign = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
+function assertDraft(campaign: ICampaign) {
+  if (campaign.status !== "draft") {
+    throw new ErrorHandler(
+      "A campaign can only be edited while it is a draft",
+      409,
+      "CAMPAIGN_NOT_EDITABLE",
+      { status: campaign.status }
+    );
+  }
+}
+
+function parseTags(raw: any): string[] | undefined {
+  if (raw === undefined) return undefined;
+  let value = raw;
+  if (typeof value === "string") {
     try {
-      const { campaignId } = req.params;
-      const user = req.user as any;
-      const userId = user && user._id ? String(user._id) : undefined;
-      const body = req.body as ISubmitBody;
-
-      const campaign = await PuzzleCampaignModel.findById(campaignId);
-      if (!campaign) {
-        return next(
-          new ErrorHandler(
-            "Campaign not found. Please check the campaign ID and try again.",
-            404
-          )
-        );
-      }
-
-      // compute quiz score
-      let quizScore = 0;
-      if (Array.isArray(body.answers)) {
-        for (
-          let i = 0;
-          i < Math.min(body.answers.length, campaign.questions.length);
-          i++
-        ) {
-          console.log(
-            `Question ${i}: User answered ${body.answers[i]}, Correct answer is ${campaign.questions[i].correctIndex}`
-          );
-          if (body.answers[i] === campaign.questions[i].correctIndex) {
-            quizScore++;
-          }
-        }
-      }
-
-      // Check if all questions were answered correctly
-      const totalQuestions = campaign.questions.length;
-      const allQuestionsCorrect = quizScore === totalQuestions;
-
-      console.log(
-        `Quiz Score: ${quizScore}/${totalQuestions}, All Correct: ${allQuestionsCorrect}`
-      );
-      console.log(`Solved: ${body.solved}`);
-
-      // determine if first-time ever solved (used for unique puzzle counts)
-      let firstTime = false;
-      if (body.solved && allQuestionsCorrect) {
-        const prevEver = await PuzzleAttemptModel.findOne({
-          userId: userId,
-          campaignId: campaignId,
-          solved: true,
-        });
-        console.log(`Previous successful attempt ever found: ${!!prevEver}`);
-        if (!prevEver) firstTime = true;
-      }
-
-      // Allow users to earn points only 1 time per DAY for the same campaign.
-      // Count today's successful attempts for this user+campaign.
-      const now = new Date();
-      const startOfDay = new Date(now);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(now);
-      endOfDay.setHours(23, 59, 59, 999);
-
-      const todaysSuccessCount = await PuzzleAttemptModel.countDocuments({
-        userId: userId,
-        campaignId: campaignId,
-        solved: true,
-        timestamp: { $gte: startOfDay, $lte: endOfDay },
-      });
-
-      const canEarnPointsNow =
-        body.solved && allQuestionsCorrect && todaysSuccessCount < 1;
-
-      // Simplified fixed-point scoring (time/moves recorded but not used)
-      let pointsEarned = 0;
-
-      if (canEarnPointsNow) {
-        const FIXED_POINTS: { [key: string]: number } = {
-          spot_the_difference: 2,
-          card_matching: 3,
-          sliding_puzzle: 4,
-          word_hunt: 1,
-        };
-
-        pointsEarned = FIXED_POINTS[campaign.gameType] || 0;
-        console.log(`Points (fixed) for ${campaign.gameType}:`, pointsEarned);
-      }
-
-      console.log(
-        `First Time: ${firstTime}, Today's successes: ${todaysSuccessCount}, Points Earned: ${pointsEarned}`
-      );
-
-      const attempt = await PuzzleAttemptModel.create({
-        userId: userId,
-        puzzleId: campaignId,
-        campaignId: campaignId,
-        timeTaken: body.timeTaken,
-        movesTaken: body.movesTaken,
-        solved: body.solved,
-        firstTimeSolved: firstTime,
-        quizScore,
-        answers: Array.isArray(body.answers) ? body.answers : [],
-        pointsEarned,
-      });
-
-      // update user analytics
-      const userDoc = userId ? await UserModel.findById(userId) : null;
-      if (userDoc) {
-        userDoc.analytics.lifetime.attempts =
-          (userDoc.analytics.lifetime.attempts || 0) + 1;
-        userDoc.analytics.lifetime.totalMoves =
-          (userDoc.analytics.lifetime.totalMoves || 0) + body.movesTaken;
-        userDoc.analytics.lifetime.totalTime =
-          (userDoc.analytics.lifetime.totalTime || 0) + body.timeTaken;
-        if (body.solved && allQuestionsCorrect) {
-          userDoc.analytics.lifetime.puzzlesSolved =
-            (userDoc.analytics.lifetime.puzzlesSolved || 0) +
-            (firstTime ? 1 : 0);
-          userDoc.analytics.lifetime.totalPoints =
-            (userDoc.analytics.lifetime.totalPoints || 0) + pointsEarned;
-        }
-        // successRate = puzzlesSolved / attempts
-        if (userDoc.analytics.lifetime.attempts > 0) {
-          userDoc.analytics.lifetime.successRate =
-            (userDoc.analytics.lifetime.puzzlesSolved || 0) /
-            userDoc.analytics.lifetime.attempts;
-        }
-        if (firstTime) {
-          userDoc.puzzlesSolved = userDoc.puzzlesSolved || [];
-          userDoc.puzzlesSolved.push(campaignId);
-        }
-        await userDoc.save();
-      }
-
-      // Remove user from "currently playing" after submitting
-      if (userId) {
-        const redis = require("../utils/redis").redis;
-        await redis.srem("users:currently_playing", userId);
-        await redis.del(`user:${userId}:playing`);
-      }
-
-      res.status(201).json({
-        success: true,
-        attempt,
-        gameType: campaign.gameType,
-      });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(
-          `Failed to submit campaign result: ${error.message}`,
-          500
-        )
-      );
+      value = JSON.parse(value);
+    } catch {
+      value = value.split(",");
     }
+  }
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new ErrorHandler("tags must be a list of at most 8 short labels", 400);
+  }
+  const tags = value
+    .map((t: any) => (typeof t === "string" ? t.trim().toLowerCase() : ""))
+    .filter(Boolean);
+  if (tags.some((t: string) => t.length > 24)) {
+    throw new ErrorHandler("Each tag must be at most 24 characters", 400);
+  }
+  return Array.from(new Set<string>(tags));
+}
+
+/** Seconds per question chosen by the brand: 0 (no timer) up to the global maximum. */
+function parseTimer(value: any): number {
+  const timer = toInt(value);
+  if (!isValidTimerSeconds(timer)) {
+    const { minSeconds, maxSeconds } = getTimerRange();
+    throw new ErrorHandler(
+      `timerSeconds must be a whole number from ${minSeconds} to ${maxSeconds}`,
+      400,
+      "INVALID_TIMER",
+      { minSeconds, maxSeconds }
+    );
+  }
+  return timer;
+}
+
+const fileOf = (req: Request, field: string) =>
+  ((req.files as Record<string, Express.Multer.File[]> | undefined) || {})[field]?.[0];
+
+// GET /brand/campaigns/pricing — the flat price and duration
+export const getPricing = CatchAsyncError(async (req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    pricing: await getCampaignPricing(),
+    minCardsToPublish: await getCampaignMinCards(),
+  });
+});
+
+// POST /brand/campaigns  (multipart with optional "logo" and "cover" files, or JSON)
+// Brand name, logo and website default to the brand profile when omitted.
+export const createCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const brandId = String(req.user!._id);
+  const body = req.body || {};
+  const profile = await BrandModel.findOne({ userId: brandId }).lean();
+
+  const logoUrl =
+    (await resolveImage(fileOf(req, "logo"), body.logoUrl, brandId, "logos")) || profile?.logoUrl;
+  if (!logoUrl) throw new ErrorHandler("A brand logo is required", 400, "IMAGE_REQUIRED");
+
+  const website = body.websiteUrl || profile?.websiteUrl;
+  const campaign = await CampaignModel.create({
+    brandId,
+    brandName: requireString(body.brandName || profile?.companyName, "brandName", 80),
+    logoUrl,
+    websiteUrl: parseHttpUrl(website, "websiteUrl"),
+    ctaText: cleanString(body.ctaText, 40),
+    title: requireString(body.title, "title", 80),
+    description: cleanString(body.description, 300),
+    coverImageUrl: await resolveImage(fileOf(req, "cover"), body.coverImageUrl, brandId, "covers"),
+    tags: parseTags(body.tags) || [],
+    ...(body.timerSeconds !== undefined ? { timerSeconds: parseTimer(body.timerSeconds) } : {}),
+  });
+  res.status(201).json({ success: true, campaign: brandCampaign(campaign, 0) });
+});
+
+// GET /brand/campaigns
+export const listMyCampaigns = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaigns = await CampaignModel.find({ brandId: String(req.user!._id) })
+    .sort({ createdAt: -1 })
+    .lean();
+  const counts = await CampaignCardModel.aggregate([
+    { $match: { campaignId: { $in: campaigns.map((c) => String(c._id)) } } },
+    { $group: { _id: "$campaignId", count: { $sum: 1 } } },
+  ]);
+  const countOf = new Map(counts.map((c) => [c._id, c.count]));
+  res.status(200).json({
+    success: true,
+    campaigns: campaigns.map((c) => brandCampaign(c, countOf.get(String(c._id)) || 0)),
+  });
+});
+
+// GET /brand/campaigns/:id  and  /brand/campaigns/:id/preview — everything, answers included
+export const getMyCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  const cards = await CampaignCardModel.find({ campaignId: String(campaign._id) })
+    .sort({ createdAt: 1 })
+    .lean();
+  res.status(200).json({
+    success: true,
+    campaign: brandCampaign(campaign, cards.length),
+    cards: cards.map(editorCard),
+    pricing: await getCampaignPricing(),
+    minCardsToPublish: await getCampaignMinCards(),
+    cardCountBounds: await cardCountBounds(cards.length),
+  });
+});
+
+// PATCH /brand/campaigns/:id — draft only
+export const updateCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const brandId = campaign.brandId;
+  const body = req.body || {};
+
+  if (body.brandName !== undefined) campaign.brandName = requireString(body.brandName, "brandName", 80);
+  if (body.title !== undefined) campaign.title = requireString(body.title, "title", 80);
+  if (body.websiteUrl !== undefined) campaign.websiteUrl = parseHttpUrl(body.websiteUrl, "websiteUrl");
+  if (body.ctaText !== undefined) campaign.ctaText = cleanString(body.ctaText, 40);
+  if (body.description !== undefined) campaign.description = cleanString(body.description, 300);
+  const tags = parseTags(body.tags);
+  if (tags) campaign.tags = tags;
+  if (body.timerSeconds !== undefined) campaign.timerSeconds = parseTimer(body.timerSeconds);
+  const logo = await resolveImage(fileOf(req, "logo"), body.logoUrl, brandId, "logos");
+  if (logo) campaign.logoUrl = logo;
+  const cover = await resolveImage(fileOf(req, "cover"), body.coverImageUrl, brandId, "covers");
+  if (cover) campaign.coverImageUrl = cover;
+
+  await campaign.save();
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  res.status(200).json({ success: true, campaign: brandCampaign(campaign, count) });
+});
+
+// DELETE /brand/campaigns/:id — draft only
+export const deleteCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  await CampaignCardModel.deleteMany({ campaignId: String(campaign._id) });
+  await campaign.deleteOne();
+  res.status(200).json({ success: true });
+});
+
+// --- Cards (draft only) -------------------------------------------------------------
+
+// POST /brand/campaigns/:id/cards  (multipart with "image", or JSON)
+export const createCard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const content = await buildCardContent(req.body, req.file, campaign.brandId, "cards");
+  const card = await CampaignCardModel.create({ campaignId: String(campaign._id), ...content });
+  res.status(201).json({ success: true, card: editorCard(card) });
+});
+
+// POST /brand/campaigns/:id/cards/bulk  { cards: [...] }
+export const bulkCreateCards = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const contents = await buildBulkCards(req.body, campaign.brandId, "cards");
+  const cards = await CampaignCardModel.insertMany(
+    contents.map((content) => ({ campaignId: String(campaign._id), ...content }))
+  );
+  res.status(201).json({ success: true, created: cards.length, cards: cards.map(editorCard) });
+});
+
+async function loadCampaignCard(campaign: ICampaign, cardId: string) {
+  const card = await CampaignCardModel.findOne({
+    _id: assertObjectId(cardId, "card id"),
+    campaignId: String(campaign._id),
+  });
+  if (!card) throw new ErrorHandler("Card not found", 404, "CARD_NOT_FOUND");
+  return card;
+}
+
+// PATCH /brand/campaigns/:id/cards/:cardId
+export const updateCard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const card = await loadCampaignCard(campaign, req.params.cardId);
+  const content = await buildCardContent(req.body, req.file, campaign.brandId, "cards", card);
+  card.set(content);
+  if (content.type === "definition") card.imageUrl = undefined;
+  await card.save();
+  res.status(200).json({ success: true, card: editorCard(card) });
+});
+
+// DELETE /brand/campaigns/:id/cards/:cardId
+export const deleteCard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  assertDraft(campaign);
+  const card = await loadCampaignCard(campaign, req.params.cardId);
+  await card.deleteOne();
+  res.status(200).json({ success: true });
+});
+
+// --- Payment --------------------------------------------------------------------------
+
+// POST /brand/campaigns/:id/checkout  { idempotencyKey? }
+// draft -> awaiting_payment. The campaign goes live only when the payment is confirmed
+// by the gateway (webhook or server-side verification) — never from this response.
+export const startCampaignCheckout = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  if (campaign.status !== "draft" && campaign.status !== "awaiting_payment") {
+    throw new ErrorHandler(
+      "This campaign has already been paid for or is not payable",
+      409,
+      "CAMPAIGN_NOT_PAYABLE",
+      { status: campaign.status }
+    );
+  }
+
+  const min = await getCampaignMinCards();
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  if (count < min) {
+    throw new ErrorHandler(
+      `A campaign needs at least ${min} cards before it can be published.`,
+      400,
+      "MIN_CARDS_REQUIRED",
+      { minCards: min, cardCount: count }
+    );
+  }
+
+  const respond = (payment: any, authorizationUrl: string, created: boolean) =>
+    res.status(created ? 201 : 200).json({
+      success: true,
+      checkout: {
+        authorizationUrl,
+        reference: payment.reference,
+        payment: {
+          id: String(payment._id),
+          purpose: payment.purpose,
+          campaignId: payment.campaignId,
+          amount: payment.amount,
+          currency: payment.currency,
+          durationDays: payment.durationDays,
+          status: payment.status,
+        },
+      },
+      campaign: { id: String(campaign._id), status: "awaiting_payment" },
+    });
+
+  const idempotencyKey = cleanString(req.body?.idempotencyKey, 100);
+  if (!idempotencyKey) {
+    const recent = await PaymentModel.findOne({
+      campaignId: String(campaign._id),
+      userId: campaign.brandId,
+      status: "pending",
+      authorizationUrl: { $exists: true },
+      createdAt: { $gt: new Date(Date.now() - CHECKOUT_REUSE_MS) },
+    }).sort({ createdAt: -1 });
+    if (recent) return respond(recent, recent.authorizationUrl!, false);
+  }
+
+  const checkout = await startCheckout({
+    user: { _id: req.user!._id, email: req.user!.email },
+    purpose: "campaign",
+    campaignId: String(campaign._id),
+    idempotencyKey,
+  });
+  await CampaignModel.updateOne(
+    { _id: campaign._id, status: "draft" },
+    { $set: { status: "awaiting_payment" } }
+  );
+  respond(checkout.payment, checkout.authorizationUrl, !checkout.reused);
+});
+
+// POST /brand/campaigns/:id/cancel-checkout — awaiting_payment -> draft, to edit again
+export const cancelCampaignCheckout = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  await CampaignModel.updateOne(
+    { _id: campaign._id, status: "awaiting_payment" },
+    { $set: { status: "draft" } }
+  );
+  const fresh = (await CampaignModel.findById(campaign._id).lean())!;
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  res.status(200).json({ success: true, campaign: brandCampaign(fresh, count) });
+});
+
+// GET /brand/campaigns/:id/dashboard
+export const getDashboard = CatchAsyncError(async (req: Request, res: Response) => {
+  const campaign = await loadOwnedCampaign(req);
+  const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+  res.status(200).json({
+    success: true,
+    campaign: brandCampaign(campaign, count),
+    dashboard: await getCampaignStats(campaign),
+  });
+});
+
+// --- Players --------------------------------------------------------------------------
+
+// GET /campaigns/next — whether a campaign is owed, and which campaign to play next
+export const getNextCampaign = CatchAsyncError(async (req: Request, res: Response) => {
+  const gate = await getCampaignGateState(req.user!);
+  const suggestion =
+    gate.campaign ||
+    (await pickCampaignForPlayer(String(req.user!._id)).then((c) => (c ? publicCampaign(c) : null)));
+  res.status(200).json({
+    success: true,
+    required: gate.required,
+    counter: gate.counter,
+    threshold: gate.threshold,
+    campaign: suggestion,
+  });
+});
+
+// GET /campaigns/:id — brand info for a running campaign (no cards)
+export const getCampaignInfo = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const campaign = await CampaignModel.findById(assertObjectId(req.params.id, "campaign id"));
+    if (!campaign || !isServable(campaign)) {
+      return next(new ErrorHandler("This campaign is not running", 404, "CAMPAIGN_NOT_AVAILABLE"));
+    }
+    const count = await CampaignCardModel.countDocuments({ campaignId: String(campaign._id) });
+    res.status(200).json({
+      success: true,
+      campaign: publicCampaign(campaign),
+      cardCountBounds: await cardCountBounds(count),
+    });
   }
 );
 
-// Update a campaign (brands can edit their own campaigns)
-export const updateCampaign = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { campaignId } = req.params;
-      const user = req.user as any;
-
-      if (!user) return next(new ErrorHandler("User not authenticated", 401));
-
-      const campaign = await PuzzleCampaignModel.findById(campaignId);
-      if (!campaign) return next(new ErrorHandler("Campaign not found", 404));
-
-      // Only the owning brand or admins can update
-      if (
-        user.role === "brand" &&
-        String(campaign.brandId) !== String(user._id)
-      ) {
-        return next(
-          new ErrorHandler("Not authorized to edit this campaign", 403)
-        );
-      }
-
-      // Allowed update fields
-      const updatable = [
-        "title",
-        "description",
-        "timeLimit",
-        "startDate",
-        "endDate",
-        "status",
-        "paymentStatus",
-        "totalBudget",
-        "dailyAllocation",
-        "budgetRemaining",
-        "budgetUsed",
-        "brandUrl",
-        "campaignUrl",
-        "videoUrl",
-        "questions",
-        "words",
-      ];
-
-      const updates: any = {};
-      for (const key of updatable) {
-        if (req.body[key] !== undefined) updates[key] = req.body[key];
-      }
-
-      const updated = await PuzzleCampaignModel.findByIdAndUpdate(
-        campaignId,
-        { $set: updates },
-        { new: true }
-      ).lean();
-
-      res.status(200).json({ success: true, campaign: updated });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to update campaign: ${error.message}`, 500)
-      );
-    }
-  }
-);
-
-// Delete a campaign (brands can delete their own campaigns)
-export const deleteCampaign = CatchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { campaignId } = req.params;
-      const user = req.user as any;
-
-      if (!user) return next(new ErrorHandler("User not authenticated", 401));
-
-      const campaign = await PuzzleCampaignModel.findById(campaignId);
-      if (!campaign) return next(new ErrorHandler("Campaign not found", 404));
-
-      // Only the owning brand or admins can delete
-      if (
-        user.role === "brand" &&
-        String(campaign.brandId) !== String(user._id)
-      ) {
-        return next(
-          new ErrorHandler("Not authorized to delete this campaign", 403)
-        );
-      }
-
-      await PuzzleCampaignModel.findByIdAndDelete(campaignId);
-
-      // remove reference from BrandModel if present
-      await BrandModel.findOneAndUpdate(
-        { userId: campaign.brandId },
-        { $pull: { campaigns: campaign._id } }
-      );
-
-      res.status(200).json({ success: true, message: "Campaign deleted" });
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(`Failed to delete campaign: ${error.message}`, 500)
-      );
-    }
-  }
-);
+// POST /campaigns/:id/click — counts the click and returns the URL to open in a new tab
+export const postUrlClick = CatchAsyncError(async (req: Request, res: Response) => {
+  const url = await recordUrlClick(
+    assertObjectId(req.params.id, "campaign id"),
+    String(req.user!._id)
+  );
+  res.status(200).json({ success: true, url });
+});
