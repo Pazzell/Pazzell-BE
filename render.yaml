@@ -1,0 +1,98 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# In Render: New > Blueprint > pick this repo. Values marked `sync: false` are asked for
+# once in the dashboard when the Blueprint is first applied (they are never stored here).
+services:
+  - type: web
+    name: pazzell-api
+    runtime: node
+    region: frankfurt
+    # Free instances sleep after 15 minutes idle (first request then takes ~1 minute to wake),
+    # which drops team-game sockets and pauses the cron scheduler and question timers.
+    # Switch to starter (paid) for real traffic.
+    plan: free
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # Render puts one proxy in front of the app; needed for per-IP rate limiting
+      - key: TRUST_PROXY
+        value: "1"
+      # The deployed frontend's address, e.g. https://pazzell-fe.vercel.app
+      - key: FRONTEND_URL
+        sync: false
+
+      # --- Data stores ---
+      # MongoDB Atlas connection string (Render has no managed MongoDB)
+      - key: DB_URI
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: pazzell-redis
+          property: connectionString
+
+      # --- Auth ---
+      - key: ACCESS_TOKEN
+        generateValue: true
+      - key: REFRESH_TOKEN
+        generateValue: true
+      - key: ACTIVATION_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_EXPIRE
+        value: "24"
+      - key: REFRESH_TOKEN_EXPIRE
+        value: "7"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+
+      # --- Payments ---
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYMENT_CURRENCY
+        value: NGN
+
+      # --- AI (set at least one key; others can stay empty) ---
+      - key: AI_PROVIDER
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # --- Image storage (S3) ---
+      - key: STORAGE_PROVIDER
+        value: aws
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_S3_BUCKET_NAME
+        sync: false
+
+      # --- Email ---
+      - key: EMAIL_PROVIDER
+        value: gmail
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SERVICE
+        value: gmail
+      - key: SMTP_MAIL
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+
+  - type: keyvalue
+    name: pazzell-redis
+    region: frankfurt
+    plan: free
+    # Only reachable from services in this Render account
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
