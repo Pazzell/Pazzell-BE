@@ -11,7 +11,8 @@ services:
     # Switch to starter (paid) for real traffic.
     plan: free
     branch: main
-    buildCommand: npm ci && npm run build
+    # NODE_ENV=production makes npm skip devDependencies, but tsc needs the @types packages
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /
     autoDeploy: true
